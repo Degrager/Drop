@@ -1,0 +1,42 @@
+# Xcode
+build/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+!default.pbxuser
+!default.mode1v3
+!default.mode2v3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcuserstate
+*.xcscmblueprint
+*.xcscheme
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+Packages/
+Package.pins
+Package.resolved
+*.xcodeproj/xcshareddata/swiftpm
+
+# CocoaPods
+Pods/
+
+# macOS
+.DS_Store
+
+# Distribution artifacts (built app, dmg, zips) — released via GitHub Releases, not committed as source
+*.app
+*.dmg
+*.zip
+
+# Local scratch / bundled runtime binaries (yt-dlp, ffmpeg) — downloaded at runtime, not part of source
+Binaries/

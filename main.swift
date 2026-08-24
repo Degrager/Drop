@@ -1,0 +1,3 @@
+import SwiftUI
+
+DropApp.main()

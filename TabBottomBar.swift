@@ -1,0 +1,266 @@
+import SwiftUI
+import AppKit
+
+// MARK: - TabBottomBar
+//
+// Shared bottom bar used by both the Download and Convert tabs.
+//
+// Shared chrome (always rendered when hasItems == true):
+//   • Top row: leftControls (COOKIES FROM) + Clear All button
+//   • Extra controls row: SAVE TO field + AUTO-OPEN FOLDER toggle
+//   • Primary action button (Download / Convert)
+//   • Top separator + material background
+//
+// Tab-specific content injected via @ViewBuilder slots:
+//   • leftControls  — Download: COOKIES FROM picker. Convert: empty.
+//   • extraControls — Download: SAVE TO field (Auto-Open toggle renders alongside it automatically). Convert: empty.
+//
+// NOTE: the input area (URL paste field / drop zone) no longer lives here —
+// it now renders above the toolbar, at the top of each tab's main panel.
+//
+// Usage (download):
+//   TabBottomBar(config: config, hasItems: !linkPreviews.isEmpty,
+//                primaryActionLabel: "Download as MP3", primaryActionIcon: "arrow.down.circle",
+//                onClearAll: { ... }, onPrimaryAction: { download() }) {
+//       cookiesPicker   // leftControls
+//   } extraControls: {
+//       saveToField     // extraControls
+//   }
+//
+// Usage (convert):
+//   TabBottomBar(config: config, hasItems: hasJobs,
+//                primaryActionLabel: "Convert Audio", primaryActionIcon: "arrow.triangle.2.circlepath",
+//                showPrimaryAction: hasSelectedQueued,
+//                onClearAll: { jobs.removeAll() }, onPrimaryAction: { convertSelected() }) {
+//       EmptyView()
+//   } extraControls: {
+//       EmptyView()
+//   }
+
+struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryControl: View>: View {
+
+    // Shared state
+    @ObservedObject var config: Config
+
+    // Visibility
+    var hasItems: Bool
+    var showPrimaryAction: Bool = true
+
+    // Gate — when false, primary action is disabled/greyed and shows a setup hint
+    var toolsReady: Bool = true
+
+    /// When false, the primary action button stays visible but is disabled
+    /// and shows `primaryActionDisabledLabel` instead of `primaryActionLabel`.
+    /// Used by Convert's Select mode so the button doesn't disappear while
+    /// nothing is checked — it just greys out instead.
+    var primaryActionEnabled: Bool = true
+    var primaryActionDisabledLabel: String? = nil
+    /// Icon shown while disabled-but-visible for a reason OTHER than
+    /// !toolsReady (which always forces "lock.fill" regardless of this).
+    /// Defaults to primaryActionIcon so callers that don't need a distinct
+    /// disabled icon see no change in behavior.
+    var primaryActionDisabledIcon: String? = nil
+
+    // Primary action button
+    var primaryActionLabel: String
+    var primaryActionIcon: String
+    var onClearAll: () -> Void
+    var onPrimaryAction: () -> Void
+    /// Label for the trash button. Defaults to "Clear All"; Convert tab swaps
+    /// this to "Clear Selected" while Batch Apply mode is active.
+    var clearAllLabel: String = "Clear All"
+    /// When false, hides this bar's own Clear All button entirely. Convert
+    /// tab moved Clear All (and its Select mode button) up into its own
+    /// header row above the card list, so it hides both here to avoid a
+    /// duplicate control.
+    var showClearAll: Bool = true
+    /// When nonzero, pins this bar's proportional width to exactly this
+    /// value (matching the toolbar row and card queue above, which now all
+    /// derive from one GeometryReader measurement in mainPanel). Falls back
+    /// to a local containerRelativeFrame estimate only if never set --
+    /// containerRelativeFrame alone doesn't guarantee agreement across a
+    /// ScrollView boundary elsewhere in the layout.
+    var pinnedWidth: CGFloat = 0
+    /// Whether `batchDirectoryControl` is actually rendering visible content
+    /// right now (vs. an EmptyView placeholder). Passed explicitly by the
+    /// caller because `@ViewBuilder`'s `if/else` produces a
+    /// `_ConditionalContent` wrapper type, not a literal `EmptyView` — so a
+    /// runtime `is EmptyView` check on the built view never actually matches
+    /// and can't be used to detect this.
+    var hasBatchDirectoryControl: Bool = false
+
+    // Hover state for the primary action button -- this button is
+    // deliberately the one solid (non-glass) control in the app, so it
+    // can't just reuse GlassButton/GlassInteractive's built-in hover
+    // handling. Previously had zero .onHover wiring at all, so hovering
+    // it produced no feedback whatsoever.
+    @State private var primaryActionHovering = false
+
+    // Slots
+    @ViewBuilder var leftControls: () -> LeftControls
+    @ViewBuilder var extraControls: () -> ExtraControls
+    /// Inline control rendered in the top row, immediately to the right of the
+    /// Auto-Open Folder toggle (and before the Spacer/Clear All button). Used by
+    /// Select mode's batch SAVE TO directory field on both Download and Convert —
+    /// keeps it out of the extraControls row below so it sits at-a-glance next to
+    /// the other per-run settings instead of inside its own card.
+    @ViewBuilder var batchDirectoryControl: () -> BatchDirectoryControl
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Settings area — only when there are items. Floats as its own
+            // card, inset and rounded like every other section (media card,
+            // list header, paste bar) instead of docking flush to the
+            // window's edges with no margin -- previously this was the one
+            // section that broke the app's card-based language.
+            if hasItems {
+                VStack(spacing: 12) {
+
+                    // Top row — Cookies picker (leftControls) + Auto-Open Folder toggle, aligned with Clear All.
+                    // All controls in this row share DropGrid.controlHeight so nothing sits a pixel off from its neighbor.
+                    HStack(alignment: .center, spacing: DropGrid.sectionSpacing) {
+                        leftControls()
+                            .frame(height: DropGrid.controlHeight)
+
+                        HStack(spacing: DropGrid.labelSpacing) {
+                            Image(systemName: "folder")
+                                .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
+                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                                .frame(width: 14, alignment: .center)
+                            Text("AUTO-OPEN FOLDER")
+                                .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
+                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                            Text(config.autoOpenFolder ? "On" : "Off")
+                                .font(.appMono(size: DropGrid.fieldFontSize))
+                                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                            Toggle("", isOn: $config.autoOpenFolder)
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(DesignTokens.Accent.primary)
+                                .labelsHidden()
+                        }
+                        .fixedSize()
+                        .frame(height: DropGrid.controlHeight)
+
+                        batchDirectoryControl()
+                            .layoutPriority(1)
+
+                        // Only add a trailing Spacer when there's nothing else
+                        // to fill the row (batchDirectoryControl is empty and
+                        // Clear All is hidden) — otherwise leading controls
+                        // (leftControls / Auto-Open Folder toggle) would get
+                        // centered instead of staying pinned left. When
+                        // batchDirectoryControl IS present, it already expands
+                        // to fill all remaining width itself, so no Spacer is
+                        // needed and none is added — avoids the dead gap on
+                        // the right that a competing Spacer would create.
+                        if !hasBatchDirectoryControl && !showClearAll {
+                            Spacer(minLength: 0)
+                        }
+                        if showClearAll {
+                            Spacer(minLength: 0)
+                            GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                                .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
+                        }
+                    }
+
+                    // Extra controls row (e.g. SAVE TO) — spans full width, right edge aligned with paste field
+                    let hasExtra = !(extraControls() is EmptyView)
+                    if hasExtra {
+                        extraControls()
+                    }
+
+                    // Primary action button.
+                    // Deliberately the ONE control in the entire app that isn't glass --
+                    // a solid accent-blue gradient instead of the translucent Interactive
+                    // fills everything else uses. This is the strongest form of functional
+                    // differentiation available: the single most important commit action
+                    // per tab (Download / Convert) must outrank every chip, toggle, and
+                    // chrome button around it at a glance. Radius/spacing still pull from
+                    // DesignTokens so it stays proportionally consistent with the rest of
+                    // the UI even while its material language differs on purpose.
+                    if showPrimaryAction {
+                        let enabled = toolsReady && primaryActionEnabled
+                        // Hover only registers real feedback while actually
+                        // enabled -- a disabled button greying out further
+                        // on hover would read as broken/inconsistent rather
+                        // than helpful, so the glow/scale bump is reserved
+                        // for the clickable state only.
+                        let hovering = enabled && primaryActionHovering
+                        Button(action: onPrimaryAction) {
+                            HStack(spacing: 8) {
+                                Image(systemName: !toolsReady ? "lock.fill" : (enabled ? primaryActionIcon : (primaryActionDisabledIcon ?? primaryActionIcon)))
+                                    .font(.appMono(size: 15, weight: .semibold))
+                                Text(!toolsReady ? "Setup Needed" : (enabled ? primaryActionLabel : (primaryActionDisabledLabel ?? primaryActionLabel)))
+                                    .font(.appMono(size: 15, weight: .semibold))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(
+                                RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
+                                    .fill(enabled ?
+                                        LinearGradient(
+                                            // Brightens slightly on hover -- same two-stop
+                                            // gradient, just nudged toward a lighter blue
+                                            // rather than swapping in a translucent glass
+                                            // wash (this button intentionally stays solid).
+                                            colors: hovering
+                                                ? [Color(red: 0.30, green: 0.58, blue: 1.0), Color(red: 0.16, green: 0.46, blue: 0.98)]
+                                                : [DesignTokens.Accent.primary, Color(red: 0.10, green: 0.38, blue: 0.90)],
+                                            startPoint: .topLeading, endPoint: .bottomTrailing
+                                        ) :
+                                        LinearGradient(
+                                            colors: [Color.white.opacity(DesignTokens.Interactive.fillRest), Color.white.opacity(DesignTokens.Interactive.fillRest)],
+                                            startPoint: .topLeading, endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
+                                        .stroke(enabled ? Color.white.opacity(hovering ? 0.85 : DesignTokens.Interactive.strokeHover) : Color.white.opacity(DesignTokens.Interactive.strokeDisabled), lineWidth: 0.75))
+                                    .shadow(color: enabled ? DesignTokens.Accent.primary.opacity(hovering ? 0.6 : 0.4) : .clear, radius: hovering ? 16 : 12, y: 4)
+                            )
+                            .foregroundColor(enabled ? .white.opacity(DesignTokens.Text.primary) : .white.opacity(DesignTokens.Text.disabled))
+                            .scaleEffect(hovering ? DesignTokens.Interactive.scaleHover : 1.0)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!enabled)
+                        .help(!toolsReady ? "Install yt-dlp and ffmpeg from the Tools menu first" : "")
+                        .onHover { h in
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                primaryActionHovering = h
+                            }
+                        }
+                        .animation(.easeOut(duration: 0.18), value: hovering)
+                    }
+
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
+                .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
+                // Proportional width -- 60% of the window, matching the
+                // list header row and card queue exactly. Pinned to the
+                // shared mainPanelWidth measurement when available so this
+                // bar can never drift from the other two rows again.
+                .frame(width: pinnedWidth > 0 ? pinnedWidth : nil)
+                .modifier(FallbackProportionalWidth(active: pinnedWidth <= 0))
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 14)
+            }
+        }
+    }
+}
+
+/// Only used when a caller never supplies pinnedWidth -- keeps this row
+/// working standalone (e.g. in isolated previews) without requiring the
+/// GeometryReader measurement from mainPanel.
+private struct FallbackProportionalWidth: ViewModifier {
+    var active: Bool
+    func body(content: Content) -> some View {
+        if active {
+            content.containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
+        } else {
+            content
+        }
+    }
+}

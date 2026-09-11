@@ -946,6 +946,13 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     @Published var ffmpegUpdateAvailable: Bool = false
     @Published var ytdlpVersion: String = UserDefaults.standard.string(forKey: "cachedYtdlpVersion") ?? ""
     @Published var ffmpegVersion: String = UserDefaults.standard.string(forKey: "cachedFfmpegVersion") ?? ""
+    // Drop's own self-update state -- checked against GitHub Releases for
+    // this repo, mirrors the yt-dlp/ffmpeg update pattern above but swaps
+    // the running .app bundle itself rather than a helper binary.
+    @Published var checkingDropUpdate: Bool = false
+    @Published var updatingDrop: Bool = false
+    @Published var dropUpdateAvailable: Bool = false
+    @Published var dropLatestVersion: String = ""
     private var depPollTimer: Timer?
     private let gatekeeperAlertKey = "gatekeeperAlertShown"
 
@@ -1337,6 +1344,157 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             }
         }
         task.resume()
+    }
+
+    /// Current running version, read straight from the bundle -- this is
+    /// what CFBundleShortVersionString/MARKETING_VERSION resolves to at
+    /// build time, so it always reflects the actual installed build.
+    var currentAppVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+    }
+
+    /// Compares two "1.2.3"-style version strings numerically component by
+    /// component (not lexicographically -- "1.10" must beat "1.9"). Missing
+    /// trailing components are treated as 0, so "1.2" == "1.2.0".
+    private func isVersion(_ a: String, newerThan b: String) -> Bool {
+        let aParts = a.split(separator: ".").map { Int($0) ?? 0 }
+        let bParts = b.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(aParts.count, bParts.count) {
+            let av = i < aParts.count ? aParts[i] : 0
+            let bv = i < bParts.count ? bParts[i] : 0
+            if av != bv { return av > bv }
+        }
+        return false
+    }
+
+    /// Checks GitHub Releases for this repo for a newer tagged version than
+    /// the one currently running. Uses the plain REST API (no appcast/XML,
+    /// no signing keys) -- just the release's tag_name compared against
+    /// CFBundleShortVersionString. Tags are expected as "v1.0", "v1.1" etc.
+    /// or bare "1.0" -- the leading "v" is stripped if present.
+    func checkDropUpdate(completion: (() -> Void)? = nil) {
+        guard !checkingDropUpdate else { completion?(); return }
+        checkingDropUpdate = true
+        let apiURL = URL(string: "https://api.github.com/repos/Degrager/Drop/releases/latest")!
+        var request = URLRequest(url: apiURL)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                self.checkingDropUpdate = false
+                guard let data = data, error == nil,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let tag = json["tag_name"] as? String else {
+                    self.appendLog("ERROR: Drop update check failed — \(error?.localizedDescription ?? "couldn't read latest release")")
+                    completion?()
+                    return
+                }
+                let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+                self.dropLatestVersion = latest
+                self.dropUpdateAvailable = self.isVersion(latest, newerThan: self.currentAppVersion)
+                self.appendLog(self.dropUpdateAvailable ? "Drop \(latest) is available (current: \(self.currentAppVersion))." : "Drop is up to date (\(self.currentAppVersion)).")
+                completion?()
+            }
+        }
+        task.resume()
+    }
+
+    /// Downloads and installs the latest Drop release, replacing the
+    /// running app bundle and relaunching. Since a running app can't
+    /// delete/overwrite its own bundle in place, the actual swap is done
+    /// by a small detached shell script launched via /bin/sh -- it waits
+    /// for this process to exit, mounts the downloaded dmg, copies the new
+    /// Drop.app over /Applications/Drop.app, clears quarantine, re-signs
+    /// ad-hoc (matching the app's existing unsigned/ad-hoc distribution),
+    /// relaunches, and cleans up after itself. This mirrors the manual
+    /// install steps used throughout development, just automated and run
+    /// from outside the process being replaced.
+    func updateDrop() {
+        guard !updatingDrop else { return }
+        updatingDrop = true
+        appendLog("Downloading Drop \(dropLatestVersion.isEmpty ? "latest" : dropLatestVersion)…")
+        let apiURL = URL(string: "https://api.github.com/repos/Degrager/Drop/releases/latest")!
+        var request = URLRequest(url: apiURL)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            guard let data = data, error == nil,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let assets = json["assets"] as? [[String: Any]],
+                  let dmgAsset = assets.first(where: { ($0["name"] as? String)?.hasSuffix(".dmg") == true }),
+                  let downloadURLString = dmgAsset["browser_download_url"] as? String,
+                  let downloadURL = URL(string: downloadURLString) else {
+                DispatchQueue.main.async {
+                    self.updatingDrop = false
+                    self.appendLog("ERROR: Drop update failed — couldn't find a .dmg asset on the latest release.")
+                }
+                return
+            }
+            let dlTask = URLSession.shared.downloadTask(with: downloadURL) { location, response, error in
+                guard let location = location, error == nil else {
+                    DispatchQueue.main.async {
+                        self.updatingDrop = false
+                        self.appendLog("ERROR: Drop update download failed — \(error?.localizedDescription ?? "unknown error")")
+                    }
+                    return
+                }
+                let tempDmg = FileManager.default.temporaryDirectory.appendingPathComponent("Drop-update-\(UUID().uuidString).dmg")
+                do {
+                    try FileManager.default.moveItem(at: location, to: tempDmg)
+                } catch {
+                    DispatchQueue.main.async {
+                        self.updatingDrop = false
+                        self.appendLog("ERROR: Drop update failed — couldn't stage downloaded dmg: \(error.localizedDescription)")
+                    }
+                    return
+                }
+                DispatchQueue.main.async {
+                    self.appendLog("Downloaded. Installing and relaunching…")
+                    self.launchSelfUpdateHelper(dmgPath: tempDmg.path)
+                }
+            }
+            dlTask.resume()
+        }.resume()
+    }
+
+    /// Spawns a detached shell script that performs the actual bundle swap
+    /// after this process exits, then quits the app. The script polls for
+    /// the old process to disappear (rather than a fixed sleep) so the
+    /// swap never races the app's own shutdown/file-handle release.
+    private func launchSelfUpdateHelper(dmgPath: String) {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let appPath = Bundle.main.bundlePath
+        let script = """
+        while kill -0 \(pid) 2>/dev/null; do sleep 0.3; done
+        MOUNT_DIR=$(mktemp -d)
+        hdiutil attach "\(dmgPath)" -nobrowse -readonly -mountpoint "$MOUNT_DIR" >/dev/null 2>&1
+        SRC_APP=$(find "$MOUNT_DIR" -maxdepth 1 -name "*.app" | head -n 1)
+        if [ -n "$SRC_APP" ]; then
+          rm -rf "\(appPath)"
+          cp -R "$SRC_APP" "\(appPath)"
+          xattr -cr "\(appPath)"
+          codesign -s - --force --deep "\(appPath)"
+        fi
+        hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1
+        rm -f "\(dmgPath)"
+        open "\(appPath)"
+        """
+        let scriptPath = FileManager.default.temporaryDirectory.appendingPathComponent("drop-update-\(UUID().uuidString).sh")
+        do {
+            try script.write(to: scriptPath, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath.path)
+        } catch {
+            appendLog("ERROR: Drop update failed — couldn't write install helper: \(error.localizedDescription)")
+            updatingDrop = false
+            return
+        }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/sh")
+        proc.arguments = [scriptPath.path]
+        // Detach: the helper must keep running after this app quits, so it
+        // gets no pipes tied to this process and isn't waited on here.
+        try? proc.run()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NSApp.terminate(nil)
+        }
     }
 
     /// Downloads the latest ffmpeg NIGHTLY ("snapshot") arm64 macOS build
@@ -3487,6 +3645,27 @@ struct ToolsDropdownContent: View {
                 isUpdating: manager.updatingFFmpeg,
                 updateAction: { manager.updateFFmpeg() }
             )
+            GlassDivider()
+            ToolStatusRow(
+                name: "Drop",
+                installed: true,
+                installing: false,
+                installAction: {},
+                versionChip: AnyView(
+                    VersionChip(
+                        version: manager.currentAppVersion,
+                        isUpdating: manager.updatingDrop,
+                        isCheckingUpdates: manager.checkingDropUpdate,
+                        updateAvailable: manager.dropUpdateAvailable,
+                        refreshAction: { manager.checkDropUpdate() },
+                        refreshHelp: "Check for a new Drop version"
+                    )
+                ),
+                updateAvailable: manager.dropUpdateAvailable,
+                isUpdating: manager.updatingDrop,
+                updateAction: { manager.updateDrop() }
+            )
+            .onAppear { manager.checkDropUpdate() }
             GlassDivider()
             CheckForUpdatesButton(
                 isChecking: manager.checkingUpdates,

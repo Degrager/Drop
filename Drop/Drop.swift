@@ -3906,7 +3906,7 @@ struct MenuBarQuickView: View {
 
 // MARK: - App Tab
 
-enum AppTab { case download, history, convert, log }
+enum AppTab { case download, history, convert, log, devRelease }
 
 // MARK: - Analyze Result
 
@@ -3984,7 +3984,6 @@ final class DropLogger {
 struct ContentView: View {
     @StateObject private var manager  = DownloadManager()
     @StateObject private var config   = Config()
-    @StateObject private var devGate  = DevGateController()
     @State private var urlText        = ""
     @State private var isDragging     = false
 
@@ -4172,6 +4171,11 @@ struct ContentView: View {
                         } else if activeTab == .convert {
                             ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, jobs: $convertJobs, config: config, manager: manager)
                                 .transition(.identity)
+                        } else if activeTab == .devRelease {
+                            DevReleaseView()
+                                .containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
+                                .frame(maxWidth: .infinity)
+                                .transition(.identity)
                         } else {
                             // Log is now a full page like Download/History/Convert
                             // instead of a floating side panel -- same bare-VStack-
@@ -4325,14 +4329,6 @@ struct ContentView: View {
             .padding(.horizontal, 14)
             .padding(.top, 16)
             .padding(.bottom, 18)
-            .contentShape(Rectangle())
-            .onTapGesture { devGate.registerLogoClick() }
-            .sheet(isPresented: $devGate.showPassphrasePrompt) {
-                DevPassphraseGateView(gate: devGate)
-            }
-            .sheet(isPresented: $devGate.showDevRelease) {
-                DevReleaseView()
-            }
 
             // Nav items — larger touch targets (bumped padding/font inside
             // SidebarTabItem itself) with real breathing room between rows,
@@ -4356,6 +4352,16 @@ struct ContentView: View {
                     withAnimation(.spring(response: 0.25)) { activeTab = .log }
                 }
                 .accessibilityIdentifier("tab_log")
+                // Present only on a machine holding the Sparkle signing key
+                // and GitHub token -- see DevKeychain.isDevMachine. On any
+                // other machine this row, and everything behind it, simply
+                // doesn't exist; that absence is the entire access control.
+                if DevKeychain.isDevMachine {
+                    SidebarTabItem(label: "Dev", icon: "wrench.and.screwdriver", isSelected: activeTab == .devRelease) {
+                        withAnimation(.spring(response: 0.25)) { activeTab = .devRelease }
+                    }
+                    .accessibilityIdentifier("tab_dev")
+                }
             }
             .padding(.horizontal, 8)
 

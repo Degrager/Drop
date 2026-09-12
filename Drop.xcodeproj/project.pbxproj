@@ -21,6 +21,7 @@
 		5433B4BC759B4A02B334BBBB /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 670E73214AF04BAC9510A63B /* AppKit.framework */; };
 		DB5A206EB3D4473B8C011A62 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6CB9AE3188574515966DA5BA /* UserNotifications.framework */; };
 		BB11223344556677 /* drop_icon_v4.icns in Resources */ = {isa = PBXBuildFile; fileRef = AA11223344556677 /* drop_icon_v4.icns */; };
+		BF00000000000000000ADD01 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = BF00000000000000000ADD03 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,10 +49,30 @@
 				648F64529ABB4B63A2628740 /* SwiftUI.framework in Frameworks */,
 				5433B4BC759B4A02B334BBBB /* AppKit.framework in Frameworks */,
 				DB5A206EB3D4473B8C011A62 /* UserNotifications.framework in Frameworks */,
+				BF00000000000000000ADD01 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		BF00000000000000000ADD02 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.6.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		BF00000000000000000ADD03 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BF00000000000000000ADD02 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXGroup section */
 		6D8BC2BD8B8F401BA0897C2B = {
@@ -123,6 +144,9 @@
 			dependencies = (
 			);
 			name = Drop;
+			packageProductDependencies = (
+				BF00000000000000000ADD03 /* Sparkle */,
+			);
 			productName = Drop;
 			productReference = 39531812BF6F459B9EAC1062 /* Drop.app */;
 			productType = "com.apple.product-type.application";
@@ -152,6 +176,9 @@
 				Base,
 			);
 			mainGroup = 6D8BC2BD8B8F401BA0897C2B;
+			packageReferences = (
+				BF00000000000000000ADD02 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			productRefGroup = 348FA9B50C884E45BD925C35 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";

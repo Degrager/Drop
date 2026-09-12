@@ -18,7 +18,14 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         case extracting(progress: Double)
         case readyToInstall(reply: (SPUUserUpdateChoice) -> Void)
         case installing
-        case error(String)
+        // Carries its own acknowledgement rather than calling it eagerly --
+        // Sparkle tears the whole update session down shortly after
+        // receiving it (that's what "acknowledge the error was shown"
+        // triggers), which was wiping this overlay after about a second
+        // when it was called the moment the card first appeared. Deferring
+        // it to dismissError() means Sparkle doesn't clean up until the
+        // user has actually seen and dismissed it.
+        case error(message: String, acknowledgement: () -> Void)
         // .notFound deliberately has no visible overlay -- the shared Check
         // for Updates button already turns green with "Up to Date" for this
         // exact case (DropUpdater.justConfirmedUpToDate), so a second,
@@ -70,8 +77,7 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     }
 
     func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {
-        withAnimation { stage = .error(error.localizedDescription) }
-        acknowledgement()
+        withAnimation { stage = .error(message: error.localizedDescription, acknowledgement: acknowledgement) }
     }
 
     func showDownloadInitiated(cancellation: @escaping () -> Void) {
@@ -121,7 +127,10 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
 
     func cancelCheck() { cancelCheckBlock?() }
     func cancelDownload() { cancelDownloadBlock?() }
-    func dismissError() { stage = .idle }
+    func dismissError() {
+        if case .error(_, let acknowledgement) = stage { acknowledgement() }
+        stage = .idle
+    }
 }
 
 /// The actual overlay UI, attached once at the ContentView root so it can
@@ -171,7 +180,7 @@ struct DropUpdateOverlayView: View {
                     ProgressView().controlSize(.small)
                     Text("Installing update…").font(.appMono(size: 13)).foregroundColor(.white.opacity(DesignTokens.Text.secondary))
                 }
-            case .error(let message):
+            case .error(let message, _):
                 card {
                     Image(systemName: "exclamationmark.triangle.fill").font(.appMono(size: 20)).foregroundColor(DesignTokens.Accent.danger)
                     Text("Update Check Failed").font(.appMono(size: 14, weight: .semibold)).foregroundColor(.white.opacity(DesignTokens.Text.primary))

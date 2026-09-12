@@ -12,8 +12,17 @@ import Sparkle
 final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     enum Stage {
         case idle
+        // Tracked but deliberately invisible -- the shared Check for
+        // Updates button already shows "Checking…" in the sidebar, and a
+        // second, separate popup for the same brief moment was one too many
+        // places announcing the same thing.
         case checking
-        case updateFound(item: SUAppcastItem, notesHTML: String?, reply: (SPUUserUpdateChoice) -> Void)
+        // Carries just the display data actually used (version string,
+        // notes HTML) rather than a real SUAppcastItem -- Sparkle only ever
+        // vends one of those from inside a genuine update check, which
+        // would make a Dev-tab preview button impossible to build without
+        // fabricating a fake Sparkle-internal object.
+        case updateFound(versionString: String, notesHTML: String?, reply: (SPUUserUpdateChoice) -> Void)
         case downloading(progress: Double?)   // nil while content length is still unknown
         case extracting(progress: Double)
         case readyToInstall(reply: (SPUUserUpdateChoice) -> Void)
@@ -34,6 +43,39 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
 
     @Published var stage: Stage = .idle
 
+    /// The shared Check for Updates button derives its "checking" state from
+    /// this, not from DropUpdater's separate SPUUpdaterDelegate callback --
+    /// that callback and this driver are notified independently by Sparkle,
+    /// and don't fire in lockstep once the driver is waiting on the user to
+    /// dismiss something (observed: the button kept saying "Checking…" for
+    /// several seconds after the error card had already been dismissed).
+    /// `stage` is always authoritative for what's actually on screen right
+    /// now, so deriving from it directly can't drift out of sync with it.
+    var isActivelyChecking: Bool {
+        if case .checking = stage { return true }
+        return false
+    }
+
+    /// True while the overlay has something actionable on screen for an
+    /// update (found/downloading/extracting/ready/installing) -- the Drop
+    /// row's equivalent of yt-dlp/ffmpeg's "update available" orange state.
+    var hasActionableUpdate: Bool {
+        switch stage {
+        case .updateFound, .downloading, .extracting, .readyToInstall, .installing: return true
+        default: return false
+        }
+    }
+
+    /// Set directly by this driver the moment Sparkle reports no update
+    /// found -- not by a separate SPUUpdaterDelegate callback, which
+    /// (observed firsthand) does not reliably fire in step with this driver
+    /// once a user-interaction wait (like the error card) is involved.
+    /// This is the single object Sparkle actually hands every real-time
+    /// state to, so deriving everything from it can't drift out of sync
+    /// with what's on screen the way splitting state across two
+    /// independently-notified Sparkle extension points did.
+    @Published var justConfirmedUpToDate = false
+
     private var cancelCheckBlock: (() -> Void)?
     private var cancelDownloadBlock: (() -> Void)?
     private var expectedContentLength: UInt64 = 0
@@ -50,6 +92,7 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
 
     func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
         cancelCheckBlock = cancellation
+        justConfirmedUpToDate = false
         withAnimation { stage = .checking }
     }
 
@@ -57,13 +100,14 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         // Inline notes (CDATA in the appcast) are available immediately via
         // itemDescription; a releaseNotesURL-linked file instead arrives
         // later through showUpdateReleaseNotes(with:), if present at all.
-        withAnimation { stage = .updateFound(item: appcastItem, notesHTML: appcastItem.itemDescription, reply: reply) }
+        justConfirmedUpToDate = false
+        withAnimation { stage = .updateFound(versionString: appcastItem.displayVersionString, notesHTML: appcastItem.itemDescription, reply: reply) }
     }
 
     func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {
-        guard case .updateFound(let item, _, let reply) = stage else { return }
+        guard case .updateFound(let versionString, _, let reply) = stage else { return }
         let html = String(data: downloadData.data, encoding: .utf8)
-        stage = .updateFound(item: item, notesHTML: html, reply: reply)
+        stage = .updateFound(versionString: versionString, notesHTML: html, reply: reply)
     }
 
     func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) {
@@ -72,6 +116,7 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     }
 
     func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
+        justConfirmedUpToDate = true
         withAnimation { stage = .idle }
         acknowledgement()
     }
@@ -127,6 +172,21 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
 
     func cancelCheck() { cancelCheckBlock?() }
     func cancelDownload() { cancelDownloadBlock?() }
+
+    /// Dev-tab-only: shows the real update-found overlay with sample data,
+    /// with no actual Sparkle update behind it -- Install/Skip/Later all
+    /// just dismiss, since there's nothing real to act on. Exists purely so
+    /// the overlay's design can be checked without needing a real published
+    /// version newer than the one currently running.
+    func previewUpdateFound() {
+        withAnimation {
+            stage = .updateFound(
+                versionString: "9.9.9",
+                notesHTML: "<p>This is a preview of the update overlay -- sample release notes, not a real update.</p><p>- Example bullet one<br>- Example bullet two</p>",
+                reply: { [weak self] _ in withAnimation { self?.stage = .idle } }
+            )
+        }
+    }
     func dismissError() {
         if case .error(_, let acknowledgement) = stage { acknowledgement() }
         stage = .idle
@@ -145,12 +205,11 @@ struct DropUpdateOverlayView: View {
             case .idle:
                 EmptyView()
             case .checking:
-                card {
-                    ProgressView().controlSize(.small)
-                    Text("Checking for updates…").font(.appMono(size: 13)).foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                }
-            case .updateFound(let item, let notesHTML, let reply):
-                updateFoundCard(item: item, notesHTML: notesHTML, reply: reply)
+                // No overlay -- the shared Check for Updates button already
+                // shows this in the sidebar.
+                EmptyView()
+            case .updateFound(let versionString, let notesHTML, let reply):
+                updateFoundCard(versionString: versionString, notesHTML: notesHTML, reply: reply)
             case .downloading(let progress):
                 card {
                     Text("Downloading update…").font(.appMono(size: 13, weight: .medium)).foregroundColor(.white.opacity(DesignTokens.Text.primary))
@@ -203,13 +262,13 @@ struct DropUpdateOverlayView: View {
         .transition(.opacity)
     }
 
-    private func updateFoundCard(item: SUAppcastItem, notesHTML: String?, reply: @escaping (SPUUserUpdateChoice) -> Void) -> some View {
+    private func updateFoundCard(versionString: String, notesHTML: String?, reply: @escaping (SPUUserUpdateChoice) -> Void) -> some View {
         ZStack {
             Color.black.opacity(0.45).ignoresSafeArea()
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.down.circle.fill").foregroundColor(DesignTokens.Accent.primary).font(.appMono(size: 16))
-                    Text("Drop \(item.displayVersionString) is available")
+                    Text("Drop \(versionString) is available")
                         .font(.appMono(size: 14, weight: .semibold))
                         .foregroundColor(.white.opacity(DesignTokens.Text.primary))
                 }

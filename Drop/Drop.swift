@@ -1375,25 +1375,29 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         // "Up to Date" when the check actually failed.
         @Published var justConfirmedUpToDate = false
 
+        // Custom driver replaces Sparkle's own AppKit alert windows with an
+        // in-app overlay matching Drop's design (DropUpdateOverlay.swift) --
+        // `updater` talks to `userDriver` instead of the standard one
+        // SPUStandardUpdaterController would otherwise construct.
+        let userDriver = DropCustomUserDriver()
+        private var updater: SPUUpdater!
+
         // Assigned in init (after super.init, so `self` can be passed as the
         // delegate -- SPUUpdater only accepts a delegate at construction,
-        // not as a settable property afterward). Not lazy/deferred: building
-        // this starts Sparkle's own scheduled background checking
-        // immediately (per SUScheduledCheckInterval), rather than only once
+        // not as a settable property afterward). Started immediately (not
+        // lazy/deferred) so Sparkle's own scheduled background checking
+        // (per SUScheduledCheckInterval) begins right away, not only once
         // the Tools menu is opened.
-        private var controller: SPUStandardUpdaterController!
-
         override init() {
             super.init()
-            controller = SPUStandardUpdaterController(
-                startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil
-            )
+            updater = SPUUpdater(hostBundle: Bundle.main, applicationBundle: Bundle.main, userDriver: userDriver, delegate: self)
+            try? updater.start()
         }
 
         func checkForUpdates() {
             checkingForUpdates = true
             justConfirmedUpToDate = false
-            controller.checkForUpdates(nil)
+            updater.checkForUpdates()
         }
 
         func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
@@ -4321,6 +4325,10 @@ struct ContentView: View {
                 .keyboardShortcut(.escape, modifiers: [])
                 .hidden()
         )
+        // Drop's own update UI -- attached at the root so it can appear
+        // over any tab, not just while Dev happens to be open, since an
+        // update can be found at any time.
+        .overlay(DropUpdateOverlayView(driver: manager.dropUpdater.userDriver))
 
     }
 

@@ -1365,63 +1365,41 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// state so the existing Tools-row VersionChip can reflect it, matching
     /// the yt-dlp/ffmpeg rows' look even though Sparkle drives the actual
     /// update flow once the user confirms in its dialog.
-    final class DropUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
-        @Published var checkingForUpdates = false
-        @Published var updateAvailable = false
-        @Published var latestVersion = ""
-        // True only after Sparkle explicitly confirms no newer version
-        // exists -- not just "checking finished" (which also covers the
-        // error/not-found-feed case) -- so the shared button can't claim
-        // "Up to Date" when the check actually failed.
-        @Published var justConfirmedUpToDate = false
-
-        // Custom driver replaces Sparkle's own AppKit alert windows with an
-        // in-app overlay matching Drop's design (DropUpdateOverlay.swift) --
-        // `updater` talks to `userDriver` instead of the standard one
-        // SPUStandardUpdaterController would otherwise construct.
-        let userDriver = DropCustomUserDriver()
+    // Custom driver replaces Sparkle's own AppKit alert windows with an
+    // in-app overlay matching Drop's design (DropUpdateOverlay.swift).
+    // `DropUpdater` itself no longer conforms to SPUUpdaterDelegate: that
+    // protocol's callbacks (didFindValidUpdate, updaterDidNotFindUpdate,
+    // didAbortWithError) are notified independently of the driver by
+    // Sparkle's internals, and were observed NOT firing in reliable lockstep
+    // with it -- specifically, checkingForUpdates could get stuck true for
+    // seconds after the driver had already moved on, once a user-interaction
+    // wait (dismissing the error card) was involved. `userDriver.stage` is
+    // the one thing Sparkle actually keeps in sync with what's on screen, so
+    // every published flag the UI reads (isActivelyChecking,
+    // hasActionableUpdate, justConfirmedUpToDate) now lives directly on it
+    // instead of being split across two independently-notified objects.
+    final class DropUpdater: NSObject, ObservableObject {
+        // DropCustomUserDriver is @MainActor (required -- Sparkle's
+        // SPUUserDriver protocol itself is annotated NS_SWIFT_UI_ACTOR), but
+        // DropUpdater/DownloadManager aren't statically MainActor-isolated
+        // even though they're only ever actually constructed on the main
+        // thread in practice (as a SwiftUI @StateObject). assumeIsolated
+        // bridges that gap without cascading @MainActor up through
+        // DownloadManager, which is used from background threads elsewhere.
+        let userDriver = MainActor.assumeIsolated { DropCustomUserDriver() }
         private var updater: SPUUpdater!
 
-        // Assigned in init (after super.init, so `self` can be passed as the
-        // delegate -- SPUUpdater only accepts a delegate at construction,
-        // not as a settable property afterward). Started immediately (not
-        // lazy/deferred) so Sparkle's own scheduled background checking
-        // (per SUScheduledCheckInterval) begins right away, not only once
-        // the Tools menu is opened.
+        // Started immediately (not lazy/deferred) so Sparkle's own scheduled
+        // background checking (per SUScheduledCheckInterval) begins right
+        // away, not only once the Tools menu is opened.
         override init() {
             super.init()
-            updater = SPUUpdater(hostBundle: Bundle.main, applicationBundle: Bundle.main, userDriver: userDriver, delegate: self)
+            updater = SPUUpdater(hostBundle: Bundle.main, applicationBundle: Bundle.main, userDriver: userDriver, delegate: nil)
             try? updater.start()
         }
 
         func checkForUpdates() {
-            checkingForUpdates = true
-            justConfirmedUpToDate = false
             updater.checkForUpdates()
-        }
-
-        func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
-            DispatchQueue.main.async {
-                self.checkingForUpdates = false
-                self.updateAvailable = true
-                self.justConfirmedUpToDate = false
-                self.latestVersion = item.displayVersionString
-            }
-        }
-
-        func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
-            DispatchQueue.main.async {
-                self.checkingForUpdates = false
-                self.updateAvailable = false
-                self.justConfirmedUpToDate = true
-            }
-        }
-
-        func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
-            DispatchQueue.main.async {
-                self.checkingForUpdates = false
-                self.justConfirmedUpToDate = false
-            }
         }
     }
 
@@ -3514,7 +3492,7 @@ struct ToolsStatusPill: View {
     @ObservedObject var manager: DownloadManager
 
     var body: some View {
-        ToolsDropdownContent(manager: manager, embedded: true)
+        ToolsDropdownContent(manager: manager, dropDriver: manager.dropUpdater.userDriver, embedded: true)
     }
 }
 
@@ -3526,6 +3504,14 @@ struct ToolsStatusPill: View {
 /// material as every other card in the app, not a stock system popover.
 struct ToolsDropdownContent: View {
     @ObservedObject var manager: DownloadManager
+    // manager.dropUpdater.userDriver is a *nested* ObservableObject --
+    // SwiftUI does not propagate its @Published changes through `manager`'s
+    // own objectWillChange automatically, so a view that only observes
+    // `manager` can silently miss (or only pick up, inconsistently, whenever
+    // something else happens to trigger a re-render) every stage/
+    // justConfirmedUpToDate change from the driver. Observing it directly
+    // here is what makes those changes reliably reactive.
+    @ObservedObject var dropDriver: DropCustomUserDriver
     // When true (inline-in-sidebar usage) the standalone glassCard
     // background/frame is skipped since the sidebar itself already
     // supplies that same black-frosted-glass surface -- this content is
@@ -3592,17 +3578,17 @@ struct ToolsDropdownContent: View {
                         version: manager.currentAppVersion,
                         isUpdating: false,
                         isCheckingUpdates: false,
-                        updateAvailable: manager.dropUpdater.updateAvailable
+                        updateAvailable: dropDriver.hasActionableUpdate
                     )
                 ),
-                updateAvailable: manager.dropUpdater.updateAvailable,
+                updateAvailable: dropDriver.hasActionableUpdate,
                 isUpdating: false
             )
             GlassDivider()
             CheckForUpdatesButton(
-                isChecking: manager.checkingUpdates || manager.dropUpdater.checkingForUpdates,
-                hasUpdate: manager.updateAvailable || manager.ffmpegUpdateAvailable || manager.dropUpdater.updateAvailable,
-                isUpToDate: manager.justCheckedUpToDate && manager.dropUpdater.justConfirmedUpToDate,
+                isChecking: manager.checkingUpdates || dropDriver.isActivelyChecking,
+                hasUpdate: manager.updateAvailable || manager.ffmpegUpdateAvailable || dropDriver.hasActionableUpdate,
+                isUpToDate: manager.justCheckedUpToDate && dropDriver.justConfirmedUpToDate,
                 disabledUntilSetup: !manager.toolsReady,
                 action: {
                     // The one place all three checks actually run now --
@@ -4205,7 +4191,7 @@ struct ContentView: View {
                             ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, jobs: $convertJobs, config: config, manager: manager)
                                 .transition(.identity)
                         } else if activeTab == .devRelease {
-                            DevReleaseView()
+                            DevReleaseView(dropDriver: manager.dropUpdater.userDriver)
                                 .containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
                                 .frame(maxWidth: .infinity)
                                 .transition(.identity)

@@ -4027,6 +4027,15 @@ final class DropLogger {
 
 struct ContentView: View {
     @StateObject private var manager  = DownloadManager()
+    // Observed directly (not just reached via manager.dropUpdater.userDriver
+    // inline) so this view's own body -- specifically the Escape-to-clear-
+    // URL-field button below -- actually re-renders when the driver's
+    // @Published stage changes. A nested ObservableObject's @Published
+    // changes don't propagate through manager's own objectWillChange (the
+    // same gap already fixed once for ToolsDropdownContent), so without
+    // this the .disabled(...) binding on that button would only update
+    // whenever something else happened to redraw ContentView.
+    @ObservedObject private var dropDriver: DropCustomUserDriver
     @StateObject private var config   = Config()
     @State private var urlText        = ""
     @State private var isDragging     = false
@@ -4132,6 +4141,12 @@ struct ContentView: View {
 
     var readyToDownload: Bool { manager.toolsReady }
 
+    init() {
+        let manager = DownloadManager()
+        _manager = StateObject(wrappedValue: manager)
+        _dropDriver = ObservedObject(wrappedValue: manager.dropUpdater.userDriver)
+    }
+
     var body: some View {
         ZStack {
             // Window-wide black-frosted glass base. The window itself is
@@ -4216,7 +4231,7 @@ struct ContentView: View {
                             ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, jobs: $convertJobs, config: config, manager: manager)
                                 .transition(.identity)
                         } else if activeTab == .devRelease {
-                            DevReleaseView(dropDriver: manager.dropUpdater.userDriver)
+                            DevReleaseView(dropDriver: dropDriver)
                                 .containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
                                 .frame(maxWidth: .infinity)
                                 .transition(.identity)
@@ -4338,16 +4353,21 @@ struct ContentView: View {
             .keyboardShortcut("v", modifiers: [.command, .shift])
             .hidden()
         )
-        // Escape: clear URL field
+        // Escape: clear URL field -- disabled while the update overlay has a
+        // card on screen, since a disabled button's keyboard shortcut is
+        // inert; without this, this one and the overlay's own Escape-to-
+        // dismiss (DropUpdateOverlayView) competed for the same keypress and
+        // this one silently won every time.
         .background(
             Button("") { urlText = "" }
                 .keyboardShortcut(.escape, modifiers: [])
+                .disabled(dropDriver.isPresentingCard)
                 .hidden()
         )
         // Drop's own update UI -- attached at the root so it can appear
         // over any tab, not just while Dev happens to be open, since an
         // update can be found at any time.
-        .overlay(DropUpdateOverlayView(driver: manager.dropUpdater.userDriver))
+        .overlay(DropUpdateOverlayView(driver: dropDriver))
 
     }
 

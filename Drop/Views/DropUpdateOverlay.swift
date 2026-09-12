@@ -88,6 +88,19 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         }
     }
 
+    /// True whenever any card is actually drawn on screen (.idle and
+    /// .checking both render EmptyView -- see DropUpdateOverlayView.body).
+    /// ContentView uses this to disable its own unrelated Escape shortcut
+    /// (clearing the URL field) while a card is up, so the two don't fight
+    /// over the same key -- SwiftUI only honors one .keyboardShortcut(.escape)
+    /// per keypress, and without this the URL field's had been winning.
+    var isPresentingCard: Bool {
+        switch stage {
+        case .idle, .checking: return false
+        default: return true
+        }
+    }
+
     /// Set directly by this driver the moment Sparkle reports no update
     /// found -- not by a separate SPUUpdaterDelegate callback, which
     /// (observed firsthand) does not reliably fire in step with this driver

@@ -22,6 +22,9 @@
 		DB5A206EB3D4473B8C011A62 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6CB9AE3188574515966DA5BA /* UserNotifications.framework */; };
 		BB11223344556677 /* drop_icon_v4.icns in Resources */ = {isa = PBXBuildFile; fileRef = AA11223344556677 /* drop_icon_v4.icns */; };
 		BF00000000000000000ADD01 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = BF00000000000000000ADD03 /* Sparkle */; };
+		DEV1000000000000000000A1 /* DevKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A1 /* DevKeychain.swift */; };
+		DEV1000000000000000000A2 /* DevReleasePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A2 /* DevReleasePipeline.swift */; };
+		DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A3 /* DevReleaseView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -39,6 +42,9 @@
 		670E73214AF04BAC9510A63B /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
 		6CB9AE3188574515966DA5BA /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		AA11223344556677 /* drop_icon_v4.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = drop_icon_v4.icns; sourceTree = "<group>"; };
+		DEV2000000000000000000A1 /* DevKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevKeychain.swift; sourceTree = "<group>"; };
+		DEV2000000000000000000A2 /* DevReleasePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevReleasePipeline.swift; sourceTree = "<group>"; };
+		DEV2000000000000000000A3 /* DevReleaseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevReleaseView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -92,6 +98,7 @@
 				ED6762084C7240718B8076E5 /* Info.plist */,
 				AA11223344556677 /* drop_icon_v4.icns */,
 				2B3C4D5E6F708192A3B4C5D6 /* Views */,
+				DEV3000000000000000000A1 /* DevTools */,
 			);
 			path = Drop;
 			sourceTree = "<group>";
@@ -126,6 +133,16 @@
 				6CB9AE3188574515966DA5BA /* UserNotifications.framework */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		DEV3000000000000000000A1 /* DevTools */ = {
+			isa = PBXGroup;
+			children = (
+				DEV2000000000000000000A1 /* DevKeychain.swift */,
+				DEV2000000000000000000A2 /* DevReleasePipeline.swift */,
+				DEV2000000000000000000A3 /* DevReleaseView.swift */,
+			);
+			path = DevTools;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -213,6 +230,9 @@
 				CC223344556677889900BBCC /* PreviewCard.swift in Sources */,
 				FF445566778899001122DDEE /* TabBottomBar.swift in Sources */,
 				BB112233445566778899BBCC /* MediaItemCard.swift in Sources */,
+				DEV1000000000000000000A1 /* DevKeychain.swift in Sources */,
+				DEV1000000000000000000A2 /* DevReleasePipeline.swift in Sources */,
+				DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

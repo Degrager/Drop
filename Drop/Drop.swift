@@ -3984,6 +3984,7 @@ final class DropLogger {
 struct ContentView: View {
     @StateObject private var manager  = DownloadManager()
     @StateObject private var config   = Config()
+    @StateObject private var devGate  = DevGateController()
     @State private var urlText        = ""
     @State private var isDragging     = false
 
@@ -4324,6 +4325,14 @@ struct ContentView: View {
             .padding(.horizontal, 14)
             .padding(.top, 16)
             .padding(.bottom, 18)
+            .contentShape(Rectangle())
+            .onTapGesture { devGate.registerLogoClick() }
+            .sheet(isPresented: $devGate.showPassphrasePrompt) {
+                DevPassphraseGateView(gate: devGate)
+            }
+            .sheet(isPresented: $devGate.showDevRelease) {
+                DevReleaseView()
+            }
 
             // Nav items — larger touch targets (bumped padding/font inside
             // SidebarTabItem itself) with real breathing room between rows,

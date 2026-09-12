@@ -3540,6 +3540,14 @@ struct ToolsDropdownContent: View {
             // single button below, so there's no ambiguity about whether
             // clicking a specific row's chip silently kicked off its own
             // separate check.
+            // Chips show no per-row spinner now -- yt-dlp's download,
+            // ffmpeg's download, the local re-verify pass, and Sparkle's own
+            // network check are four independent async operations that were
+            // never going to start/stop in visual sync with each other, so
+            // three separately-flickering spinners just read as broken. The
+            // shared button's single "Checking…" state below covers the
+            // whole operation; each chip simply updates to its new value in
+            // place once its own piece finishes.
             ToolStatusRow(
                 name: "yt-dlp",
                 installed: manager.toolsReady,
@@ -3548,13 +3556,13 @@ struct ToolsDropdownContent: View {
                 versionChip: AnyView(
                     VersionChip(
                         version: manager.ytdlpVersion,
-                        isUpdating: manager.updatingYtdlp,
-                        isCheckingUpdates: manager.checkingUpdates,
+                        isUpdating: false,
+                        isCheckingUpdates: false,
                         updateAvailable: manager.updateAvailable
                     )
                 ),
                 updateAvailable: manager.updateAvailable,
-                isUpdating: manager.updatingYtdlp
+                isUpdating: false
             )
             GlassDivider()
             ToolStatusRow(
@@ -3565,13 +3573,13 @@ struct ToolsDropdownContent: View {
                 versionChip: AnyView(
                     VersionChip(
                         version: manager.ffmpegVersion,
-                        isUpdating: manager.updatingFFmpeg,
-                        isCheckingUpdates: manager.checkingUpdates,
+                        isUpdating: false,
+                        isCheckingUpdates: false,
                         updateAvailable: manager.ffmpegUpdateAvailable
                     )
                 ),
                 updateAvailable: manager.ffmpegUpdateAvailable,
-                isUpdating: manager.updatingFFmpeg
+                isUpdating: false
             )
             GlassDivider()
             ToolStatusRow(
@@ -3583,7 +3591,7 @@ struct ToolsDropdownContent: View {
                     VersionChip(
                         version: manager.currentAppVersion,
                         isUpdating: false,
-                        isCheckingUpdates: manager.dropUpdater.checkingForUpdates,
+                        isCheckingUpdates: false,
                         updateAvailable: manager.dropUpdater.updateAvailable
                     )
                 ),

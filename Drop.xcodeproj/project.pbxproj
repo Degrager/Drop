@@ -25,6 +25,7 @@
 		DEV1000000000000000000A1 /* DevKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A1 /* DevKeychain.swift */; };
 		DEV1000000000000000000A2 /* DevReleasePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A2 /* DevReleasePipeline.swift */; };
 		DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A3 /* DevReleaseView.swift */; };
+		DEV1000000000000000000A4 /* MarkdownEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A4 /* MarkdownEditor.swift */; };
 		OVL1000000000000000000A1 /* DropUpdateOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = OVL2000000000000000000A1 /* DropUpdateOverlay.swift */; };
 /* End PBXBuildFile section */
 
@@ -46,6 +47,7 @@
 		DEV2000000000000000000A1 /* DevKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevKeychain.swift; sourceTree = "<group>"; };
 		DEV2000000000000000000A2 /* DevReleasePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevReleasePipeline.swift; sourceTree = "<group>"; };
 		DEV2000000000000000000A3 /* DevReleaseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevReleaseView.swift; sourceTree = "<group>"; };
+		DEV2000000000000000000A4 /* MarkdownEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownEditor.swift; sourceTree = "<group>"; };
 		OVL2000000000000000000A1 /* DropUpdateOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropUpdateOverlay.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -144,6 +146,7 @@
 				DEV2000000000000000000A1 /* DevKeychain.swift */,
 				DEV2000000000000000000A2 /* DevReleasePipeline.swift */,
 				DEV2000000000000000000A3 /* DevReleaseView.swift */,
+				DEV2000000000000000000A4 /* MarkdownEditor.swift */,
 			);
 			path = DevTools;
 			sourceTree = "<group>";
@@ -236,6 +239,7 @@
 				DEV1000000000000000000A1 /* DevKeychain.swift in Sources */,
 				DEV1000000000000000000A2 /* DevReleasePipeline.swift in Sources */,
 				DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */,
+				DEV1000000000000000000A4 /* MarkdownEditor.swift in Sources */,
 				OVL1000000000000000000A1 /* DropUpdateOverlay.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

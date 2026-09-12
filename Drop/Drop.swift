@@ -3516,6 +3516,11 @@ struct ToolsDropdownContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
+            // Each row is a static status readout now -- no per-tool click
+            // target. Checking/updating happens in exactly one place, the
+            // single button below, so there's no ambiguity about whether
+            // clicking a specific row's chip silently kicked off its own
+            // separate check.
             ToolStatusRow(
                 name: "yt-dlp",
                 installed: manager.toolsReady,
@@ -3526,14 +3531,11 @@ struct ToolsDropdownContent: View {
                         version: manager.ytdlpVersion,
                         isUpdating: manager.updatingYtdlp,
                         isCheckingUpdates: manager.checkingUpdates,
-                        updateAvailable: manager.updateAvailable,
-                        refreshAction: { manager.updateYtdlp() },
-                        refreshHelp: "Fetch latest yt-dlp nightly"
+                        updateAvailable: manager.updateAvailable
                     )
                 ),
                 updateAvailable: manager.updateAvailable,
-                isUpdating: manager.updatingYtdlp,
-                updateAction: { manager.updateYtdlp() }
+                isUpdating: manager.updatingYtdlp
             )
             GlassDivider()
             ToolStatusRow(
@@ -3546,14 +3548,11 @@ struct ToolsDropdownContent: View {
                         version: manager.ffmpegVersion,
                         isUpdating: manager.updatingFFmpeg,
                         isCheckingUpdates: manager.checkingUpdates,
-                        updateAvailable: manager.ffmpegUpdateAvailable,
-                        refreshAction: { manager.updateFFmpeg() },
-                        refreshHelp: "Fetch latest ffmpeg nightly"
+                        updateAvailable: manager.ffmpegUpdateAvailable
                     )
                 ),
                 updateAvailable: manager.ffmpegUpdateAvailable,
-                isUpdating: manager.updatingFFmpeg,
-                updateAction: { manager.updateFFmpeg() }
+                isUpdating: manager.updatingFFmpeg
             )
             GlassDivider()
             ToolStatusRow(
@@ -3566,25 +3565,23 @@ struct ToolsDropdownContent: View {
                         version: manager.currentAppVersion,
                         isUpdating: false,
                         isCheckingUpdates: manager.dropUpdater.checkingForUpdates,
-                        updateAvailable: manager.dropUpdater.updateAvailable,
-                        refreshAction: { manager.dropUpdater.checkForUpdates() },
-                        refreshHelp: "Check for a new Drop version"
+                        updateAvailable: manager.dropUpdater.updateAvailable
                     )
                 ),
                 updateAvailable: manager.dropUpdater.updateAvailable,
-                isUpdating: false,
-                updateAction: { manager.dropUpdater.checkForUpdates() }
+                isUpdating: false
             )
             GlassDivider()
             CheckForUpdatesButton(
-                isChecking: manager.checkingUpdates,
-                hasUpdate: manager.updateAvailable || manager.ffmpegUpdateAvailable,
+                isChecking: manager.checkingUpdates || manager.dropUpdater.checkingForUpdates,
+                hasUpdate: manager.updateAvailable || manager.ffmpegUpdateAvailable || manager.dropUpdater.updateAvailable,
                 disabledUntilSetup: !manager.toolsReady,
                 action: {
-                    // Both tools already force-update on launch, so this is
-                    // now a manual "refresh both nightlies now" action
-                    // rather than a staleness check.
+                    // The one place all three checks actually run now --
+                    // yt-dlp/ffmpeg's nightly fetch plus Drop's own Sparkle
+                    // check, previously reachable individually per-row.
                     manager.forceUpdateBothOnLaunch()
+                    manager.dropUpdater.checkForUpdates()
                 }
             )
             .padding(.horizontal, embedded ? 0 : 12)

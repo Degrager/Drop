@@ -951,6 +951,11 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     // SUFeedURL in Info.plist, verified against SUPublicEDKey before
     // anything is installed. See DropUpdater below.
     let dropUpdater = DropUpdater()
+    // Set once forceUpdateBothOnLaunch's check cycle finishes, cleared the
+    // moment a new one starts -- drives the shared Check for Updates
+    // button's "Up to Date" state alongside dropUpdater's own equivalent
+    // flag for the Sparkle-based check.
+    @Published var justCheckedUpToDate = false
     private var depPollTimer: Timer?
     private let gatekeeperAlertKey = "gatekeeperAlertShown"
 
@@ -1124,12 +1129,13 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// then does one silentUpdateCheck() at the end to refresh displayed
     /// version strings once both finish.
     func forceUpdateBothOnLaunch() {
+        justCheckedUpToDate = false
         appendLog("Updating yt-dlp and ffmpeg to latest nightly builds…")
         let group = DispatchGroup()
         group.enter(); updateYtdlp { group.leave() }
         group.enter(); updateFFmpeg { group.leave() }
         group.notify(queue: .main) {
-            self.silentUpdateCheck()
+            self.silentUpdateCheck { self.justCheckedUpToDate = true }
         }
     }
 
@@ -1363,6 +1369,11 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         @Published var checkingForUpdates = false
         @Published var updateAvailable = false
         @Published var latestVersion = ""
+        // True only after Sparkle explicitly confirms no newer version
+        // exists -- not just "checking finished" (which also covers the
+        // error/not-found-feed case) -- so the shared button can't claim
+        // "Up to Date" when the check actually failed.
+        @Published var justConfirmedUpToDate = false
 
         // Assigned in init (after super.init, so `self` can be passed as the
         // delegate -- SPUUpdater only accepts a delegate at construction,
@@ -1381,6 +1392,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
 
         func checkForUpdates() {
             checkingForUpdates = true
+            justConfirmedUpToDate = false
             controller.checkForUpdates(nil)
         }
 
@@ -1388,6 +1400,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async {
                 self.checkingForUpdates = false
                 self.updateAvailable = true
+                self.justConfirmedUpToDate = false
                 self.latestVersion = item.displayVersionString
             }
         }
@@ -1396,12 +1409,14 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async {
                 self.checkingForUpdates = false
                 self.updateAvailable = false
+                self.justConfirmedUpToDate = true
             }
         }
 
         func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
             DispatchQueue.main.async {
                 self.checkingForUpdates = false
+                self.justConfirmedUpToDate = false
             }
         }
     }
@@ -3575,6 +3590,7 @@ struct ToolsDropdownContent: View {
             CheckForUpdatesButton(
                 isChecking: manager.checkingUpdates || manager.dropUpdater.checkingForUpdates,
                 hasUpdate: manager.updateAvailable || manager.ffmpegUpdateAvailable || manager.dropUpdater.updateAvailable,
+                isUpToDate: manager.justCheckedUpToDate && manager.dropUpdater.justConfirmedUpToDate,
                 disabledUntilSetup: !manager.toolsReady,
                 action: {
                     // The one place all three checks actually run now --
@@ -3613,17 +3629,25 @@ struct OptionalGlassCard: ViewModifier {
 struct CheckForUpdatesButton: View {
     let isChecking: Bool
     let hasUpdate: Bool
+    // True once the most recently completed check cycle confirmed
+    // everything current -- cleared the instant a new check starts, so it
+    // can never linger from a stale previous result.
+    var isUpToDate: Bool = false
     var disabledUntilSetup: Bool = false
     let action: () -> Void
     @State private var hovering = false
 
-    private var accentColor: Color { hasUpdate ? .orange : .white }
+    private var accentColor: Color {
+        if hasUpdate { return .orange }
+        if isUpToDate { return DesignTokens.Accent.success }
+        return .white
+    }
     private var isDisabled: Bool { isChecking || disabledUntilSetup }
 
     var body: some View {
         GlassButton(
-            label: isChecking ? "Checking…" : (disabledUntilSetup ? "Tools Missing" : (hasUpdate ? "Update Available" : "Check for Updates")),
-            icon: disabledUntilSetup ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath",
+            label: isChecking ? "Checking…" : (disabledUntilSetup ? "Tools Missing" : (hasUpdate ? "Update Available" : (isUpToDate ? "Up to Date" : "Check for Updates"))),
+            icon: disabledUntilSetup ? "exclamationmark.triangle.fill" : (isUpToDate && !hasUpdate ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath"),
             tint: disabledUntilSetup ? Color.white.opacity(DesignTokens.Text.secondary) : accentColor,
             verticalPadding: 8,
             isLoading: isChecking,

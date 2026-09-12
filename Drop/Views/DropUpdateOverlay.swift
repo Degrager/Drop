@@ -39,6 +39,13 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         // for Updates button already turns green with "Up to Date" for this
         // exact case (DropUpdater.justConfirmedUpToDate), so a second,
         // redundant confirmation here would just be noise.
+
+        // Not part of Sparkle's SPUUserDriver protocol at all -- this is a
+        // separate feature (Sparkle has no "what's new" screen built in):
+        // shown once, the first time Drop launches after actually landing on
+        // a new version, distinct from updateFound (which asks "install
+        // this?" *before* it happens). See DropUpdater.checkWhatsNewIfJustUpdated.
+        case whatsNew(versionString: String, notesHTML: String?)
     }
 
     @Published var stage: Stage = .idle
@@ -182,14 +189,56 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         withAnimation {
             stage = .updateFound(
                 versionString: "9.9.9",
-                notesHTML: "<p>This is a preview of the update overlay -- sample release notes, not a real update.</p><p>- Example bullet one<br>- Example bullet two</p>",
+                notesHTML: Self.sampleNotesHTML,
                 reply: { [weak self] _ in withAnimation { self?.stage = .idle } }
             )
         }
     }
+
+    /// The "you've just been updated" screen -- see whatsNew's case comment
+    /// for how this differs from previewUpdateFound.
+    func previewWhatsNew() {
+        withAnimation { stage = .whatsNew(versionString: "9.9.9", notesHTML: Self.sampleNotesHTML) }
+    }
+
+    func previewDownloading() {
+        withAnimation { stage = .downloading(progress: 0.4) }
+    }
+
+    func previewReadyToInstall() {
+        withAnimation {
+            stage = .readyToInstall(reply: { [weak self] _ in withAnimation { self?.stage = .idle } })
+        }
+    }
+
+    func previewError() {
+        withAnimation {
+            stage = .error(
+                message: "This is a preview of the error overlay -- sample message, nothing actually failed.",
+                acknowledgement: {}
+            )
+        }
+    }
+
+    private static let sampleNotesHTML = "<p>This is a preview with sample release notes, not a real update.</p><p>- Example bullet one<br>- Example bullet two</p>"
+
     func dismissError() {
         if case .error(_, let acknowledgement) = stage { acknowledgement() }
         stage = .idle
+    }
+
+    func dismissWhatsNew() {
+        stage = .idle
+    }
+
+    /// Real (non-preview) trigger, called once from
+    /// DropUpdater.checkWhatsNewIfJustUpdated() after it confirms this
+    /// launch is a genuine version bump. Only takes effect from `.idle` so
+    /// it can never interrupt an in-progress update flow (e.g. a real
+    /// update-found/downloading card that happened to already be showing).
+    func showWhatsNew(versionString: String, notesHTML: String?) {
+        guard case .idle = stage else { return }
+        withAnimation { stage = .whatsNew(versionString: versionString, notesHTML: notesHTML) }
     }
 }
 
@@ -246,6 +295,8 @@ struct DropUpdateOverlayView: View {
                     Text(message).font(.appMono(size: 11)).foregroundColor(.white.opacity(DesignTokens.Text.secondary)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                     GlassButton(label: "Dismiss", icon: "xmark", tint: .white, fitContent: true) { driver.dismissError() }
                 }
+            case .whatsNew(let versionString, let notesHTML):
+                whatsNewCard(versionString: versionString, notesHTML: notesHTML)
             }
         }
     }
@@ -295,6 +346,46 @@ struct DropUpdateOverlayView: View {
                     GlassButton(label: "Skip", icon: "forward", tint: .white, fitContent: true) { reply(.skip) }
                     GlassButton(label: "Later", icon: "clock", tint: .white, fitContent: true) { reply(.dismiss) }
                     GlassButton(label: "Install", icon: "arrow.down.circle", tint: DesignTokens.Accent.primary, fitContent: true) { reply(.install) }
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 440)
+            .glassCard(cornerRadius: DesignTokens.Radius.large)
+        }
+        .transition(.opacity)
+    }
+
+    private func whatsNewCard(versionString: String, notesHTML: String?) -> some View {
+        ZStack {
+            Color.black.opacity(0.45).ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles").foregroundColor(DesignTokens.Accent.primary).font(.appMono(size: 16))
+                    Text("What's new in Drop \(versionString)")
+                        .font(.appMono(size: 14, weight: .semibold))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                }
+
+                if let notesHTML, let attributed = try? AttributedString(
+                    markdown: Self.stripHTML(notesHTML),
+                    options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+                ) {
+                    ScrollView {
+                        Text(attributed)
+                            .font(.appMono(size: 11.5))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 220)
+                } else {
+                    Text("No release notes provided.")
+                        .font(.appMono(size: 11.5))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                }
+
+                HStack {
+                    Spacer()
+                    GlassButton(label: "Got It", icon: "checkmark", tint: DesignTokens.Accent.primary, fitContent: true) { driver.dismissWhatsNew() }
                 }
             }
             .padding(24)

@@ -25,6 +25,7 @@
 		DEV1000000000000000000A1 /* DevKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A1 /* DevKeychain.swift */; };
 		DEV1000000000000000000A2 /* DevReleasePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A2 /* DevReleasePipeline.swift */; };
 		DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A3 /* DevReleaseView.swift */; };
+		OVL1000000000000000000A1 /* DropUpdateOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = OVL2000000000000000000A1 /* DropUpdateOverlay.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,7 @@
 		DEV2000000000000000000A1 /* DevKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevKeychain.swift; sourceTree = "<group>"; };
 		DEV2000000000000000000A2 /* DevReleasePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevReleasePipeline.swift; sourceTree = "<group>"; };
 		DEV2000000000000000000A3 /* DevReleaseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevReleaseView.swift; sourceTree = "<group>"; };
+		OVL2000000000000000000A1 /* DropUpdateOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropUpdateOverlay.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -113,6 +115,7 @@
 				DD223344556677889900BBCC /* PreviewCard.swift */,
 				EE445566778899001122DDEE /* TabBottomBar.swift */,
 				AA112233445566778899BBCC /* MediaItemCard.swift */,
+				OVL2000000000000000000A1 /* DropUpdateOverlay.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -233,6 +236,7 @@
 				DEV1000000000000000000A1 /* DevKeychain.swift in Sources */,
 				DEV1000000000000000000A2 /* DevReleasePipeline.swift in Sources */,
 				DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */,
+				OVL1000000000000000000A1 /* DropUpdateOverlay.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

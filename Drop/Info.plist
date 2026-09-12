@@ -32,5 +32,13 @@
 	<string>public.app-category.utilities</string>
 	<key>NSUserNotificationAlertStyle</key>
 	<string>alert</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/Degrager/Drop/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>GeSVXd4mV3n2njZPEt3+kmuVMj8YBVbCSp6PoErx5Ms=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>

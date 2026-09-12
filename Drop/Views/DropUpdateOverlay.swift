@@ -34,7 +34,10 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         // when it was called the moment the card first appeared. Deferring
         // it to dismissError() means Sparkle doesn't clean up until the
         // user has actually seen and dismissed it.
-        case error(message: String, acknowledgement: () -> Void)
+        // isExpected distinguishes a genuine failure from the known,
+        // harmless "no release published yet" 404 -- same card shape, but
+        // different icon/title so it doesn't read as something broken.
+        case error(message: String, isExpected: Bool = false, acknowledgement: () -> Void)
         // .notFound deliberately has no visible overlay -- the shared Check
         // for Updates button already turns green with "Up to Date" for this
         // exact case (DropUpdater.justConfirmedUpToDate), so a second,
@@ -48,7 +51,19 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         case whatsNew(versionString: String, notesHTML: String?)
     }
 
-    @Published var stage: Stage = .idle
+    // Real update stages can't be Escape-dismissed -- a real download/
+    // install genuinely can't be cancelled mid-flight this way, and states
+    // that can (updateFound, readyToInstall, error) already have proper
+    // buttons that call back into Sparkle correctly. Preview stages are
+    // just static sample data with no Sparkle session behind them at all,
+    // so Escape can safely reset straight to .idle. `didSet` resets this to
+    // false on every stage change so it's never accidentally left true by a
+    // stage that started as a preview; each preview*() method flips it back
+    // to true right after setting stage.
+    @Published var stage: Stage = .idle {
+        didSet { isPreview = false }
+    }
+    @Published private(set) var isPreview = false
 
     /// The shared Check for Updates button derives its "checking" state from
     /// this, not from DropUpdater's separate SPUUpdaterDelegate callback --
@@ -129,7 +144,24 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     }
 
     func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {
-        withAnimation { stage = .error(message: error.localizedDescription, acknowledgement: acknowledgement) }
+        // Sparkle funnels every HTTP fetch failure -- the appcast feed
+        // itself, or later a real update's downloaded package -- through
+        // the same SUDownloadError code, so the two can only be told apart
+        // by *when* they happen. `stage` is still `.checking` here only if
+        // showUpdateFound/showDownloadInitiated never ran first, i.e. this
+        // failure happened trying to fetch the feed itself, not a package
+        // download mid-update. Today that's genuinely expected: no real
+        // release has been Sign & Published yet, so SUFeedURL/appcast.xml
+        // doesn't exist on GitHub at all -- a 404, not a broken update
+        // system. Once a real release publishes the feed, this branch
+        // simply stops firing on its own.
+        let wasFetchingFeed: Bool = { if case .checking = stage { return true }; return false }()
+        let nsError = error as NSError
+        let isExpectedNoRelease = wasFetchingFeed && nsError.domain == SUSparkleErrorDomain && nsError.code == SUError.downloadError.rawValue
+        let message = isExpectedNoRelease
+            ? "No published release found yet. This is expected until the first release is signed & published from the Dev tab."
+            : error.localizedDescription
+        withAnimation { stage = .error(message: message, isExpected: isExpectedNoRelease, acknowledgement: acknowledgement) }
     }
 
     func showDownloadInitiated(cancellation: @escaping () -> Void) {
@@ -193,22 +225,26 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
                 reply: { [weak self] _ in withAnimation { self?.stage = .idle } }
             )
         }
+        isPreview = true
     }
 
     /// The "you've just been updated" screen -- see whatsNew's case comment
     /// for how this differs from previewUpdateFound.
     func previewWhatsNew() {
         withAnimation { stage = .whatsNew(versionString: "9.9.9", notesHTML: Self.sampleNotesHTML) }
+        isPreview = true
     }
 
     func previewDownloading() {
         withAnimation { stage = .downloading(progress: 0.4) }
+        isPreview = true
     }
 
     func previewReadyToInstall() {
         withAnimation {
             stage = .readyToInstall(reply: { [weak self] _ in withAnimation { self?.stage = .idle } })
         }
+        isPreview = true
     }
 
     func previewError() {
@@ -218,12 +254,21 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
                 acknowledgement: {}
             )
         }
+        isPreview = true
+    }
+
+    /// Escape-key equivalent of the various Dismiss/Later/Got It buttons --
+    /// only reachable while `isPreview` is true (see the overlay view's
+    /// hidden escape-catching button), since a preview has no real Sparkle
+    /// session underneath it that needs its reply/acknowledgement called.
+    func dismissPreview() {
+        withAnimation { stage = .idle }
     }
 
     private static let sampleNotesHTML = "<p>This is a preview with sample release notes, not a real update.</p><p>- Example bullet one<br>- Example bullet two</p>"
 
     func dismissError() {
-        if case .error(_, let acknowledgement) = stage { acknowledgement() }
+        if case .error(_, _, let acknowledgement) = stage { acknowledgement() }
         stage = .idle
     }
 
@@ -288,16 +333,36 @@ struct DropUpdateOverlayView: View {
                     ProgressView().controlSize(.small)
                     Text("Installing update…").font(.appMono(size: 13)).foregroundColor(.white.opacity(DesignTokens.Text.secondary))
                 }
-            case .error(let message, _):
+            case .error(let message, let isExpected, _):
                 card {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.appMono(size: 20)).foregroundColor(DesignTokens.Accent.danger)
-                    Text("Update Check Failed").font(.appMono(size: 14, weight: .semibold)).foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                    Image(systemName: isExpected ? "info.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.appMono(size: 20))
+                        .foregroundColor(isExpected ? .white.opacity(DesignTokens.Text.secondary) : DesignTokens.Accent.danger)
+                    Text(isExpected ? "No Release Yet" : "Update Check Failed").font(.appMono(size: 14, weight: .semibold)).foregroundColor(.white.opacity(DesignTokens.Text.primary))
                     Text(message).font(.appMono(size: 11)).foregroundColor(.white.opacity(DesignTokens.Text.secondary)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                     GlassButton(label: "Dismiss", icon: "xmark", tint: .white, fitContent: true) { driver.dismissError() }
                 }
             case .whatsNew(let versionString, let notesHTML):
                 whatsNewCard(versionString: versionString, notesHTML: notesHTML)
             }
+        }
+        .overlay(escapeCatcher)
+    }
+
+    /// A zero-size, invisible button whose only job is to own the Escape
+    /// keyboard shortcut -- SwiftUI routes .keyboardShortcut to any button
+    /// in the view hierarchy regardless of visibility, so this doesn't need
+    /// focus or to be part of any particular card's layout. Only present
+    /// while `isPreview` is true, so it can never intercept Escape during a
+    /// real update flow -- see `dismissPreview()`'s doc comment for why
+    /// those stages don't get this at all.
+    @ViewBuilder
+    private var escapeCatcher: some View {
+        if driver.isPreview {
+            Button("", action: driver.dismissPreview)
+                .keyboardShortcut(.escape, modifiers: [])
+                .frame(width: 0, height: 0)
+                .opacity(0)
         }
     }
 

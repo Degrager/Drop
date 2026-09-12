@@ -57,8 +57,27 @@
 		6D8BC2BD8B8F401BA0897C2B = {
 			isa = PBXGroup;
 			children = (
+				1A2B3C4D5E6F708192A3B4C5 /* Drop */,
+				E0A82911BD0F484580E166D4 /* Frameworks */,
+				348FA9B50C884E45BD925C35 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		1A2B3C4D5E6F708192A3B4C5 /* Drop */ = {
+			isa = PBXGroup;
+			children = (
 				5B71349E9E0E461DA6C30234 /* Drop.swift */,
 				0B44214C509D471095164925 /* main.swift */,
+				ED6762084C7240718B8076E5 /* Info.plist */,
+				AA11223344556677 /* drop_icon_v4.icns */,
+				2B3C4D5E6F708192A3B4C5D6 /* Views */,
+			);
+			path = Drop;
+			sourceTree = "<group>";
+		};
+		2B3C4D5E6F708192A3B4C5D6 /* Views */ = {
+			isa = PBXGroup;
+			children = (
 				DD112233445566778899AABB /* MediaCard.swift */,
 				FF112233445566778899AABB /* DownloadRow.swift */,
 				FF223344556677889900BBCC /* HistoryViews.swift */,
@@ -66,11 +85,8 @@
 				DD223344556677889900BBCC /* PreviewCard.swift */,
 				EE445566778899001122DDEE /* TabBottomBar.swift */,
 				AA112233445566778899BBCC /* MediaItemCard.swift */,
-				ED6762084C7240718B8076E5 /* Info.plist */,
-				AA11223344556677 /* drop_icon_v4.icns */,
-				E0A82911BD0F484580E166D4 /* Frameworks */,
-				348FA9B50C884E45BD925C35 /* Products */,
 			);
+			path = Views;
 			sourceTree = "<group>";
 		};
 		348FA9B50C884E45BD925C35 /* Products */ = {
@@ -309,7 +325,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = Drop/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -342,7 +358,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = Drop/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

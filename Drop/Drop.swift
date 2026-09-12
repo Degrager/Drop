@@ -1396,10 +1396,35 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             super.init()
             updater = SPUUpdater(hostBundle: Bundle.main, applicationBundle: Bundle.main, userDriver: userDriver, delegate: nil)
             try? updater.start()
+            checkWhatsNewIfJustUpdated()
         }
 
         func checkForUpdates() {
             updater.checkForUpdates()
+        }
+
+        /// Sparkle has no "what's new" screen of its own -- it only ever asks
+        /// "install this?" *before* an update happens. This detects the
+        /// other half: the first launch *after* a real update landed, so
+        /// Drop can show what changed once. lastSeenAppVersion has no value
+        /// on a brand-new install (nothing to compare against, so nothing
+        /// shows), and is written on every launch so a same-version relaunch
+        /// never re-triggers it.
+        private func checkWhatsNewIfJustUpdated() {
+            let key = "lastSeenAppVersion"
+            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+            let previous = UserDefaults.standard.string(forKey: key)
+            UserDefaults.standard.set(current, forKey: key)
+            guard let previous, previous != current,
+                  let url = URL(string: "https://api.github.com/repos/Degrager/Drop/releases/tags/v\(current)") else { return }
+
+            URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+                guard let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let notes = json["body"] as? String else { return }
+                DispatchQueue.main.async {
+                    self?.userDriver.showWhatsNew(versionString: current, notesHTML: notes)
+                }
+            }.resume()
         }
     }
 

@@ -4288,27 +4288,6 @@ struct ContentView: View {
                     #endif
                     }
 
-                    // Footer — visible on all tabs. Uses the "metadata" text
-                    // tier (tertiary), not "disabled" -- this is real, legible
-                    // content, not a disabled control, and was previously too
-                    // low-contrast to read comfortably.
-                    HStack(spacing: 0) {
-                        Text("© Zander Riley")
-                            .font(.appMono(size: 10, design: .monospaced))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        Spacer()
-                        // CFBundleVersion is stamped with the actual build
-                        // date/time by the build pipeline (not hand-tracked --
-                        // a hardcoded number is useless for telling builds
-                        // apart, which is exactly how a stale build went
-                        // unnoticed before). Shown as-is so any two installs
-                        // can be told apart at a glance.
-                        Text("build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?")")
-                            .font(.appMono(size: 10, design: .monospaced))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
                 }
                 .frame(maxWidth: .infinity)
             }

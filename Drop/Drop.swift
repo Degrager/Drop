@@ -4203,6 +4203,7 @@ struct ContentView: View {
                     // override an explicit `withAnimation` transaction still in
                     // flight from the sidebar's own selection-pill spring, which is
                     // what let the cross-fade leak through before.
+                    ZStack(alignment: .top) {
                     Group {
                         if activeTab == .download {
                             mainPanel
@@ -4231,10 +4232,10 @@ struct ContentView: View {
                             ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, jobs: $convertJobs, config: config, manager: manager)
                                 .transition(.identity)
                         } else if activeTab == .devRelease {
-                            DevReleaseView(dropDriver: dropDriver)
-                                .containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
-                                .frame(maxWidth: .infinity)
-                                .transition(.identity)
+                            // Real content is devReleaseOverlay below, kept
+                            // permanently mounted instead of created fresh
+                            // here -- see its comment for why.
+                            Color.clear
                         } else {
                             // Log is now a full page like Download/History/Convert
                             // instead of a floating side panel -- same bare-VStack-
@@ -4251,7 +4252,7 @@ struct ContentView: View {
                     // `activeTab` itself changed, and does NOT touch any other
                     // state change flowing through this subtree (card pop-ins,
                     // thumbnail fades, etc. keep their own explicit
-                    // withAnimation as normal). A blanket `.transaction { 
+                    // withAnimation as normal). A blanket `.transaction {
                     // disablesAnimations = true }` was here previously, but
                     // that flag isn't scoped to activeTab at all -- it silently
                     // killed EVERY animation for every view inside this Group,
@@ -4260,6 +4261,30 @@ struct ContentView: View {
                     // "pop-in/skeleton fade does nothing" -- not the transitions
                     // themselves, which were correct all along.
                     .animation(nil, value: activeTab)
+
+                    // Dev tab, unlike the others above, keeps essentially
+                    // all of its own state locally (pipeline, typed-in
+                    // version/changelog, fetched releases/audit trail) --
+                    // nothing hoisted up to ContentView the way History's
+                    // and Convert's real data lives in `manager`. Mounting
+                    // it fresh on every tab switch (the pattern above) tore
+                    // all of that down and rebuilt it from scratch each
+                    // time, which read as "the Dev page resets when I leave
+                    // it." Keeping it permanently in the tree and only
+                    // toggling opacity/hit-testing preserves its state for
+                    // as long as the app runs, matching every other tab's
+                    // actual persistence even though the mechanism here is
+                    // different. `.animation(nil, ...)` again for the same
+                    // hard-cut reason as the Group above.
+                    if DevKeychain.isDevMachine {
+                        DevReleaseView(dropDriver: dropDriver)
+                            .containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
+                            .frame(maxWidth: .infinity)
+                            .opacity(activeTab == .devRelease ? 1 : 0)
+                            .allowsHitTesting(activeTab == .devRelease)
+                            .animation(nil, value: activeTab)
+                    }
+                    }
 
                     // Footer — visible on all tabs. Uses the "metadata" text
                     // tier (tertiary), not "disabled" -- this is real, legible

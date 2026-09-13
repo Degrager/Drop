@@ -9,17 +9,17 @@
             <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[Features:
+            <description><![CDATA[First public release of Drop — a fast, native macOS app for downloading and converting online video and audio using yt-dlp and ffmpeg.
+
+Features:
 - Paste-and-go downloading with automatic link analysis
 - Quality selection up to 4K, MP4/MKV output, audio-only extraction
 - Smart MP4 codec compatibility (avoids VP9/AV1-in-MP4 playback failures)
 - Menu bar quick paste
 - Download history with one-click redownload/retry
 - Self-updating bundled yt-dlp/ffmpeg
-- In-app self-update via this Releases page
-
-Requires macOS 14 (Sonoma) or later. Since Drop isn't notarized through the App Store, right-click the app and choose Open on first launch to bypass Gatekeeper's warning.]]></description>
-            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.0.dmg" length="3282170" type="application/octet-stream" sparkle:edSignature="uEOoUnfWb/gfML5dkYx7Uw1QyrM4G8N6DPTQlsC/3DcFwZgTaq6k8F+3ujRIYx2RypttxM0IgO+o3zjmGfwSAg=="/>
+- In-app self-update via this Releases page]]></description>
+            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.0.dmg" length="3315554" type="application/octet-stream" sparkle:edSignature="R78biLMakgZ7CHriZZOqw6n1+7sjJ0zHEbt2m/Gt03DjJ+2X1RrScAlFtdJLgjZv/0ypyVxj0A+8nWqsbpkSBg=="/>
         </item>
     </channel>
 </rss>

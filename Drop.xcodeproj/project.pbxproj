@@ -48,6 +48,8 @@
 		DEV2000000000000000000A2 /* DevReleasePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevReleasePipeline.swift; sourceTree = "<group>"; };
 		DEV2000000000000000000A3 /* DevReleaseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevReleaseView.swift; sourceTree = "<group>"; };
 		DEV2000000000000000000A4 /* MarkdownEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownEditor.swift; sourceTree = "<group>"; };
+		CFG1000000000000000000A1 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		CFG1000000000000000000A2 /* Local.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig; sourceTree = "<group>"; };
 		OVL2000000000000000000A1 /* DropUpdateOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropUpdateOverlay.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -103,6 +105,7 @@
 				AA11223344556677 /* drop_icon_v4.icns */,
 				2B3C4D5E6F708192A3B4C5D6 /* Views */,
 				DEV3000000000000000000A1 /* DevTools */,
+				CFG3000000000000000000A1 /* Config */,
 			);
 			path = Drop;
 			sourceTree = "<group>";
@@ -149,6 +152,15 @@
 				DEV2000000000000000000A4 /* MarkdownEditor.swift */,
 			);
 			path = DevTools;
+			sourceTree = "<group>";
+		};
+		CFG3000000000000000000A1 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				CFG1000000000000000000A1 /* Base.xcconfig */,
+				CFG1000000000000000000A2 /* Local.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -370,7 +382,10 @@
 		};
 		837A472169CE40B9A0D51B51 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CFG1000000000000000000A1 /* Base.xcconfig */;
 			buildSettings = {
+				EXCLUDED_SOURCE_FILE_NAMES = "$(inherited) $(DEV_TOOLS_EXCLUDE)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) $(DEV_BUILD_FLAG)";
 				ICON_FILE = drop_icon_v4.icns;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
@@ -403,7 +418,10 @@
 		};
 		0DA6A19659FD4CBBB496EE1D /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = CFG1000000000000000000A1 /* Base.xcconfig */;
 			buildSettings = {
+				EXCLUDED_SOURCE_FILE_NAMES = "$(inherited) $(DEV_TOOLS_EXCLUDE)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) $(DEV_BUILD_FLAG)";
 				ICON_FILE = drop_icon_v4.icns;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;

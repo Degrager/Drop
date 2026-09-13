@@ -40,3 +40,10 @@ Pods/
 
 # Local scratch / bundled runtime binaries (yt-dlp, ffmpeg) — downloaded at runtime, not part of source
 Binaries/
+
+# Dev-only release tooling — never part of the public repo. Stays on the
+# developer's own machine only; Drop/Config/Base.xcconfig's
+# EXCLUDED_SOURCE_FILE_NAMES + Drop.swift's #if DEV_BUILD guards make the
+# app build clean and fully functional without it.
+Drop/DevTools/
+Drop/Config/Local.xcconfig

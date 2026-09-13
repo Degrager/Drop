@@ -1,0 +1,18 @@
+// Default state, applied to every build unless overridden by an untracked
+// Local.xcconfig (see .gitignore) that only exists on the developer's own
+// machine: the Dev/Release panel's source files are excluded from
+// compilation entirely, and DEV_BUILD is left undefined so every
+// `#if DEV_BUILD` block in Drop.swift compiles out along with them. This
+// is what makes a fresh clone of the public repo build into a complete,
+// working app with no trace of the dev-only tooling -- not because the
+// files are hidden, but because nothing here ever references them.
+//
+// The developer's own Local.xcconfig overrides both settings back to
+// empty/DEV_BUILD respectively, bringing the panel back for local builds
+// and for the Release build the Dev pipeline itself produces for
+// distribution (DevReleasePipeline.build() runs -configuration Release,
+// so this applies there too, not just Debug).
+DEV_TOOLS_EXCLUDE = DevKeychain.swift DevReleasePipeline.swift DevReleaseView.swift MarkdownEditor.swift
+DEV_BUILD_FLAG =
+
+#include? "Local.xcconfig"

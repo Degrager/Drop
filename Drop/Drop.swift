@@ -4276,6 +4276,7 @@ struct ContentView: View {
                     // actual persistence even though the mechanism here is
                     // different. `.animation(nil, ...)` again for the same
                     // hard-cut reason as the Group above.
+                    #if DEV_BUILD
                     if DevKeychain.isDevMachine {
                         DevReleaseView(dropDriver: dropDriver)
                             .containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
@@ -4284,6 +4285,7 @@ struct ContentView: View {
                             .allowsHitTesting(activeTab == .devRelease)
                             .animation(nil, value: activeTab)
                     }
+                    #endif
                     }
 
                     // Footer — visible on all tabs. Uses the "metadata" text
@@ -4449,12 +4451,18 @@ struct ContentView: View {
                 // and GitHub token -- see DevKeychain.isDevMachine. On any
                 // other machine this row, and everything behind it, simply
                 // doesn't exist; that absence is the entire access control.
+                // Guarded by DEV_BUILD (see Config/Base.xcconfig) on top of
+                // that check: the public repo doesn't even compile
+                // DevKeychain/DevReleaseView in at all, so this couldn't
+                // reference them regardless.
+                #if DEV_BUILD
                 if DevKeychain.isDevMachine {
                     SidebarTabItem(label: "Dev", icon: "wrench.and.screwdriver", isSelected: activeTab == .devRelease) {
                         withAnimation(.spring(response: 0.25)) { activeTab = .devRelease }
                     }
                     .accessibilityIdentifier("tab_dev")
                 }
+                #endif
             }
             .padding(.horizontal, 8)
 

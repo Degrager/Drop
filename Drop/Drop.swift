@@ -4309,7 +4309,7 @@ struct ContentView: View {
                     // hard-cut reason as the Group above.
                     #if DEV_BUILD
                     if DevKeychain.isDevMachine {
-                        DevReleaseView(dropDriver: dropDriver)
+                        DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
                             .containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
                             .frame(maxWidth: .infinity)
                             .opacity(activeTab == .devRelease ? 1 : 0)

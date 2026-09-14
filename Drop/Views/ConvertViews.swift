@@ -392,10 +392,11 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     @Published var outputURL: URL? = nil
     @Published var isSelected: Bool = true
     /// Whether this card's settings section is expanded. Transient UI state
-    /// only (like isSelected) — always starts expanded, never persisted. Lives
-    /// on the job itself (rather than local @State in the card view) so the
-    /// "collapse all" toggle in the header can drive every card in lockstep.
-    @Published var isExpanded: Bool = true
+    /// only (like isSelected) — starts collapsed, matching Download's queued
+    /// cards, never persisted. Lives on the job itself (rather than local
+    /// @State in the card view) so the "collapse all" toggle in the header
+    /// can drive every card in lockstep.
+    @Published var isExpanded: Bool = false
     @Published var thumbnail: NSImage? = nil
     @Published var audioCodec: ConvertAudioCodec = .aac
     @Published var videoCodec: ConvertVideoCodec = .h264
@@ -986,7 +987,15 @@ struct ConvertView: View {
     /// once they're all already collapsed.
     private func toggleCollapseAll() {
         let shouldCollapse = !allCardsCollapsed
-        jobs.forEach { $0.isExpanded = !shouldCollapse }
+        // Scoped to .queued only, matching allCardsCollapsed above and
+        // Download's own toggleCollapseAllLinks -- a converting/done job's
+        // isExpanded has no visible effect today (only the queued settings
+        // card reads it), but leaving it untouched avoids a stale toggle
+        // silently taking effect later if that job gets Reconverted back to
+        // .queued.
+        for job in jobs where job.status == .queued {
+            job.isExpanded = !shouldCollapse
+        }
         selectionVersion += 1
     }
 
@@ -1260,12 +1269,15 @@ struct ConvertView: View {
                     ) {
                         withAnimation(.spring(response: 0.25)) {
                             isBatchMode.toggle()
-                            // Always start/end with nothing checked, whether
-                            // entering or exiting Select mode, so checkmarks
-                            // never carry over stale state from a previous
-                            // session. Also clear every job's Batch Apply
-                            // override so leaving Select Mode fully resets it.
-                            jobs.forEach { $0.isSelected = false; $0.clearBatchOverride() }
+                            // Select mode always starts unchecked so checkmarks
+                            // never carry over stale state. Exiting Select mode
+                            // resets every item back to fully included, since
+                            // outside Select mode checkboxes are hidden and
+                            // nothing should be silently excluded -- same
+                            // convention as Download's own Select/Done toggle.
+                            // Also clear every job's Batch Apply override so
+                            // leaving Select Mode fully resets it.
+                            jobs.forEach { $0.isSelected = !isBatchMode; $0.clearBatchOverride() }
                             selectionVersion += 1
                         }
                     }
@@ -1332,7 +1344,7 @@ struct ConvertView: View {
                     // fixed a scroll stutter caused by every card's blur +
                     // (for analyzing cards) TimelineView-driven rim redraw
                     // running regardless of scroll position.
-                    LazyVStack(spacing: 10) {
+                    LazyVStack(spacing: 12) {
                         ForEach(jobs) { job in
                             ConvertPreviewCard(
                                 job: job,
@@ -1346,6 +1358,11 @@ struct ConvertView: View {
                                     selectionVersion += 1
                                 }
                             )
+                            // Same scale-pop-in on spawn as Download's cards
+                            // (see previewCard's own .cardPopIn) -- insert/
+                            // remove only, same-identity updates don't hit
+                            // this. Removal stays instant.
+                            .transition(.cardPopIn)
                         }
                         Color.clear.frame(height: 4).id("convertBottom")
                     }
@@ -1358,7 +1375,7 @@ struct ConvertView: View {
                     // fixes this at the root instead of chasing padding deltas.
                     .frame(width: mainPanelWidth > 0 ? mainPanelWidth * 0.60 : nil)
                     .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 16)
                     .padding(.top, 20)
                     .padding(.bottom, 8)
                 }
@@ -2028,49 +2045,31 @@ struct ConvertPreviewCard: View {
 
     // MARK: Thumbnail helper
 
-    private var thumbView: AnyView? {
-        guard let img = job.thumbnail else { return nil }
-        return AnyView(Image(nsImage: img).resizable().aspectRatio(contentMode: .fill))
+    /// Same skeleton-underlay + fade-in-on-arrival treatment as Download's
+    /// own thumbnail (see downloadPreviewCard's thumbView) -- always
+    /// returns a real view instead of nil while job.thumbnail is still
+    /// nil, so the shell's own generic placeholder glyph never shows;
+    /// QuickLook's async generation (see fetchThumbnail) is the local
+    /// equivalent of Download's AsyncImage load.
+    private var thumbView: AnyView {
+        AnyView(
+            ZStack {
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                    .fill(Color.clear)
+                    .overlay(ThumbnailSkeleton().clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)))
+                if let img = job.thumbnail {
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .transition(.fadeInOnly)
+                }
+            }
+            .frame(width: 80, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
+            .animation(.easeOut(duration: 0.2), value: job.thumbnail == nil)
+        )
     }
 
-    /// Same visual language as Download's ChipRow/HistoryChip — filled colored pills.
-    /// Related values are combined into a single chip (joined with “ · ”) instead of one
-    /// chip per field, to keep the row compact. Color grouping: gray/white = general file
-    /// info (length/size, directory), blue = video/container info (format/codec/resolution),
-    /// green = audio info (codec/channels).
-    private var metaRowChips: [ChipData] {
-        var chips: [ChipData] = []
-
-        // Gray: length + size combined, each with its own icon (clock / drive).
-        // Unit-suffixed ("45s"/"12m"/"2h") to match Drop/History's chips --
-        // falls back to the raw "H:MM:SS" string only if seconds is missing.
-        let dur = job.mediaInfo?.durationSeconds.flatMap { formatDurationChip(seconds: Int($0)) }
-            ?? job.mediaInfo?.duration
-        if let dur, let size = job.mediaInfo?.fileSize {
-            chips.append(ChipData(label: "", value: dur, color: .white, icon: "clock",
-                                   icon2: "internaldrive", value2: size))
-        } else if let dur {
-            chips.append(ChipData(label: "", value: dur, color: .white, icon: "clock"))
-        } else if let size = job.mediaInfo?.fileSize {
-            chips.append(ChipData(label: "", value: size, color: .white, icon: "internaldrive"))
-        }
-        // Directory is now shown as plain subtext above this chip row (see
-        // subtitleView below) instead of a chip — no folder chip here anymore.
-        // Blue: format + video codec + resolution combined
-        let videoParts = [job.inputURL.pathExtension.uppercased(), job.mediaInfo?.videoCodec, job.mediaInfo?.resolution]
-            .compactMap { $0 }.joined(separator: " · ")
-        if !videoParts.isEmpty {
-            chips.append(ChipData(label: "", value: videoParts, color: .blue,
-                                   icon: job.isVideoFile ? "video" : "waveform"))
-        }
-        // Green: audio codec + channels combined
-        let audioParts = [job.mediaInfo?.audioCodec, job.mediaInfo?.audioChannelLabel]
-            .compactMap { $0 }.joined(separator: " · ")
-        if !audioParts.isEmpty {
-            chips.append(ChipData(label: "", value: audioParts, color: .green, icon: "waveform"))
-        }
-        return chips
-    }
 
     /// Composite subtitle: plain-text file path (same visual language as
     /// History's path subtext), then the input->output chip row -- same
@@ -2176,158 +2175,150 @@ struct ConvertPreviewCard: View {
             // the shared batch controls), so the header keeps its own button.
             collapseButtonInHeader: isBatchMode
         ) {
-            // PRESETS — one-tap format/codec combinations, filtered by the mode
-            // selected in the always-visible belowHeaderRow (CONVERT AS) so
-            // switching modes shows presets that actually apply (e.g.
-            // "Compatible Audio, No Video Re-encode" only appears when
-            // there's a video track to protect). No leading divider here --
-            // PreviewCard's fullCard already inserts one before settings().
-            VStack(alignment: .leading, spacing: 6) {
-                Label("PRESETS", systemImage: "wand.and.stars")
-                    .font(.appMono(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                HStack(spacing: 6) {
-                    ForEach(ConvertPreset.options(for: job.mediaMode)) { preset in
-                        SelectorChip(
-                            label: preset.shortLabel,
-                            note: preset.note,
-                            isSelected: job.activePreset == preset
-                        ) {
-                            withAnimation(.spring(response: 0.25)) {
-                                job.applyPreset(preset)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // OUTPUT FORMAT (filtered by mode)
-            GlassDivider()
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Label("OUTPUT FORMAT", systemImage: "doc.badge.arrow.up")
+            // One outer VStack, no dividers between sections -- matches
+            // Download's settings body exactly (Drop.swift's downloadPreviewCard
+            // VIDEO/AUDIO sections), just with more sections stacked since
+            // Convert has more independent choices to offer than Download does.
+            VStack(alignment: .leading, spacing: 11) {
+                // PRESETS — one-tap format/codec combinations, filtered by the
+                // mode selected in the always-visible belowHeaderRow (CONVERT AS)
+                // so switching modes shows presets that actually apply (e.g.
+                // "Compatible Audio, No Video Re-encode" only appears when
+                // there's a video track to protect). Download has no equivalent
+                // section, so no legend row here.
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("PRESETS", systemImage: "wand.and.stars")
                         .font(.appMono(size: 10, weight: .semibold))
                         .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    Spacer()
-                    nativeLegend(positiveLabel: "Original", showReencodeHint: false)
-                }
-                HStack(spacing: 6) {
-                    ForEach(job.availableFormats) { fmt in
-                        SelectorChip(
-                            label: fmt.rawValue,
-                            isSelected: job.outputFormat == fmt,
-                            nativeBadge: fmt.matchesSource(job.inputURL.pathExtension) ? true : nil
-                        ) {
-                            withAnimation(.spring(response: 0.25)) {
-                                job.outputFormat = fmt
-                                job.activePreset = nil
-                                job.ensureCodecsValidForFormat()
-                            }
-                        }
-                    }
-                }
-            }
-
-            // VIDEO CODEC (video mode only)
-            if job.mediaMode.isVideo {
-                GlassDivider()
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Label("VIDEO CODEC", systemImage: "video")
-                            .font(.appMono(size: 10, weight: .semibold))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        Spacer()
-                        nativeLegend(positiveLabel: "Original", showReencodeHint: false)
-                    }
-                    HStack(spacing: 6) {
-                        ForEach(job.availableVideoCodecs) { codec in
+                    HStack(spacing: 8) {
+                        ForEach(ConvertPreset.options(for: job.mediaMode)) { preset in
                             SelectorChip(
-                                label: codec.rawValue,
-                                isSelected: job.videoCodec == codec,
-                                nativeBadge: codec.matchesSource(job.mediaInfo?.videoCodec) ? true : nil
+                                label: preset.shortLabel,
+                                note: preset.note,
+                                isSelected: job.activePreset == preset
                             ) {
                                 withAnimation(.spring(response: 0.25)) {
-                                    job.videoCodec = codec
-                                    job.activePreset = nil
+                                    job.applyPreset(preset)
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // AUDIO CODEC (hidden for video-only mode, and hidden when the output
-            // format only has one possible audio codec — e.g. MP3/FLAC are self-contained,
-            // so there's no real choice to present)
-            if job.mediaMode != .videoOnly && job.availableAudioCodecs.count > 1 {
-                GlassDivider()
-                VStack(alignment: .leading, spacing: 6) {
+                // OUTPUT FORMAT (filtered by mode)
+                VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Label("AUDIO CODEC", systemImage: "waveform")
+                        Label("OUTPUT FORMAT", systemImage: "doc.badge.arrow.up")
                             .font(.appMono(size: 10, weight: .semibold))
                             .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                         Spacer()
-                        nativeLegend(positiveLabel: "Original", showReencodeHint: false)
+                        nativeLegend()
                     }
-                    HStack(spacing: 6) {
-                        ForEach(job.availableAudioCodecs) { codec in
+                    HStack(spacing: 8) {
+                        ForEach(job.availableFormats) { fmt in
                             SelectorChip(
-                                label: codec.rawValue,
-                                isSelected: job.audioCodec == codec,
-                                nativeBadge: codec.matchesSource(job.mediaInfo?.audioCodec) ? true : nil
+                                label: fmt.rawValue,
+                                isSelected: job.outputFormat == fmt,
+                                nativeBadge: fmt.matchesSource(job.inputURL.pathExtension) ? true : nil
                             ) {
                                 withAnimation(.spring(response: 0.25)) {
-                                    job.audioCodec = codec
+                                    job.outputFormat = fmt
                                     job.activePreset = nil
+                                    job.ensureCodecsValidForFormat()
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // OUTPUT FOLDER
-            GlassDivider()
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Label("OUTPUT FOLDER", systemImage: "folder")
-                        .font(.appMono(size: 10, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    if let sizeLabel = job.estimatedOutputSizeLabel {
-                        Spacer()
-                        HStack(spacing: 4) {
-                            Image(systemName: "internaldrive")
-                                .font(.appMono(size: 9))
-                            Text(sizeLabel)
+                // VIDEO CODEC (video mode only)
+                if job.mediaMode.isVideo {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Label("VIDEO CODEC", systemImage: "video")
                                 .font(.appMono(size: 10, weight: .semibold))
+                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                            Spacer()
+                            nativeLegend()
                         }
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(DesignTokens.Interactive.fillRest))
-                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
+                        HStack(spacing: 8) {
+                            ForEach(job.availableVideoCodecs) { codec in
+                                SelectorChip(
+                                    label: codec.rawValue,
+                                    isSelected: job.videoCodec == codec,
+                                    nativeBadge: codec.matchesSource(job.mediaInfo?.videoCodec) ? true : nil
+                                ) {
+                                    withAnimation(.spring(response: 0.25)) {
+                                        job.videoCodec = codec
+                                        job.activePreset = nil
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                HStack(spacing: 8) {
-                    Image(systemName: "folder.fill")
-                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                        .font(.appMono(size: 12))
-                    Text(job.outputDir?.path ?? job.inputURL.deletingLastPathComponent().path)
-                        .font(.appMono(size: 12))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer()
-                    GlassButton(label: "Browse...", icon: "folder.badge.plus", tint: DesignTokens.Accent.primary) {
-                        pickOutputFolder()
+
+                // AUDIO CODEC (hidden for video-only mode, and hidden when the output
+                // format only has one possible audio codec — e.g. MP3/FLAC are self-contained,
+                // so there's no real choice to present)
+                if job.mediaMode != .videoOnly && job.availableAudioCodecs.count > 1 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Label("AUDIO CODEC", systemImage: "waveform")
+                                .font(.appMono(size: 10, weight: .semibold))
+                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                            Spacer()
+                            nativeLegend()
+                        }
+                        HStack(spacing: 8) {
+                            ForEach(job.availableAudioCodecs) { codec in
+                                SelectorChip(
+                                    label: codec.rawValue,
+                                    isSelected: job.audioCodec == codec,
+                                    nativeBadge: codec.matchesSource(job.mediaInfo?.audioCodec) ? true : nil
+                                ) {
+                                    withAnimation(.spring(response: 0.25)) {
+                                        job.audioCodec = codec
+                                        job.activePreset = nil
+                                    }
+                                }
+                            }
+                        }
                     }
-                    .frame(width: 120)
                 }
-                .padding(8)
-                .background(Color.white.opacity(DesignTokens.Field.fillRest))
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Field.cornerRadius, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: DesignTokens.Field.cornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: DesignTokens.Field.borderWidth))
+
+                // OUTPUT FOLDER
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Label("OUTPUT FOLDER", systemImage: "folder")
+                            .font(.appMono(size: 10, weight: .semibold))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                        if let sizeLabel = job.estimatedOutputSizeLabel {
+                            Spacer()
+                            HistoryChip(label: "", value: sizeLabel, color: .white, icon: "internaldrive")
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder.fill")
+                            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                            .font(.appMono(size: 12))
+                        Text(job.outputDir?.path ?? job.inputURL.deletingLastPathComponent().path)
+                            .font(.appMono(size: 12))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        GlassButton(label: "Browse...", icon: "folder.badge.plus", tint: DesignTokens.Accent.primary) {
+                            pickOutputFolder()
+                        }
+                        .frame(width: 120)
+                    }
+                    .padding(8)
+                    .background(Color.white.opacity(DesignTokens.Field.fillRest))
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Field.cornerRadius, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: DesignTokens.Field.cornerRadius, style: .continuous)
+                        .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: DesignTokens.Field.borderWidth))
+                }
             }
         }
     }
@@ -2420,7 +2411,16 @@ struct ConvertPreviewCard: View {
         return AnyView(
             InputOutputRow(
                 inputPath: job.inputURL.path,
-                inputChips: metaRowChips,
+                // The source file's own characteristics don't change once
+                // conversion starts, so the input side just reuses the same
+                // job.inputChips the queued card already shows -- no reason
+                // for the same file to render a different blue/green chip
+                // depending on which card state you're looking at. (The
+                // output side below intentionally stays local: it upgrades
+                // from an estimate to the real on-disk size once .done,
+                // which job.outputChips -- used by the queued card, which
+                // can only ever estimate -- doesn't do.)
+                inputChips: job.inputChips,
                 outputPath: outPath,
                 outputChips: chips
             )
@@ -2452,6 +2452,27 @@ struct ConvertPreviewCard: View {
         )
     }
 
+    /// Shared shape for Reconvert (done/cancelled) and Retry (failed) --
+    /// same requeue logic, only the label/tint differ, mirroring Download's
+    /// own restoreActionButton for the same three-status pattern.
+    @ViewBuilder
+    private func requeueButton(label: String, tint: Color) -> some View {
+        GlassButton(label: label, icon: "arrow.uturn.down", tint: tint, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
+            withAnimation(.spring(response: 0.25)) {
+                job.status = .queued
+                job.progress = "Queued"
+                job.progressFraction = nil
+                job.etaText = ""
+                job.outputURL = nil
+            }
+            // Requeuing mutates job.status on a class instance behind the
+            // parent's [ConvertJob] @Binding — that alone doesn't trigger the
+            // parent to recompute hasQueuedJobs/hasSelectedQueued, so the
+            // bottom Convert button would stay hidden. Force it.
+            onSelectionChange()
+        }
+    }
+
     private var convertCompletedCard: some View {
         CompletedCard(
             isSelected: job.isSelected,
@@ -2481,41 +2502,24 @@ struct ConvertPreviewCard: View {
             HStack(spacing: 10) {
                     statusView
                     if job.status == .done, let out = job.outputURL {
-                        GlassButton(label: "Reveal in Finder", icon: "folder.fill", tint: DesignTokens.Accent.primary) {
+                        GlassButton(label: "Reveal in Finder", icon: "folder.fill", tint: DesignTokens.Accent.primary, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
                             NSWorkspace.shared.activateFileViewerSelecting([out])
                         }
-                        GlassButton(label: "Reconvert", icon: "arrow.uturn.backward", tint: DesignTokens.Accent.warning) {
-                            withAnimation(.spring(response: 0.25)) {
-                                job.status = .queued
-                                job.progress = "Queued"
-                                job.progressFraction = nil
-                                job.etaText = ""
-                                job.outputURL = nil
-                                job.isExpanded = true // auto-uncollapse so settings are visible again
-                            }
-                            // Requeuing mutates job.status on a class instance behind the
-                            // parent's [ConvertJob] @Binding — that alone doesn't trigger the
-                            // parent to recompute hasQueuedJobs/hasSelectedQueued, so the
-                            // bottom Convert button would stay hidden. Force it.
-                            onSelectionChange()
-                        }
+                        requeueButton(label: "Reconvert", tint: DesignTokens.Accent.warning)
                     }
-                    if job.status == .failed || job.status == .cancelled {
-                        GlassButton(label: "Retry", icon: "arrow.counterclockwise", tint: DesignTokens.Accent.danger) {
-                            withAnimation(.spring(response: 0.25)) {
-                                job.status = .queued
-                                job.progress = "Queued"
-                                job.progressFraction = nil
-                                job.etaText = ""
-                                job.outputURL = nil
-                            }
-                            // Same reasoning as Reconvert above — force the parent to
-                            // re-evaluate so the Convert button reappears after Retry.
-                            onSelectionChange()
-                        }
+                    // Split into two branches (not `.failed || .cancelled` in one),
+                    // and same icon/tint mapping as Download's cancelled->amber
+                    // Redownload / error->red Retry -- matches its semantic
+                    // meaning (amber = "you stopped it", red = "it broke") instead
+                    // of treating a deliberate cancel the same as a real failure.
+                    if job.status == .cancelled {
+                        requeueButton(label: "Reconvert", tint: DesignTokens.Accent.warning)
+                    }
+                    if job.status == .failed {
+                        requeueButton(label: "Retry", tint: DesignTokens.Accent.danger)
                     }
                     if job.status == .converting {
-                        GlassButton(label: "Cancel", icon: "stop.fill", tint: .red) {
+                        GlassButton(label: "Cancel", icon: "stop.fill", tint: .red, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
                             job.cancel()
                         }
                     }

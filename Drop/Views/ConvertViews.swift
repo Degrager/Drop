@@ -944,7 +944,7 @@ struct ConvertView: View {
             // one continuous silhouette instead of Download having an
             // embedded pill while Convert has a detached boxy button.
             GlassButton(
-                label: "Browse...",
+                label: "Browse",
                 icon: "folder",
                 tint: .white,
                 horizontalPadding: 16,
@@ -1204,12 +1204,12 @@ struct ConvertView: View {
                                 .font(.appMono(size: 9, weight: .bold))
                         }
                         .font(.appMono(size: 12, weight: .medium))
-                        .foregroundColor(DesignTokens.Accent.primary)
+                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
-                        .background(DesignTokens.Accent.primary.opacity(isFileSwitcherOpen ? 0.22 : 0.14))
+                        .background(Color.white.opacity(isFileSwitcherOpen ? 0.16 : 0.08))
                         .clipShape(Capsule())
-                        .overlay(Capsule().stroke(DesignTokens.Accent.primary.opacity(0.4), lineWidth: 1))
+                        .overlay(Capsule().stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                     .background(

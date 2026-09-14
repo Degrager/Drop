@@ -808,6 +808,11 @@ struct ConvertView: View {
     /// below), so the popup can be pinned to that exact same width instead
     /// of sizing itself independently off its widest row.
     @State private var fileSwitcherTriggerWidth: CGFloat = 0
+    /// Row currently hovered inside fileSwitcherPopup -- drives its hover
+    /// highlight, the same interactive-fill-on-hover language every other
+    /// button/row in the app uses (DesignTokens.Interactive.fillHover),
+    /// rather than the popup rows having no hover feedback at all.
+    @State private var hoveredStagingID: ConvertJob.ID? = nil
 
     /// Queue drag-reorder state, shared across every QueueRowView (not
     /// local to the dragged row) so every OTHER row can react to it too --
@@ -1091,17 +1096,23 @@ struct ConvertView: View {
     /// sized menu.
     private var fileSwitcherPopup: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(stagingJobs) { staged in
+            ForEach(Array(stagingJobs.enumerated()), id: \.element.id) { index, staged in
                 let isCurrent = staged.id == selectedStagingID
+                let isHovered = hoveredStagingID == staged.id
                 Button {
                     withAnimation(.spring(response: 0.2)) {
                         selectedStagingID = staged.id
                         isFileSwitcherOpen = false
                     }
                 } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "doc.text")
-                            .font(.appMono(size: 10, weight: .semibold))
+                    HStack(spacing: 8) {
+                        // Position number instead of a generic doc icon --
+                        // matches the same numbering convention the Convert
+                        // Queue rows use.
+                        Text("\(index + 1)")
+                            .font(.appMono(size: 10, weight: .bold))
+                            .foregroundColor(.white.opacity(isCurrent ? DesignTokens.Text.primary : DesignTokens.Text.tertiary))
+                            .frame(width: 14, alignment: .center)
                         Text(staged.inputURL.deletingPathExtension().lastPathComponent)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -1116,10 +1127,21 @@ struct ConvertView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(isCurrent ? Color.white.opacity(0.14) : Color.clear)
+                    // Same interactive-fill language as every other
+                    // button/row in the app: a plain rest state, a
+                    // brighter wash on hover, and the current selection
+                    // keeps its own steady highlight regardless of hover.
+                    .background(
+                        Color.white.opacity(
+                            isCurrent
+                                ? 0.14
+                                : (isHovered ? DesignTokens.Interactive.fillHover * 0.4 : 0)
+                        )
+                    )
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .onHover { hovering in hoveredStagingID = hovering ? staged.id : (hoveredStagingID == staged.id ? nil : hoveredStagingID) }
             }
         }
         .padding(4)
@@ -1133,7 +1155,11 @@ struct ConvertView: View {
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
             .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
-        .shadow(color: .black.opacity(0.45), radius: 16, y: 8)
+        // Two stacked shadows for real depth (a tight dark contact shadow
+        // plus a soft wide one) -- a single subtle shadow read as
+        // basically invisible against the app's already-black background.
+        .shadow(color: .black.opacity(0.5), radius: 6, y: 3)
+        .shadow(color: .black.opacity(0.6), radius: 24, y: 12)
     }
 
     /// The one staged file currently being configured, plus a dropdown to
@@ -1257,8 +1283,11 @@ struct ConvertView: View {
     /// below, and to derive the drawer's fixed viewport height -- doesn't
     /// need to be exact, just close enough that crossing into a neighbor's
     /// row triggers the swap around the same point the dragged row visually
-    /// reaches it.
-    private let queueRowStride: CGFloat = 96
+    /// reaches it. Lowered alongside the queue rows' own compact sizing
+    /// (smaller thumbnail/padding) -- kept matching the two, or the drag
+    /// threshold and the drawer's height both drift out of sync with what
+    /// a row actually measures.
+    private let queueRowStride: CGFloat = 76
 
     /// Fixed viewport height for the row list -- always this tall while
     /// expanded (about 2.5 rows), regardless of how many items are actually
@@ -1330,8 +1359,8 @@ struct ConvertView: View {
                     HoverIconButton(
                         icon: isQueueExpanded ? "chevron.down" : "chevron.up",
                         size: 11,
-                        help: isQueueExpanded ? "Collapse queue" : "Expand queue",
-                        label: isQueueExpanded ? "Collapse" : "Expand"
+                        help: isQueueExpanded ? "Collapse" : "Expand",
+                        expandable: true
                     ) {
                         withAnimation(.spring(response: 0.25)) { isQueueExpanded.toggle() }
                     }
@@ -1511,7 +1540,7 @@ struct ConvertView: View {
                 // isn't tied to any single job: it just opens the shared
                 // SAVE TO destination, usable any time regardless of
                 // whether anything's finished converting yet.
-                HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Open the SAVE TO folder in Finder", label: "Reveal") {
+                HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Open the SAVE TO folder in Finder") {
                     NSWorkspace.shared.open(URL(fileURLWithPath: config.convertOutputDir))
                 }
                 .frame(height: DropGrid.controlHeight)
@@ -1851,7 +1880,16 @@ private struct QueueRowView: View {
                 .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                 .contentShape(Rectangle())
                 .gesture(
-                    DragGesture(minimumDistance: 4, coordinateSpace: .local)
+                    // minimumDistance: 0 -- onChanged fires immediately on
+                    // press (translation starts at zero, so nothing
+                    // actually moves yet), which is what sets
+                    // draggingJobID and turns the highlight on. That's the
+                    // fix for "highlight should start on click-and-hold,
+                    // not once real dragging begins" -- the previous
+                    // minimumDistance of 4 meant nothing (including the
+                    // highlight) happened until the cursor had already
+                    // moved a few points.
+                    DragGesture(minimumDistance: 0, coordinateSpace: .local)
                         .onChanged { value in
                             draggingJobID = job.id
                             dragTranslation = value.translation.height
@@ -1878,12 +1916,11 @@ private struct QueueRowView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .center, spacing: 8) {
             Text("\(position)")
                 .font(.appMono(size: 11, weight: .bold))
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 .frame(width: 18, alignment: .center)
-                .padding(.top, 14)
             ConvertPreviewCard(
                 job: job,
                 config: config,
@@ -2349,7 +2386,7 @@ struct ConvertPreviewCard: View {
     private var editAccessory: AnyView? {
         guard let onEditRequested, job.status == .queued || job.status == .failed || job.status == .cancelled else { return nil }
         return AnyView(
-            HoverIconButton(icon: "slider.horizontal.3", size: 15, help: "Edit", label: "Edit") {
+            HoverIconButton(icon: "slider.horizontal.3", size: 15, help: "Edit", expandable: true) {
                 onEditRequested()
             }
         )
@@ -2378,7 +2415,8 @@ struct ConvertPreviewCard: View {
             thumbnailPlaceholder: job.isVideoFile ? "video" : "waveform",
             title: job.inputURL.deletingPathExtension().lastPathComponent,
             subtitle: isQueueRow ? queueRowSubtitle : outputLayer,
-            hasStatusContent: hasCompletedCardStatusContent
+            hasStatusContent: hasCompletedCardStatusContent,
+            compact: isQueueRow
         ) {
             // Actions row — buttons stretch to fill the full card width (each
             // GlassButton defaults to maxWidth: .infinity), so this HStack

@@ -433,19 +433,24 @@ struct CompletedCard<Status: View>: View {
     /// buttons or progress to show yet). Defaults to true, unchanged from
     /// before this existed.
     var hasStatusContent: Bool = true
+    /// Tighter padding/thumbnail/spacing for rows that need to stay dense
+    /// (Convert's queue rows, where several sit in a fixed-height
+    /// scrollable drawer) -- false (default) keeps Download's cards at
+    /// their original size.
+    var compact: Bool = false
 
     // Status content
     @ViewBuilder var status: () -> Status
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: compact ? 10 : 14) {
             cardHeader
             if hasStatusContent {
                 GlassDivider()
                 status()
             }
         }
-        .padding(16)
+        .padding(compact ? 10 : 16)
         // Same proportional-width fix as PreviewCard.fullCard above.
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard(cornerRadius: DesignTokens.Radius.large)
@@ -457,11 +462,11 @@ struct CompletedCard<Status: View>: View {
 
     @ViewBuilder
     private var cardHeader: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: compact ? 8 : 10) {
             if showCheckbox {
                 HoverIconButton(
                     icon: isSelected ? "checkmark.circle.fill" : "circle",
-                    size: 18, isActive: isSelected
+                    size: compact ? 16 : 18, isActive: isSelected
                 ) { onToggleSelect() }
             }
             if let leadingAccessory { leadingAccessory }
@@ -475,16 +480,16 @@ struct CompletedCard<Status: View>: View {
                         .clipped()
                 } else {
                     Image(systemName: thumbnailPlaceholder)
-                        .font(.system(size: 20, weight: .thin))
+                        .font(.system(size: compact ? 16 : 20, weight: .thin))
                         .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 }
             }
-            .frame(width: 80, height: 52)
+            .frame(width: compact ? 56 : 80, height: compact ? 38 : 52)
             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: compact ? 12 : 13, weight: .semibold))
                     .foregroundColor(.white.opacity((showCheckbox && !isSelected) ? DesignTokens.Text.disabled : DesignTokens.Text.primary))
                     .lineLimit(2)
                 if let sub = subtitle { sub }

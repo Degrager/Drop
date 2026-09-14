@@ -3322,36 +3322,63 @@ struct HoverIconButton: View {
     var isActive: Bool = false
     var disabled: Bool = false
     var help: String = ""
-    /// Optional caption revealed on hover, next to the icon. nil (default)
-    /// keeps every existing call site exactly as it was -- icon only. When
-    /// set, the icon stays anchored on the trailing side and the label
-    /// fades/grows in on its leading side on hover, so the button visually
-    /// expands leftward to explain itself instead of relying on the .help
-    /// tooltip alone.
-    var label: String? = nil
+    /// When true, hovering reveals `help` as a caption next to the icon
+    /// (expanding leftward, icon stays anchored) instead of relying on the
+    /// tooltip alone -- one flag per call site, reusing `help`'s text
+    /// rather than needing a second string typed out again. false
+    /// (default) is icon-only, unchanged from before this existed.
+    var expandable: Bool = false
     let action: () -> Void
 
     @State private var isHovering = false
+    /// Measured once from the button's own (fixed) rendered size -- used
+    /// only to position the caption's offset below, never to size
+    /// anything that .onHover is attached to.
+    @State private var buttonWidth: CGFloat = 0
 
     var body: some View {
         let resolvedColor = isActive ? (activeColor ?? color) : color
         GlassInteractive(shape: .roundedRect(DesignTokens.Radius.small), tint: resolvedColor, isActive: isActive, disabled: disabled, action: action) {
-            HStack(spacing: (label != nil && isHovering) ? 5 : 0) {
-                if let label, isHovering {
-                    Text(label)
-                        .font(.appMono(size: max(9, size * 0.8), weight: .medium))
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .transition(.opacity)
-                }
-                Image(systemName: icon)
-                    .font(.appMono(size: size))
-            }
-            .padding(6)
-            .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isHovering)
+            Image(systemName: icon)
+                .font(.appMono(size: size))
+                .padding(6)
         }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { buttonWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { _, w in buttonWidth = w }
+            }
+        )
+        // The caption renders as a non-interactive .overlay positioned by
+        // a raw offset, NOT laid out inline inside the button's own
+        // HStack. Growing something inline would grow the button's actual
+        // frame -- which is exactly what .onHover below is keyed off of --
+        // so hovering near the button's original edge would grow it just
+        // enough to move that edge out from under the cursor, un-hovering
+        // it, shrinking it back, re-hovering it, forever flickering right
+        // at the boundary. Overlaying the caption (and disabling its own
+        // hit-testing) means the button's interactive bounds never change
+        // size at all; only paint extends past them.
+        .overlay(alignment: .trailing) {
+            if expandable, isHovering, !help.isEmpty {
+                Text(help)
+                    .font(.appMono(size: max(9, size * 0.8), weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .foregroundColor(resolvedColor)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.7))
+                    .clipShape(Capsule())
+                    .offset(x: -(buttonWidth + 6))
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isHovering)
         .onHover { hovering in
-            guard label != nil, !disabled else { return }
+            guard expandable, !disabled else { return }
             isHovering = hovering
         }
         .help(help)

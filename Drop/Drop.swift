@@ -6,6 +6,15 @@ import QuickLookThumbnailing
 import CryptoKit
 import Sparkle
 
+/// ffprobe isn't bundled with Drop -- it's a companion tool from whichever
+/// Homebrew ffmpeg install the user has, if any (Drop bundles ffmpeg itself,
+/// but not ffprobe). Checks both common install locations (Apple Silicon
+/// and Intel Homebrew prefixes). Shared by History's legacy-entry migration
+/// and Convert's media-info probing so the two search paths can't drift.
+func locateFFprobe() -> String? {
+    ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"].first { FileManager.default.fileExists(atPath: $0) }
+}
+
 // MARK: - Layout Grid
 //
 // Single source of truth for the bottom toolbar's control rows and field boxes,
@@ -20,7 +29,6 @@ import Sparkle
 enum DropGrid {
     static let controlHeight: CGFloat = 32         // fixed height for every single-line control row
     static let fieldCorner: CGFloat = DesignTokens.Field.cornerRadius
-    static let buttonCorner: CGFloat = DesignTokens.Radius.small
     static let fieldBorderOpacity: Double = DesignTokens.Field.borderRest
     static let fieldBorderWidth: CGFloat = DesignTokens.Field.borderWidth
     static let fieldFillOpacity: Double = DesignTokens.Field.fillRest
@@ -35,10 +43,12 @@ enum DropGrid {
 // MARK: - Config
 
 class Config: ObservableObject {
-    private let outputDirKey  = "outputDir"
-    private let formatKey     = "format"
-    private let qualityKey    = "quality"
-    private let browserKey    = "browser"
+    private let outputDirKey        = "outputDir"
+    private let qualityKey          = "quality"
+    private let browserKey          = "browser"
+    private let filenameTemplateKey = "filenameTemplate"
+    private let autoOpenFolderKey   = "autoOpenFolder"
+    private let convertOutputDirKey = "convertOutputDir"
 
     @Published var outputDir: String {
         didSet { UserDefaults.standard.set(outputDir, forKey: outputDirKey) }
@@ -62,17 +72,17 @@ class Config: ObservableObject {
         didSet { /* intentionally not persisted — resets to highest-available on launch/per source */ }
     }
     @Published var filenameTemplate: String {
-        didSet { UserDefaults.standard.set(filenameTemplate, forKey: "filenameTemplate") }
+        didSet { UserDefaults.standard.set(filenameTemplate, forKey: filenameTemplateKey) }
     }
     @Published var autoOpenFolder: Bool {
-        didSet { UserDefaults.standard.set(autoOpenFolder, forKey: "autoOpenFolder") }
+        didSet { UserDefaults.standard.set(autoOpenFolder, forKey: autoOpenFolderKey) }
     }
     /// Convert tab's batch output directory. Unlike Download's outputDir, this
     /// IS persisted across launches — remembers the last folder picked so
     /// repeat batch conversions don't need re-selecting it every time. Falls
     /// back to Downloads on first run (no saved value yet).
     @Published var convertOutputDir: String {
-        didSet { UserDefaults.standard.set(convertOutputDir, forKey: "convertOutputDir") }
+        didSet { UserDefaults.standard.set(convertOutputDir, forKey: convertOutputDirKey) }
     }
 
     init() {
@@ -83,17 +93,17 @@ class Config: ObservableObject {
         // Format chips always default to the first (native) option in their list on every
         // launch — never restored from a previous session's selection.
         format           = AudioFormat.allCases.first!
-        quality          = AudioQuality(rawValue:  UserDefaults.standard.string(forKey: "quality")      ?? "") ?? .q320
-        browser          = BrowserSource(rawValue: UserDefaults.standard.string(forKey: "browser")      ?? "") ?? .none
+        quality          = AudioQuality(rawValue:  UserDefaults.standard.string(forKey: qualityKey) ?? "") ?? .q320
+        browser          = BrowserSource(rawValue: UserDefaults.standard.string(forKey: browserKey) ?? "") ?? .none
         mediaMode        = MediaMode.allCases.first!
         videoFormat      = VideoFormat.allCases.first!
         // Resolution always defaults to the highest tier (first in list); actual per-video ceiling
         // is re-applied via VideoQuality.highest(for:) once a source's real max height is known.
         videoQuality     = VideoQuality.allCases.first!
-        filenameTemplate = UserDefaults.standard.string(forKey: "filenameTemplate") ?? "%(title)s"
-        autoOpenFolder   = UserDefaults.standard.bool(forKey: "autoOpenFolder")
+        filenameTemplate = UserDefaults.standard.string(forKey: filenameTemplateKey) ?? "%(title)s"
+        autoOpenFolder   = UserDefaults.standard.bool(forKey: autoOpenFolderKey)
         let defaultDownloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path ?? "\(NSHomeDirectory())/Downloads"
-        convertOutputDir = UserDefaults.standard.string(forKey: "convertOutputDir") ?? defaultDownloads
+        convertOutputDir = UserDefaults.standard.string(forKey: convertOutputDirKey) ?? defaultDownloads
     }
 
 }
@@ -301,14 +311,6 @@ enum BrowserSource: String, CaseIterable, Identifiable {
 }
 
 // MARK: - Filename Sanitizer
-
-func sanitizeFilename(_ name: String) -> String {
-    // Characters macOS forbids in filenames
-    let forbidden = CharacterSet(charactersIn: "/:\\?%*|\"<>")
-    return name.components(separatedBy: forbidden).joined(separator: "_")
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .replacingOccurrences(of: "  ", with: " ")
-}
 
 /// Faithful Swift port of yt-dlp's own `sanitize_filename(s, restricted=False,
 /// is_id=NO_DEFAULT)` (yt_dlp/utils/_utils.py, default — non-restricted —
@@ -520,7 +522,7 @@ struct HistoryEntry: Codable, Identifiable {
     /// used for the live download quality chip, applied here to final output data.
     private var resolvedQualityLabel: String {
         switch quality {
-        case "0": return "320kbps"
+        case "320K": return "320kbps"
         case "5": return "256 kbps"
         case "9": return "128 kbps"
         default:  return quality.isEmpty ? "Best" : quality
@@ -637,8 +639,7 @@ class HistoryStore: ObservableObject {
         // queue from load()) — all file I/O and ffprobe calls happen here, off main.
         var snapshot = entries
         var changed = false
-        let ffprobePaths = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"]
-        let ffprobe = ffprobePaths.first { FileManager.default.fileExists(atPath: $0) }
+        let ffprobe = locateFFprobe()
 
         for i in snapshot.indices {
             guard snapshot[i].entryType == "conversion", !snapshot[i].failed else { continue }
@@ -935,6 +936,11 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     // contention. Single source of truth for both add() and
     // startNextPending() so they can never drift out of sync with each other.
     static let maxConcurrentDownloads = 1
+    /// Every extension Drop can actually produce -- shared by scanForFile's
+    /// on-disk lookup and uniqueBaseName's collision check so the two can
+    /// never drift out of sync (a new output format previously had to be
+    /// added to both lists by hand).
+    static let mediaExtensions: Set<String> = ["mp3", "m4a", "wav", "flac", "mp4", "mkv", "webm", "mov", "ogg"]
     let history = HistoryStore()
     @Published var downloads: [Download] = []
     @Published var globalLogs: [String] = []
@@ -1900,13 +1906,16 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                     let namePipe = Pipe()
                     nameProc.standardOutput = namePipe
                     nameProc.standardError = Pipe()
-                    if (try? nameProc.run()) != nil {
+                    do {
+                        try nameProc.run()
                         nameProc.waitUntilExit()
                         let data = namePipe.fileHandleForReading.readDataToEndOfFile()
                         if let out = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
                            !out.isEmpty {
                             resolvedName = self.uniqueBaseName(out, in: outputDir)
                         }
+                    } catch {
+                        self.appendLog("ERROR: filename resolution failed to launch — \(error.localizedDescription)")
                     }
                 }
             }
@@ -2184,8 +2193,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 var confirmedPath: String? = nil
                 var fileSize: String? = nil
 
-                let mediaExts: Set<String> = ["mp3", "m4a", "wav", "flac",
-                                              "mp4", "mkv", "webm", "mov", "ogg"]
+                let mediaExts = Self.mediaExtensions
                 let expectedExt: String = {
                     switch mediaMode {
                     case .audioOnly:             return format.rawValue
@@ -2446,7 +2454,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// appending " (2)", " (3)", etc. as needed. Mirrors the old uniqueDestPath behavior.
     private func uniqueBaseName(_ base: String, in dir: String) -> String {
         let fm = FileManager.default
-        let mediaExts = ["mp3", "m4a", "wav", "flac", "mp4", "mkv", "webm", "mov", "ogg"]
+        let mediaExts = Self.mediaExtensions
         func exists(_ name: String) -> Bool {
             mediaExts.contains { fm.fileExists(atPath: "\(dir)/\(name).\($0)") }
         }
@@ -2506,29 +2514,6 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     }
 
     func clear() { downloads.removeAll(); globalLogs.removeAll() }
-
-    private func runLoginShell(_ command: String, completion: @escaping (Bool) -> Void) {
-        DispatchQueue.global().async {
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            proc.arguments = ["-l", "-c", command]
-            let pipe = Pipe()
-            proc.standardOutput = pipe; proc.standardError = pipe
-            pipe.fileHandleForReading.readabilityHandler = { handle in
-                guard let text = String(data: handle.availableData, encoding: .utf8), !text.isEmpty else { return }
-                for line in text.components(separatedBy: "\n") {
-                    let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !t.isEmpty { DispatchQueue.main.async { self.appendLog(t) } }
-                }
-            }
-            do {
-                try proc.run(); proc.waitUntilExit()
-                DispatchQueue.main.async { completion(proc.terminationStatus == 0) }
-            } catch {
-                DispatchQueue.main.async { self.appendLog("ERROR: \(error.localizedDescription)"); completion(false) }
-            }
-        }
-    }
 }
 
 // MARK: - Liquid Glass Helpers
@@ -3777,8 +3762,6 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    func setupStatusItem() {}
-
     @objc private func handleStatusItemClick() {
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {
@@ -3956,27 +3939,6 @@ enum AppTab { case download, history, convert, log, devRelease }
 
 enum AnalyzeResult {
     case videoAndAudio, audioOnly, unknown
-    var label: String {
-        switch self {
-        case .videoAndAudio: return "Video + Audio"
-        case .audioOnly:     return "Audio only"
-        case .unknown:       return "Unknown format"
-        }
-    }
-    var icon: String {
-        switch self {
-        case .videoAndAudio: return "video.badge.waveform"
-        case .audioOnly:     return "waveform"
-        case .unknown:       return "questionmark.circle"
-        }
-    }
-    var color: Color {
-        switch self {
-        case .videoAndAudio: return Color.blue.opacity(0.8)
-        case .audioOnly:     return Color.green.opacity(0.8)
-        case .unknown:       return Color.orange.opacity(0.8)
-        }
-    }
 }
 
 // MARK: - On-Disk Log File
@@ -4043,8 +4005,6 @@ struct ContentView: View {
     @State private var activeTab: AppTab = .download
     @FocusState private var urlFieldFocused: Bool
     @State private var isUrlCardHovering = false
-    @State private var downloadHovering  = false
-    @State private var downloadGlowPhase = false
     @State private var isAnalyzing       = false
     @State private var hasInvalidURLs    = false
     // True right after a Paste & Analyze attempt whose URL(s) are already
@@ -4108,18 +4068,25 @@ struct ContentView: View {
         }
     }
 
-    /// True once every collapsible card (queued, not pending) is collapsed —
-    /// flips the header button to "Expand All". Empty list counts as not-collapsed.
+    /// Cards that can actually be collapsed/expanded -- queued, not pending
+    /// (downloading/done/failed cards don't have a collapse toggle at all).
+    /// Shared by allLinksCollapsed/hasExpandableLinks so the two can't drift
+    /// out of sync on what counts as "collapsible."
+    private var collapsibleLinks: [LinkPreview] {
+        linkPreviews.filter { !$0.isPending && $0.downloadID == nil }
+    }
+
+    /// True once every collapsible card is collapsed — flips the header
+    /// button to "Expand All". Empty list counts as not-collapsed.
     private var allLinksCollapsed: Bool {
-        let queued = linkPreviews.filter { !$0.isPending && $0.downloadID == nil }
+        let queued = collapsibleLinks
         return !queued.isEmpty && queued.allSatisfy { !$0.isExpanded }
     }
 
-    /// True when at least one card can actually be collapsed/expanded. Only
-    /// queued cards have a collapse toggle — downloading/done/failed cards
-    /// don't, and Select mode force-collapses + locks every card's toggle.
+    /// True when at least one card can actually be collapsed/expanded. Select
+    /// mode force-collapses + locks every card's toggle.
     private var hasExpandableLinks: Bool {
-        !isBatchMode && linkPreviews.contains { !$0.isPending && $0.downloadID == nil }
+        !isBatchMode && !collapsibleLinks.isEmpty
     }
 
     /// While anything is still analyzing, collapse/expand has nothing
@@ -4303,7 +4270,6 @@ struct ContentView: View {
             updateWindowMinHeight()
         }
         .onAppear {
-            DropAppDelegate.shared?.setupStatusItem()
             // Enforce minimum window size: top bar + URL paste field, cards scroll freely below
             DispatchQueue.main.async {
                 updateWindowMinHeight()
@@ -4854,7 +4820,6 @@ struct ContentView: View {
             fillHeight: true,
             fitContent: true,
             isLoading: false,
-            pill: true,
             embedded: true,
             activeFillOverride: fillOverride,
             // Re-enable the glow-ring stroke even though embedded (see
@@ -5353,7 +5318,7 @@ struct ContentView: View {
                             let h = p.sourceMaxHeight
                             return h == 0 ? q.maxHeight <= 1080 : q.maxHeight <= max(h, 1080)
                         }) { q in
-                            SelectorChip(label: q.label, isSelected: p.videoQuality == q, disabled: false) {
+                            SelectorChip(label: q.label, isSelected: p.videoQuality == q) {
                                 preview.videoQuality.wrappedValue = q
                             }
                         }
@@ -5529,14 +5494,10 @@ struct ContentView: View {
                     // the card boundary if the default hover scale-up is
                     // left on.
                     if dl.status == .cancelled {
-                        GlassButton(label: "Redownload", icon: "arrow.uturn.down", tint: DesignTokens.Accent.warning, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
-                            restorePreviewCard(from: dl, replacing: p.id)
-                        }
+                        restoreActionButton(label: "Redownload", tint: DesignTokens.Accent.warning, dl: dl, replacingID: p.id)
                     }
                     if dl.status == .error {
-                        GlassButton(label: "Retry", icon: "arrow.uturn.down", tint: DesignTokens.Accent.danger, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
-                            restorePreviewCard(from: dl, replacing: p.id)
-                        }
+                        restoreActionButton(label: "Retry", tint: DesignTokens.Accent.danger, dl: dl, replacingID: p.id)
                     }
                     if dl.status == .done {
                         GlassButton(label: "Reveal in Finder", icon: "folder.fill", tint: DesignTokens.Accent.primary, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
@@ -5546,9 +5507,7 @@ struct ContentView: View {
                                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dl.outputDir)])
                             }
                         }
-                        GlassButton(label: "Redownload", icon: "arrow.uturn.down", tint: DesignTokens.Accent.warning, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
-                            restorePreviewCard(from: dl, replacing: p.id)
-                        }
+                        restoreActionButton(label: "Redownload", tint: DesignTokens.Accent.warning, dl: dl, replacingID: p.id)
                     }
             }
             .frame(maxWidth: .infinity)
@@ -5728,7 +5687,6 @@ struct ContentView: View {
         // True when re-queued from history (bypasses duplicate check)
         var fromHistory: Bool = false
         var isPending: Bool = false   // true while analyze is in-flight
-        var thumbnailLoaded: Bool = false  // true once thumbnail image finishes loading
         // Set when analyze itself fails (not the later download step). A
         // persistent 403 here means the SOURCE is blocking access outright
         // (bot detection, geo/auth-gated, etc.) -- unlike a download-time
@@ -5826,40 +5784,16 @@ struct ContentView: View {
         }
 
         // Estimated size string based on current options
+        // Formatted, "~"-prefixed version of estimatedBytes(), for the
+        // per-card size label.
         func estimatedSizeString() -> String? {
-            guard downloadID == nil else { return nil }  // live download shows real size
-            let secs = durationSeconds
-            if mediaMode == .audioOnly && secs > 0 {
-                // Audio: bitrate * duration
-                let bytes = (audioQuality.kbps * 1000 / 8) * secs
-                return "~" + formatBytes(bytes)
-            } else if mediaMode == .videoAndAudio {
-                // Use exact per-resolution size from formats JSON if available
-                let cap = videoQuality.maxHeight
-                if let exact = fileSizeByQuality[cap], exact > 0 {
-                    return "~" + formatBytes(exact)
-                }
-                // Fallback: scale from fileSizeBytes if formats JSON wasn't available
-                if let b = fileSizeBytes, b > 0 {
-                    let scale: Double
-                    let is4KSource = sourceMaxHeight >= 2160
-                    switch videoQuality {
-                    case .q4k:   scale = 1.0
-                    case .q1440: scale = is4KSource ? 0.50 : 1.0
-                    case .q1080: scale = is4KSource ? 0.25 : 0.85
-                    case .q720:  scale = is4KSource ? 0.15 : 0.55
-                    case .q480:  scale = is4KSource ? 0.08 : 0.30
-                    }
-                    let adj = Int(Double(b) * scale)
-                    let audioBytes = mediaMode == .videoAndAudio && secs > 0 ? (192000 / 8) * secs : 0
-                    return "~" + formatBytes(adj + audioBytes)
-                }
-            }
-            return nil
+            guard let bytes = estimatedBytes() else { return nil }
+            return "~" + formatBytes(bytes)
         }
 
-        // Raw byte version of estimatedSizeString(), used to sum totals across
-        // multiple queued previews for the SAVE TO section's total-size chip.
+        // Raw byte version, used both by estimatedSizeString() above and to
+        // sum totals across multiple queued previews for the SAVE TO
+        // section's total-size chip.
         func estimatedBytes() -> Int? {
             guard downloadID == nil else { return nil }
             let secs = durationSeconds
@@ -6390,9 +6324,8 @@ struct ContentView: View {
                     lp.sourceAudioCodec = normAudioCodec
                     lp.sourceChannelLabel = normChannelLabel
                     // Pre-fetch thumbnail into URL cache so AsyncImage renders instantly
-                    if let thumbURL = URL(string: lp.thumbnailURL),
-                       (try? Data(contentsOf: thumbURL)) != nil {
-                        lp.thumbnailLoaded = true
+                    if let thumbURL = URL(string: lp.thumbnailURL) {
+                        _ = try? Data(contentsOf: thumbURL)
                     }
                     preview = lp
                 } else if analyzeIsForbidden {
@@ -6587,155 +6520,6 @@ struct ContentView: View {
         }
     }
 
-    var downloadButton: some View {
-        let checkedCount = selectedPreviews.count
-        let label: String = {
-            if checkedCount > 1  { return "Download \(checkedCount) Items" }
-            if checkedCount == 1, let p = selectedPreviews.first {
-                switch p.mediaMode {
-                case .audioOnly:     return "Download as \(p.audioFormat.label)"
-                case .videoAndAudio: return "Download \(p.videoFormat.label) + Audio"
-                }
-            }
-            // No previews — plain URL field fallback
-            let lineCount = urlText.components(separatedBy: "\n")
-                .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
-            if lineCount > 1 { return "Download \(lineCount) Items" }
-            switch config.mediaMode {
-            case .audioOnly:     return "Download as \(config.format.label)"
-            case .videoAndAudio: return "Download \(config.videoFormat.label) + Audio"
-            }
-        }()
-        let disabled: Bool = {
-            if !linkPreviews.isEmpty {
-                let hasQueued = selectedPreviews.contains { $0.downloadID == nil }
-                return !hasQueued || !readyToDownload
-            }
-            return true
-        }()
-
-        return Button(action: download) {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle.fill").font(.appMono(size: 15))
-                Text(label).font(.appMono(size: 14, weight: .semibold))
-            }
-            .foregroundColor(disabled ? .white.opacity(DesignTokens.Text.secondary) : .white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(
-                Group {
-                    if disabled {
-                        Color.white.opacity(DesignTokens.Interactive.fillRest)
-                    } else {
-                        // The single primary action in the app -- carries the
-                        // brand accent (not flat white) so it reads the way
-                        // Flighty treats its main CTA: the one saturated,
-                        // unmissable element on an otherwise near-monochrome
-                        // screen. Still glass underneath (VisualEffectBlur +
-                        // black tint), with the accent as a color wash on top
-                        // rather than an opaque fill, so it keeps the same
-                        // material as everything else.
-                        ZStack {
-                            VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                            Color.black.opacity(DesignTokens.Glass.blackTint)
-                            LinearGradient(
-                                colors: [
-                                    DesignTokens.Accent.primary.opacity(downloadHovering ? 0.85 : 0.7),
-                                    DesignTokens.Accent.primaryLight.opacity(downloadHovering ? 0.7 : 0.55)
-                                ],
-                                startPoint: .topLeading, endPoint: .bottomTrailing
-                            )
-                            DitherNoise(opacity: 0.035)
-                        }
-                    }
-                }
-            )
-            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
-                    .stroke(
-                        disabled
-                            ? Color.white.opacity(DesignTokens.Interactive.strokeDisabled)
-                            : DesignTokens.Accent.primaryLight.opacity(downloadHovering ? (downloadGlowPhase ? DesignTokens.Interactive.strokeGlow : DesignTokens.Interactive.strokeHover) : 0.6),
-                        lineWidth: downloadHovering ? 1.1 : 0.75
-                    )
-                    // Always-on ambient glow at rest, brightening further on
-                    // hover/press -- this is the one control that should feel
-                    // alive even before the pointer reaches it.
-                    .shadow(color: disabled ? .clear : DesignTokens.Accent.primary.opacity(downloadHovering ? (downloadGlowPhase ? DesignTokens.Interactive.glowShadowPeak : DesignTokens.Interactive.glowShadowHover) : 0.4), radius: downloadHovering ? 14 : 9)
-            )
-            .shadow(color: disabled ? .clear : Color.black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 12, y: 4)
-            .scaleEffect(downloadHovering && !disabled ? DesignTokens.Interactive.scaleHover : 1.0)
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .keyboardShortcut(.return, modifiers: .command)
-        .onHover { h in
-            if !disabled {
-                downloadHovering = h
-                if h {
-                    withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { downloadGlowPhase = true }
-                } else {
-                    withAnimation(.easeOut(duration: 0.2)) { downloadGlowPhase = false }
-                }
-            }
-        }
-        .onAppear {
-            withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) { downloadGlowPhase = true }
-        }
-        .animation(.easeOut(duration: 0.15), value: downloadHovering)
-    }
-
-    // MARK: - Downloads Section
-
-    var downloadsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Downloads")
-                    .font(.appMono(size: 13, weight: .semibold)).foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                let active = manager.downloads.filter {
-                    $0.status == .downloading || $0.status == .pending
-                }.count
-                if active > 0 {
-                    Text("\(active) active")
-                        .font(.appMono(size: 11))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(Color.white.opacity(DesignTokens.Interactive.fillRest))
-                        .clipShape(Capsule())
-                }
-                Spacer()
-                GlassButton(label: "Clear all", icon: "trash", tint: .white, fitContent: true) {
-                    manager.clear()
-                }
-            }
-
-            ForEach(manager.downloads) { dl in
-                MediaItemCard(item: .download(dl, manager, config, $urlText))
-            }
-        }
-        .padding(14)
-        .glassCard(cornerRadius: DesignTokens.Radius.large, opacity: 0.35)
-    }
-
-    // MARK: - Empty State
-
-    var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "music.note.list")
-                .font(.appMono(size: 32))
-                .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-            Text("No downloads yet")
-                .font(.appMono(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-            Text("Paste a link above or drag a URL into the field")
-                .font(.appMono(size: 11))
-                .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
-    }
-
     func download() {
         // If we have analyzed previews, download only the checked ones.
         // Outside Select mode every queued preview counts as selected
@@ -6783,6 +6567,16 @@ struct ContentView: View {
         manager.add(urls: urls, config: config)
     }
 
+    /// Shared shape for Cancelled's "Redownload", Error's "Retry", and Done's
+    /// "Redownload" -- same icon/action/no-hover-growth treatment, only the
+    /// label and tint differ per status.
+    @ViewBuilder
+    private func restoreActionButton(label: String, tint: Color, dl: Download, replacingID: UUID) -> some View {
+        GlassButton(label: label, icon: "arrow.uturn.down", tint: tint, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
+            restorePreviewCard(from: dl, replacing: replacingID)
+        }
+    }
+
     /// Restore a full PreviewCard from a Download's stored analyze snapshot.
     /// Called by Retry / Redownload / cancelled retry — avoids re-analyzing
     /// and preserves title, thumbnail, resolution options, and quality settings.
@@ -6811,7 +6605,6 @@ struct ContentView: View {
         lp.qualityByFormat   = snap.qualityByFormat
         lp.fileSizeByQuality = snap.fileSizeByQuality
         lp.isSelected        = true
-        lp.thumbnailLoaded   = !lp.thumbnailURL.isEmpty
         withAnimation(.spring(response: 0.25)) {
             manager.downloads.removeAll { $0.id == dl.id }
             if let idx = linkPreviews.firstIndex(where: { $0.id == oldID }) {
@@ -7017,7 +6810,6 @@ struct SelectorChip: View {
     var icon: String? = nil
     var note: String = ""
     let isSelected: Bool
-    var disabled: Bool = false
     var tint: Color = DesignTokens.Accent.primary
     /// nil = no badge shown. true = "Native" (green dot), false = "Re-encode" (amber dot).
     var nativeBadge: Bool? = nil
@@ -7047,7 +6839,7 @@ struct SelectorChip: View {
                     Text(label)
                         .font(.appMono(size: 12, weight: .semibold))
                 }
-                .foregroundColor(isSelected ? tint : .white.opacity(disabled ? DesignTokens.Text.disabled : (hovering ? DesignTokens.Text.primary : DesignTokens.Text.tertiary)))
+                .foregroundColor(isSelected ? tint : .white.opacity(hovering ? DesignTokens.Text.primary : DesignTokens.Text.tertiary))
                 if !note.isEmpty {
                     Text(note)
                         .font(.appMono(size: 9))
@@ -7062,7 +6854,7 @@ struct SelectorChip: View {
                     // Black-frosted-glass base, matching GlassButton/GlassCard
                     // so every chip in the app shares the same material.
                     VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                    Color.black.opacity(disabled ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint)
+                    Color.black.opacity(DesignTokens.Glass.blackTint)
                     // One selected-state treatment everywhere: a soft tint
                     // wash, not a solid fill and not a plain outline-only
                     // look -- previously icon-chips used a flat opacity fill
@@ -7093,18 +6885,14 @@ struct SelectorChip: View {
                     // identical whether the pointer was near it or not.
                     .shadow(color: isSelected ? tint.opacity(glowPhase ? DesignTokens.Interactive.glowShadowHover : 0.32) : .clear, radius: isSelected ? 6 : 0)
             )
-            .opacity(disabled ? 0.4 : 1.0)
         }
         .buttonStyle(.plain)
-        .disabled(disabled)
         .onHover { h in
-            if !disabled {
-                hovering = h
-                if h {
-                    withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) { glowPhase = true }
-                } else if !isSelected {
-                    withAnimation(.easeOut(duration: 0.2)) { glowPhase = false }
-                }
+            hovering = h
+            if h {
+                withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) { glowPhase = true }
+            } else if !isSelected {
+                withAnimation(.easeOut(duration: 0.2)) { glowPhase = false }
             }
         }
         .onAppear { if isSelected { startRestingGlow() } }
@@ -7149,7 +6937,6 @@ struct GlassButton: View {
     var fitContent: Bool = false   // when true, button hugs its label/icon instead of stretching to fill its container
     var isLoading: Bool = false
     var disabled: Bool = false     // when true, dims the button and blocks interaction/hover glow
-    var pill: Bool = true          // GlassButton is always a pill/capsule shape now
     // Passthrough to GlassInteractive -- true when this button is an inset
     // control living inside another glass surface (e.g. Paste & Analyze
     // inside urlCard's own capsule) so it doesn't paint a second

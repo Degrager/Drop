@@ -220,11 +220,6 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         withAnimation { stage = .idle }
     }
 
-    // MARK: Actions the overlay UI calls back into
-
-    func cancelCheck() { cancelCheckBlock?() }
-    func cancelDownload() { cancelDownloadBlock?() }
-
     /// Dev-tab-only: shows the real update-found overlay with sample data,
     /// with no actual Sparkle update behind it -- Install/Skip/Later all
     /// just dismiss, since there's nothing real to act on. Exists purely so
@@ -391,6 +386,29 @@ struct DropUpdateOverlayView: View {
         .transition(.opacity)
     }
 
+    /// Shared by updateFoundCard and whatsNewCard -- both show the same
+    /// release-notes scroll area (or the same "no notes" fallback), just
+    /// inside a different surrounding card/button set.
+    @ViewBuilder
+    private func releaseNotesBody(_ notesHTML: String?) -> some View {
+        if let notesHTML, let attributed = try? AttributedString(
+            markdown: Self.stripHTML(notesHTML),
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            ScrollView {
+                Text(attributed)
+                    .font(.appMono(size: 11.5))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 220)
+        } else {
+            Text("No release notes provided.")
+                .font(.appMono(size: 11.5))
+                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+        }
+    }
+
     private func updateFoundCard(versionString: String, notesHTML: String?, reply: @escaping (SPUUserUpdateChoice) -> Void) -> some View {
         ZStack {
             Color.black.opacity(0.45).ignoresSafeArea()
@@ -402,22 +420,7 @@ struct DropUpdateOverlayView: View {
                         .foregroundColor(.white.opacity(DesignTokens.Text.primary))
                 }
 
-                if let notesHTML, let attributed = try? AttributedString(
-                    markdown: Self.stripHTML(notesHTML),
-                    options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-                ) {
-                    ScrollView {
-                        Text(attributed)
-                            .font(.appMono(size: 11.5))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 220)
-                } else {
-                    Text("No release notes provided.")
-                        .font(.appMono(size: 11.5))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                }
+                releaseNotesBody(notesHTML)
 
                 HStack(spacing: 10) {
                     Spacer()
@@ -444,22 +447,7 @@ struct DropUpdateOverlayView: View {
                         .foregroundColor(.white.opacity(DesignTokens.Text.primary))
                 }
 
-                if let notesHTML, let attributed = try? AttributedString(
-                    markdown: Self.stripHTML(notesHTML),
-                    options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-                ) {
-                    ScrollView {
-                        Text(attributed)
-                            .font(.appMono(size: 11.5))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 220)
-                } else {
-                    Text("No release notes provided.")
-                        .font(.appMono(size: 11.5))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                }
+                releaseNotesBody(notesHTML)
 
                 HStack {
                     Spacer()

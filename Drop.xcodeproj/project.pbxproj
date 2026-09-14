@@ -9,14 +9,12 @@
 /* Begin PBXBuildFile section */
 		BFA555EE51114B6EAE4DD04B /* Drop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B71349E9E0E461DA6C30234 /* Drop.swift */; };
 		7AE40FF723F1416084468121 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B44214C509D471095164925 /* main.swift */; };
-		CC112233445566778899AABB /* MediaCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD112233445566778899AABB /* MediaCard.swift */; };
 		EE112233445566778899AABB /* DownloadRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF112233445566778899AABB /* DownloadRow.swift */; };
 		EE223344556677889900BBCC /* HistoryViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF223344556677889900BBCC /* HistoryViews.swift */; };
 		EE334455667788990011CCDD /* ConvertViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF334455667788990011CCDD /* ConvertViews.swift */; };
 		CC223344556677889900BBCC /* PreviewCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD223344556677889900BBCC /* PreviewCard.swift */; };
 		FF445566778899001122DDEE /* TabBottomBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE445566778899001122DDEE /* TabBottomBar.swift */; };
 		EE445566778899001122DDEE /* TabBottomBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBottomBar.swift; sourceTree = "<group>"; };
-		BB112233445566778899BBCC /* MediaItemCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA112233445566778899BBCC /* MediaItemCard.swift */; };
 		648F64529ABB4B63A2628740 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E4AE02E4F0AF4E24A700A0EB /* SwiftUI.framework */; };
 		5433B4BC759B4A02B334BBBB /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 670E73214AF04BAC9510A63B /* AppKit.framework */; };
 		DB5A206EB3D4473B8C011A62 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6CB9AE3188574515966DA5BA /* UserNotifications.framework */; };
@@ -32,12 +30,10 @@
 /* Begin PBXFileReference section */
 		5B71349E9E0E461DA6C30234 /* Drop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Drop.swift; sourceTree = "<group>"; };
 		0B44214C509D471095164925 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		DD112233445566778899AABB /* MediaCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCard.swift; sourceTree = "<group>"; };
 		FF112233445566778899AABB /* DownloadRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadRow.swift; sourceTree = "<group>"; };
 		FF223344556677889900BBCC /* HistoryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryViews.swift; sourceTree = "<group>"; };
 		FF334455667788990011CCDD /* ConvertViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConvertViews.swift; sourceTree = "<group>"; };
 		DD223344556677889900BBCC /* PreviewCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewCard.swift; sourceTree = "<group>"; };
-		AA112233445566778899BBCC /* MediaItemCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaItemCard.swift; sourceTree = "<group>"; };
 		ED6762084C7240718B8076E5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		39531812BF6F459B9EAC1062 /* Drop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Drop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E4AE02E4F0AF4E24A700A0EB /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
@@ -113,13 +109,11 @@
 		2B3C4D5E6F708192A3B4C5D6 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				DD112233445566778899AABB /* MediaCard.swift */,
 				FF112233445566778899AABB /* DownloadRow.swift */,
 				FF223344556677889900BBCC /* HistoryViews.swift */,
 				FF334455667788990011CCDD /* ConvertViews.swift */,
 				DD223344556677889900BBCC /* PreviewCard.swift */,
 				EE445566778899001122DDEE /* TabBottomBar.swift */,
-				AA112233445566778899BBCC /* MediaItemCard.swift */,
 				OVL2000000000000000000A1 /* DropUpdateOverlay.swift */,
 			);
 			path = Views;
@@ -241,13 +235,11 @@
 			files = (
 				BFA555EE51114B6EAE4DD04B /* Drop.swift in Sources */,
 				7AE40FF723F1416084468121 /* main.swift in Sources */,
-				CC112233445566778899AABB /* MediaCard.swift in Sources */,
 				EE112233445566778899AABB /* DownloadRow.swift in Sources */,
 				EE223344556677889900BBCC /* HistoryViews.swift in Sources */,
 				EE334455667788990011CCDD /* ConvertViews.swift in Sources */,
 				CC223344556677889900BBCC /* PreviewCard.swift in Sources */,
 				FF445566778899001122DDEE /* TabBottomBar.swift in Sources */,
-				BB112233445566778899BBCC /* MediaItemCard.swift in Sources */,
 				DEV1000000000000000000A1 /* DevKeychain.swift in Sources */,
 				DEV1000000000000000000A2 /* DevReleasePipeline.swift in Sources */,
 				DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */,

@@ -29,27 +29,6 @@ struct StatusPill: View {
     }
 }
 
-// MARK: - Icon Button
-
-/// Same shape/role as HoverIconButton in Drop.swift (icon-only control),
-/// kept as a distinct type only because call sites live in the download row
-/// context and pass a fixed 26x26 frame. Rebuilt on GlassInteractive so it
-/// finally gets the shared black-frosted material and glow instead of a
-/// flat white wash with no blur.
-struct IconButton: View {
-    let icon: String
-    let color: Color
-    let action: () -> Void
-
-    var body: some View {
-        GlassInteractive(shape: .roundedRect(DesignTokens.Radius.small), tint: color, action: action) {
-            Image(systemName: icon)
-                .font(.appMono(size: 11))
-                .frame(width: 26, height: 26)
-        }
-    }
-}
-
 // MARK: - Log View
 
 struct LogView: View {

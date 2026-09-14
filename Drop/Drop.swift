@@ -1449,23 +1449,44 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
 
         /// Sparkle has no "what's new" screen of its own -- it only ever asks
         /// "install this?" *before* an update happens. This detects the
-        /// other half: the first launch *after* a real update landed, so
-        /// Drop can show what changed once. lastSeenAppVersion has no value
-        /// on a brand-new install (nothing to compare against, so nothing
-        /// shows), and is written on every launch so a same-version relaunch
-        /// never re-triggers it.
+        /// other half: the first launch after a real update landed, so Drop
+        /// can show what changed once per version. Tracks the *set* of
+        /// versions already shown (not just the single last-seen version)
+        /// so a version that bounces -- a manual dev reinstall, a rollback --
+        /// can never re-trigger an announcement it already showed once.
+        /// Only added to that set once the network fetch actually succeeds
+        /// and the overlay is queued to appear, never merely attempted, so a
+        /// failed fetch doesn't silently and permanently suppress it either.
         private func checkWhatsNewIfJustUpdated() {
-            let key = "lastSeenAppVersion"
+            let shownKey = "whatsNewShownVersions"
+            let legacyKey = "lastSeenAppVersion"
             let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
-            let previous = UserDefaults.standard.string(forKey: key)
-            UserDefaults.standard.set(current, forKey: key)
-            guard let previous, previous != current,
+            var shown = Set(UserDefaults.standard.stringArray(forKey: shownKey) ?? [])
+
+            // One-time migration from the old single-version tracker: a
+            // fresh install (no legacy record) or a version already handled
+            // under the old scheme both mean "nothing new to show" -- mark
+            // current as seen without showing anything. A genuine version
+            // change under the old scheme falls through to the normal
+            // fetch-and-show path below.
+            if shown.isEmpty {
+                let legacy = UserDefaults.standard.string(forKey: legacyKey)
+                if legacy == nil || legacy == current {
+                    shown.insert(current)
+                }
+                UserDefaults.standard.removeObject(forKey: legacyKey)
+                UserDefaults.standard.set(Array(shown), forKey: shownKey)
+            }
+
+            guard !shown.contains(current),
                   let url = URL(string: "https://api.github.com/repos/Degrager/Drop/releases/tags/v\(current)") else { return }
 
             URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
                 guard let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let notes = json["body"] as? String else { return }
                 DispatchQueue.main.async {
+                    shown.insert(current)
+                    UserDefaults.standard.set(Array(shown), forKey: shownKey)
                     self?.userDriver.showWhatsNew(versionString: current, notesHTML: notes)
                 }
             }.resume()

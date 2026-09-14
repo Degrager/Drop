@@ -29,11 +29,9 @@ Since Drop is distributed outside the Mac App Store, macOS Gatekeeper will flag 
 2. Open `Drop.xcodeproj` in Xcode 16 or later.
 3. Build and run the `Drop` scheme (Release configuration recommended for normal use).
 
-Drop downloads its own copies of yt-dlp and ffmpeg into Application Support on first launch — no need to install them separately via Homebrew or otherwise.
-
 ## Updates
 
-Drop can update itself. Open the Tools panel in the sidebar and use the **Update** row next to "Drop" to check for and install the latest version directly from this repository's [Releases](https://github.com/Degrager/Drop/releases) — no need to redownload manually.
+Drop can update itself. Click Check For Updates in the sidebar and it will automatically install the latest version directly from this repository's [Releases](https://github.com/Degrager/Drop/releases) — no need to redownload manually.
 
 ## License
 

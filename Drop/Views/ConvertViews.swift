@@ -55,12 +55,6 @@ enum ConvertAudioCodec: String, CaseIterable, Identifiable {
         guard let raw else { return false }
         return probeNames.contains(raw)
     }
-    /// True when a known case matches the raw ffprobe codec name — used to detect
-    /// sources (ALAC, PCM/WAV, Vorbis, DTS, etc.) that Drop can't stream-copy/identify.
-    static func isRecognized(_ raw: String?) -> Bool {
-        guard let raw else { return false }
-        return allCases.contains { $0.probeNames.contains(raw) }
-    }
     /// Typical encode bitrate in kbps — rule-of-thumb figures, used only for the
     /// estimated output size shown above the output-folder picker. Not read by
     /// the actual ffmpeg encode (that stays quality/CRF-driven).
@@ -132,13 +126,6 @@ enum ConvertVideoCodec: String, CaseIterable, Identifiable {
         case .av1:    return 4
         case .vp9:    return 5
         }
-    }
-    /// True when a known case matches the raw ffprobe codec name — used to detect
-    /// sources (MPEG-2, VC-1, etc.) that Drop can't stream-copy/identify or offer
-    /// as an output choice.
-    static func isRecognized(_ raw: String?) -> Bool {
-        guard let raw else { return false }
-        return allCases.contains { $0.probeNames.contains(raw) }
     }
 }
 
@@ -598,29 +585,6 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         batchOverride = override
     }
 
-    /// True when the selected codec is identical to the detected source codec —
-    /// used to silently stream-copy (no re-encode) without a dedicated "Match" chip.
-    var videoCodecMatchesSource: Bool {
-        guard let raw = mediaInfo?.videoCodec else { return false }
-        return videoCodec.probeNames.contains(raw)
-    }
-    var audioCodecMatchesSource: Bool {
-        guard let raw = mediaInfo?.audioCodec else { return false }
-        return audioCodec.probeNames.contains(raw)
-    }
-
-    /// True when ffprobe detected a source audio codec that none of Drop's codec
-    /// chips represent (e.g. ALAC, PCM/WAV, Vorbis, DTS) — the source format is
-    /// still shown to the user, it just can't be default-selected or stream-copied.
-    var audioSourceUnrecognized: Bool {
-        guard let raw = mediaInfo?.audioCodec else { return false }
-        return !ConvertAudioCodec.isRecognized(raw)
-    }
-    var videoSourceUnrecognized: Bool {
-        guard let raw = mediaInfo?.videoCodec else { return false }
-        return !ConvertVideoCodec.isRecognized(raw)
-    }
-
     init(inputURL: URL) {
         self.inputURL = inputURL
         let ext = inputURL.pathExtension.lowercased()
@@ -664,8 +628,7 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
             info.directory = url.deletingLastPathComponent().lastPathComponent
 
             // ffprobe for codec/resolution/duration
-            let ffprobePaths = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"]
-            let ffprobe = ffprobePaths.first { FileManager.default.fileExists(atPath: $0) }
+            let ffprobe = locateFFprobe()
             if let ffprobe {
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: ffprobe)
@@ -893,10 +856,6 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
             .contains(inputURL.pathExtension.lowercased())
     }
 
-    var outputFilename: String {
-        let base = inputURL.deletingPathExtension().lastPathComponent
-        return "\(base)_converted.\(outputFormat.fileExtension)"
-    }
 }
 
 struct ConvertView: View {
@@ -1210,7 +1169,7 @@ struct ConvertView: View {
             // one continuous silhouette instead of Download having an
             // embedded pill while Convert has a detached boxy button.
             GlassButton(
-                label: "Browse",
+                label: "Browse...",
                 icon: "folder",
                 tint: .white,
                 horizontalPadding: 16,
@@ -1746,7 +1705,7 @@ struct ConvertView: View {
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(Color.white.opacity(totalEstimatedSizeLabel == nil ? 0.0 : 0.08))
+                .background(Color.white.opacity(totalEstimatedSizeLabel == nil ? 0.0 : DesignTokens.Interactive.fillRest))
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
             }
             HStack(spacing: DropGrid.rowSpacing) {
@@ -2113,8 +2072,6 @@ struct ConvertPreviewCard: View {
         return chips
     }
 
-    private var metaRow: AnyView { AnyView(ChipRow(chips: metaRowChips)) }
-
     /// Composite subtitle: plain-text file path (same visual language as
     /// History's path subtext), then the input->output chip row -- same
     /// visual language as Download's subtitleWithURL, so a queued Convert
@@ -2289,8 +2246,10 @@ struct ConvertPreviewCard: View {
                                 isSelected: job.videoCodec == codec,
                                 nativeBadge: codec.matchesSource(job.mediaInfo?.videoCodec) ? true : nil
                             ) {
-                                job.videoCodec = codec
-                                job.activePreset = nil
+                                withAnimation(.spring(response: 0.25)) {
+                                    job.videoCodec = codec
+                                    job.activePreset = nil
+                                }
                             }
                         }
                     }
@@ -2317,8 +2276,10 @@ struct ConvertPreviewCard: View {
                                 isSelected: job.audioCodec == codec,
                                 nativeBadge: codec.matchesSource(job.mediaInfo?.audioCodec) ? true : nil
                             ) {
-                                job.audioCodec = codec
-                                job.activePreset = nil
+                                withAnimation(.spring(response: 0.25)) {
+                                    job.audioCodec = codec
+                                    job.activePreset = nil
+                                }
                             }
                         }
                     }
@@ -2357,7 +2318,7 @@ struct ConvertPreviewCard: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
-                    GlassButton(label: "Browse…", icon: "folder.badge.plus", tint: DesignTokens.Accent.primary) {
+                    GlassButton(label: "Browse...", icon: "folder.badge.plus", tint: DesignTokens.Accent.primary) {
                         pickOutputFolder()
                     }
                     .frame(width: 120)

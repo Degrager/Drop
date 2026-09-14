@@ -35,9 +35,12 @@ struct HistoryView: View {
             let label: String
             if cal.isDateInToday(entry.date) { label = "Today" }
             else if cal.isDateInYesterday(entry.date) { label = "Yesterday" }
-            else if let days = cal.dateComponents([.day], from: entry.date, to: now).day, days < 7 { label = "This Week" }
-            else if let days = cal.dateComponents([.day], from: entry.date, to: now).day, days < 30 { label = "This Month" }
-            else { label = "Older" }
+            else {
+                let days = cal.dateComponents([.day], from: entry.date, to: now).day ?? Int.max
+                if days < 7 { label = "This Week" }
+                else if days < 30 { label = "This Month" }
+                else { label = "Older" }
+            }
             if let idx = seen[label] {
                 buckets[idx].1.append(entry)
             } else {

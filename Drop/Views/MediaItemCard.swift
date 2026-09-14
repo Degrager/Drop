@@ -402,8 +402,7 @@ private struct ConvertItemDetail: View {
                         ForEach(job.availableAudioCodecs) { codec in
                             SelectorChip(
                                 label: codec.rawValue,
-                                isSelected: audioCodec == codec,
-                                disabled: false
+                                isSelected: audioCodec == codec
                             ) {
                                 audioCodec = codec; job.audioCodec = codec
                             }
@@ -423,8 +422,7 @@ private struct ConvertItemDetail: View {
                             ForEach(job.availableVideoCodecs) { codec in
                                 SelectorChip(
                                     label: codec.rawValue,
-                                    isSelected: videoCodec == codec,
-                                    disabled: false
+                                    isSelected: videoCodec == codec
                                 ) {
                                     videoCodec = codec; job.videoCodec = codec
                                 }

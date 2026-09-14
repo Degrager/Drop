@@ -1254,19 +1254,33 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             let ffVersion = ffRaw.components(separatedBy: "\n").first
                 .flatMap { line -> String? in
                     // Stable releases report a plain "ffmpeg version 7.1.1 ...".
-                    // The martin-riedl.de nightly snapshot instead reports
-                    // something like "ffmpeg version
-                    // N-125892-g406c5a37aa-https://www.martin-riedl.de" -- far
-                    // too long for the chip and mostly noise. "N-125892" (the
-                    // build number, which changes build-to-build) is the
-                    // useful, human-scannable part -- drop the git hash and
-                    // URL suffix.
+                    // The martin-riedl.de nightly build server's own version
+                    // string format has changed at least once already --
+                    // it used to be "N-125892-g406c5a37aa-https://www.martin-
+                    // riedl.de" (a build number + git hash + URL) and is now
+                    // "8.0.git-https://www.martin-riedl.de" (a plain-looking
+                    // version immediately followed by a URL with no
+                    // separator this parser could rely on). Rather than
+                    // hardcode to whichever exact shape it happens to use
+                    // today, extract just the leading version-looking prefix
+                    // and drop everything appended after it -- this keeps
+                    // working if the suffix changes shape again, since it
+                    // never depends on what that suffix actually contains.
                     let parts = line.components(separatedBy: " ")
                     guard let idx = parts.firstIndex(of: "version"), parts.count > idx + 1 else { return nil }
                     let raw = parts[idx + 1]
-                    let segments = raw.components(separatedBy: "-")
-                    if segments.count >= 2, segments[0] == "N" {
-                        return "N-\(segments[1])"
+                    // Legacy nightly scheme: "N-<build>-<hash>-<url>".
+                    if raw.hasPrefix("N-") {
+                        let segments = raw.components(separatedBy: "-")
+                        if segments.count >= 2 { return "N-\(segments[1])" }
+                    }
+                    // Everything else: the leading dotted-number run, e.g.
+                    // "8.0" out of "8.0.git-https://…", or "7.1.1" out of a
+                    // plain stable release string -- whatever's appended
+                    // directly after it (a git suffix, a hash, a URL) is
+                    // dropped unconditionally rather than pattern-matched.
+                    if let match = raw.range(of: #"^\d+(\.\d+)*"#, options: .regularExpression) {
+                        return String(raw[match])
                     }
                     return raw
                 } ?? ""

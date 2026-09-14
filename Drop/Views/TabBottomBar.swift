@@ -67,6 +67,14 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
     /// per-row Cancel button (removed in favor of this single one), so
     /// this is the only way to stop a run in progress.
     var primaryActionDangerMode: Bool = false
+    /// Same Tron-style traveling light beam used on the Analyze card's rim
+    /// (see GlassCard.isActive/RimBeam) -- true while the work this button
+    /// represents (a conversion, a download) is actively running, not
+    /// merely available. Independent of primaryActionDangerMode: Convert's
+    /// danger mode and "in progress" happen to coincide (isConverting
+    /// drives both), but Download has no danger/cancel-all mode at all and
+    /// still needs its own "actively downloading" signal.
+    var primaryActionInProgress: Bool = false
 
     // Primary action button
     var primaryActionLabel: String
@@ -252,6 +260,11 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                             }
                         }
                         .animation(.easeOut(duration: 0.18), value: hovering)
+                        .overlay {
+                            if primaryActionInProgress {
+                                RimBeam(cornerRadius: DesignTokens.Radius.medium)
+                            }
+                        }
                     }
 
                 }

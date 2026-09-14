@@ -1051,6 +1051,7 @@ struct ConvertView: View {
                 primaryActionEnabled: hasSelectedQueued,
                 primaryActionDisabledLabel: hasQueuedJobs ? "Select Items to Convert" : "No Items in Queue",
                 primaryActionDangerMode: isConverting,
+                primaryActionInProgress: isConverting,
                 primaryActionLabel: convertButtonLabel,
                 primaryActionIcon: "arrow.triangle.2.circlepath",
                 onClearAll: {},

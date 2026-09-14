@@ -5297,7 +5297,7 @@ struct ContentView: View {
                         .lineLimit(2)
                 }
                 Spacer()
-                HoverIconButton(icon: "xmark") {
+                HoverIconButton(icon: "xmark", help: "Remove", expandable: true) {
                     withAnimation(.spring(response: 0.3)) { linkPreviews.removeAll { $0.id == p.id } }
                 }
             }

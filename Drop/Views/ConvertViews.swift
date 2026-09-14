@@ -1313,9 +1313,19 @@ struct ConvertView: View {
                         disabled: isBatchMode && batchCheckedJobs.isEmpty
                     ) {
                         withAnimation(.spring(response: 0.3)) {
+                            // Cancel any job still converting before removing it --
+                            // otherwise ffmpeg kept running headless with no
+                            // reference left to it, and no truncated-file cleanup
+                            // ever ran. Mirrors Download's own Clear All fix.
                             if isBatchMode {
+                                for job in jobs where job.isSelected && job.status == .converting {
+                                    job.cancel()
+                                }
                                 jobs.removeAll { $0.isSelected }
                             } else {
+                                for job in jobs where job.status == .converting {
+                                    job.cancel()
+                                }
                                 jobs.removeAll()
                             }
                         }
@@ -1349,6 +1359,9 @@ struct ConvertView: View {
                             ConvertPreviewCard(
                                 job: job,
                                 onRemove: {
+                                    // Cancel first if still converting -- see the
+                                    // Clear All fix above for why.
+                                    if job.status == .converting { job.cancel() }
                                     withAnimation(.spring(response: 0.3)) {
                                         jobs.removeAll { $0.id == job.id }
                                     }

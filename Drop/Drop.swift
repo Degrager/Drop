@@ -4855,7 +4855,7 @@ struct ContentView: View {
                         .overlay(RoundedRectangle(cornerRadius: DropGrid.fieldCorner, style: .continuous)
                             .stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth))
 
-                        GlassButton(label: "Browse", icon: "folder.badge.plus", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
+                        GlassButton(label: "Browse", icon: "folder", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
                             let panel = NSOpenPanel()
                             panel.canChooseFiles = false
                             panel.canChooseDirectories = true

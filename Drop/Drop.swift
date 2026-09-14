@@ -4823,7 +4823,7 @@ struct ContentView: View {
                         .overlay(RoundedRectangle(cornerRadius: DropGrid.fieldCorner, style: .continuous)
                             .stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth))
 
-                        GlassButton(label: "Browse...", icon: "folder.badge.plus", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
+                        GlassButton(label: "Browse", icon: "folder.badge.plus", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
                             let panel = NSOpenPanel()
                             panel.canChooseFiles = false
                             panel.canChooseDirectories = true
@@ -4835,6 +4835,14 @@ struct ContentView: View {
                             }
                         }
                         .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
+                        // Always-available Reveal -- same control Convert's
+                        // SAVE TO field has, opening the shared output
+                        // directory in Finder any time, not tied to any
+                        // single download.
+                        HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Open the SAVE TO folder in Finder") {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: config.outputDir))
+                        }
+                        .frame(height: DropGrid.controlHeight)
                     }
                 }
                 .frame(maxWidth: .infinity)

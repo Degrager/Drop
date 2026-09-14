@@ -306,7 +306,11 @@ struct PreviewCard<Settings: View>: View {
                 // Destructive action -- red tint so its intent is unambiguous at
                 // a glance, matching SkeletonCancelButton's cancel treatment,
                 // instead of blending in with neutral chrome controls.
-                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red) {
+                // Only expandable when CollapseToggleButton isn't also
+                // showing right beside it -- that one already has its own
+                // permanent text label, and this one's hover caption would
+                // render right on top of it otherwise.
+                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: !(collapseButtonInHeader && isExpanded != nil && !collapseLocked)) {
                     onRemove()
                 }
             }
@@ -502,7 +506,7 @@ struct CompletedCard<Status: View>: View {
             // everywhere in the app. trailingAccessory (e.g. Edit) stacks
             // directly beneath it rather than living in its own row/section.
             VStack(spacing: 6) {
-                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red) {
+                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: true) {
                     onRemove()
                 }
                 if let trailingAccessory { trailingAccessory }

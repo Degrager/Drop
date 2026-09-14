@@ -3,6 +3,28 @@
     <channel>
         <title>Drop</title>
         <item>
+            <title>1.1</title>
+            <pubDate>Mon, 14 Sep 2026 03:44:43 -0700</pubDate>
+            <sparkle:version>1.1</sparkle:version>
+            <sparkle:shortVersionString>1.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[Big changes to the convert tab for an improved workflow and consistency across pages
+
+## What's New
+- Rebuilt the Convert tab around an Analyze + Queue workflow: review one file's settings at a time, then commit it to a reorderable queue
+- Added a Reveal in Finder button to Bottom Card
+
+## Fixes
+- The Convert button stays visible at all times, and turns into Cancel All while conversions are running
+- Fixed missing output size/duration chips for source files ffprobe can't fully read
+- Fixed a hover-expand bug where icon buttons flickered at their edge and shifted neighboring buttons (Edit no longer moves Remove)]]></description>
+            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.1.dmg" length="3496764" type="application/octet-stream" sparkle:edSignature="KdKV/zQHAqRrn2GCiazUGlPQP+sAKWXRv6YYggbQLQyYeE5k611yg975pmQ/2HenZvoaCKe0toyIbS/PYQTUAQ=="/>
+            <sparkle:deltas>
+                <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop1.1-1.delta" sparkle:deltaFrom="1" length="595670" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="+/1qQJMToGd2DT51GlK+CQM/AEbZTBXgwxKlj4NDNwovVi1y83sClUKyvPFJluvKEC+C/c9Nz6Nfd3q8KcIjBg=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.0</title>
             <pubDate>Sun, 13 Sep 2026 11:45:53 -0700</pubDate>
             <sparkle:version>1</sparkle:version>

@@ -4546,7 +4546,11 @@ struct ContentView: View {
                                     cancelledAnalyzeIDs.insert(p.id)
                                 }
                                 for p in linkPreviews where p.isSelected {
-                                    if let did = p.downloadID {
+                                    if let did = p.downloadID, let dl = manager.downloads.first(where: { $0.id == did }) {
+                                        // Cancel before removing -- deleting the Download
+                                        // object out from under an active process orphaned
+                                        // it headless with no reference left to ever kill it.
+                                        if dl.status == .downloading { manager.cancel(download: dl) }
                                         manager.downloads.removeAll { $0.id == did }
                                     }
                                 }
@@ -4556,7 +4560,8 @@ struct ContentView: View {
                                     cancelledAnalyzeIDs.insert(p.id)
                                 }
                                 for p in linkPreviews {
-                                    if let did = p.downloadID {
+                                    if let did = p.downloadID, let dl = manager.downloads.first(where: { $0.id == did }) {
+                                        if dl.status == .downloading { manager.cancel(download: dl) }
                                         manager.downloads.removeAll { $0.id == did }
                                     }
                                 }
@@ -5466,6 +5471,13 @@ struct ContentView: View {
                 withAnimation(.spring(response: 0.2)) { preview.isSelected.wrappedValue.toggle() }
             },
             onRemove: {
+                // Cancel first if this download is still in flight -- removing
+                // the card alone left yt-dlp/ffmpeg running headless with
+                // nothing on screen to show for it, and no partial-file
+                // cleanup (see manager.cancel(download:)) ever ran.
+                if dl.status == .downloading {
+                    manager.cancel(download: dl)
+                }
                 withAnimation(.spring(response: 0.3)) { linkPreviews.removeAll { $0.id == p.id } }
             },
             showCheckbox: isBatchMode,

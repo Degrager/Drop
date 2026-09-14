@@ -1138,8 +1138,8 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// ffmpeg builds unconditionally (no version comparison, no "skip if
     /// current" check -- nightly channels don't have a stable tag to diff
     /// against in the same way release channels do). Runs both in parallel,
-    /// then does one silentUpdateCheck() at the end to refresh displayed
-    /// version strings once both finish.
+    /// then re-runs checkDeps() (see its own comment for why that's
+    /// necessary, not just silentUpdateCheck()) once both finish.
     func forceUpdateBothOnLaunch() {
         justCheckedUpToDate = false
         appendLog("Updating yt-dlp and ffmpeg to latest nightly builds…")
@@ -1147,13 +1147,31 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         group.enter(); updateYtdlp { group.leave() }
         group.enter(); updateFFmpeg { group.leave() }
         group.notify(queue: .main) {
+            // Re-evaluate readiness now that both downloads have actually
+            // landed on disk. On a genuinely first launch (nothing in
+            // Application Support yet, and nothing is ever truly bundled
+            // into the app itself despite the comment below -- see
+            // bundledBinariesDir), the ONE checkDeps() call in init() runs
+            // long before these downloads finish, so without this second
+            // call toolsReady stayed permanently false for the rest of
+            // that session even after the tools successfully arrived --
+            // the UI stayed locked on "Setup Needed" until the user quit
+            // and relaunched. This makes the app un-stick itself instead.
+            self.checkDeps()
             self.silentUpdateCheck { self.justCheckedUpToDate = true }
         }
     }
 
-    /// Bundled binaries are always present in a correctly-built app, so this
-    /// just confirms both paths resolve and logs the outcome -- no install
-    /// flow, no polling loop needed since nothing external has to appear.
+    /// No install flow, no polling loop needed since nothing external has
+    /// to appear -- this just confirms whether ytdlpPath/ffmpegPath
+    /// currently resolve to something on disk (either a fresh download in
+    /// Application Support, or -- in principle, though nothing in this
+    /// project's build actually populates it -- a copy bundled inside the
+    /// app itself) and logs the outcome. Called once immediately at
+    /// launch (before the automatic downloads below have had time to
+    /// finish -- a "not ready yet" result here is completely normal on a
+    /// first launch, not a real error) and again once forceUpdateBothOnLaunch's
+    /// downloads actually complete.
     func checkDeps() {
         checkingDeps = true
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
@@ -1163,7 +1181,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 self.toolsReady    = ytdlp && ffmpeg
                 self.checkingDeps  = false
                 if !self.toolsReady {
-                    self.appendLog("ERROR: bundled yt-dlp/ffmpeg missing from app bundle (ytdlp=\(ytdlp), ffmpeg=\(ffmpeg)). Reinstall Drop.")
+                    self.appendLog("Tools not ready yet (yt-dlp=\(ytdlp), ffmpeg=\(ffmpeg)) — waiting on the automatic download. If this doesn't clear after the download finishes, check your internet connection.")
                 } else {
                     self.appendLog("Tools ready — yt-dlp: \(self.ytdlpPath ?? "?"), ffmpeg: \(self.ffmpegPath ?? "?")")
                 }

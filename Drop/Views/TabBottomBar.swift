@@ -60,6 +60,13 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
     /// Defaults to primaryActionIcon so callers that don't need a distinct
     /// disabled icon see no change in behavior.
     var primaryActionDisabledIcon: String? = nil
+    /// When true, the primary action button swaps entirely into a "stop
+    /// everything in progress" control -- red instead of the normal accent
+    /// gradient, always enabled, label/icon overridden below. Used by
+    /// Convert while any job is actively converting: there's no more
+    /// per-row Cancel button (removed in favor of this single one), so
+    /// this is the only way to stop a run in progress.
+    var primaryActionDangerMode: Bool = false
 
     // Primary action button
     var primaryActionLabel: String
@@ -116,6 +123,18 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
             if hasItems {
                 VStack(spacing: 12) {
 
+                    // Extra controls (e.g. Convert's Queue drawer) — rendered
+                    // ABOVE the directory/toggle row and the rest of this
+                    // bar's chrome, with its own divider, so a tab that uses
+                    // this slot for something substantial (a whole card) reads
+                    // as "queue, then destination" top to bottom. Download
+                    // never populates this slot, so this reorder is a no-op there.
+                    let hasExtra = !(extraControls() is EmptyView)
+                    if hasExtra {
+                        extraControls()
+                        GlassDivider()
+                    }
+
                     // Top row — Cookies picker (leftControls) + Auto-Open Folder toggle, aligned with Clear All.
                     // All controls in this row share DropGrid.controlHeight so nothing sits a pixel off from its neighbor.
                     HStack(alignment: .center, spacing: DropGrid.sectionSpacing) {
@@ -164,12 +183,6 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                         }
                     }
 
-                    // Extra controls row (e.g. SAVE TO) — spans full width, right edge aligned with paste field
-                    let hasExtra = !(extraControls() is EmptyView)
-                    if hasExtra {
-                        extraControls()
-                    }
-
                     // Primary action button.
                     // Deliberately the ONE control in the entire app that isn't glass --
                     // a solid accent-blue gradient instead of the translucent Interactive
@@ -180,18 +193,23 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                     // DesignTokens so it stays proportionally consistent with the rest of
                     // the UI even while its material language differs on purpose.
                     if showPrimaryAction {
-                        let enabled = toolsReady && primaryActionEnabled
+                        // Danger mode is always enabled (you can always
+                        // cancel) and ignores toolsReady/primaryActionEnabled
+                        // entirely -- it's a different control, not a
+                        // disabled/enabled variant of the normal one.
+                        let enabled = primaryActionDangerMode || (toolsReady && primaryActionEnabled)
                         // Hover only registers real feedback while actually
                         // enabled -- a disabled button greying out further
                         // on hover would read as broken/inconsistent rather
                         // than helpful, so the glow/scale bump is reserved
                         // for the clickable state only.
                         let hovering = enabled && primaryActionHovering
+                        let accentColor = primaryActionDangerMode ? DesignTokens.Accent.danger : DesignTokens.Accent.primary
                         Button(action: onPrimaryAction) {
                             HStack(spacing: 8) {
-                                Image(systemName: !toolsReady ? "lock.fill" : (enabled ? primaryActionIcon : (primaryActionDisabledIcon ?? primaryActionIcon)))
+                                Image(systemName: primaryActionDangerMode ? "stop.fill" : (!toolsReady ? "lock.fill" : (enabled ? primaryActionIcon : (primaryActionDisabledIcon ?? primaryActionIcon))))
                                     .font(.appMono(size: 15, weight: .semibold))
-                                Text(!toolsReady ? "Setup Needed" : (enabled ? primaryActionLabel : (primaryActionDisabledLabel ?? primaryActionLabel)))
+                                Text(primaryActionDangerMode ? "Cancel All" : (!toolsReady ? "Setup Needed" : (enabled ? primaryActionLabel : (primaryActionDisabledLabel ?? primaryActionLabel))))
                                     .font(.appMono(size: 15, weight: .semibold))
                             }
                             .frame(maxWidth: .infinity)
@@ -202,11 +220,16 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                                         LinearGradient(
                                             // Brightens slightly on hover -- same two-stop
                                             // gradient, just nudged toward a lighter blue
-                                            // rather than swapping in a translucent glass
-                                            // wash (this button intentionally stays solid).
-                                            colors: hovering
-                                                ? [Color(red: 0.30, green: 0.58, blue: 1.0), Color(red: 0.16, green: 0.46, blue: 0.98)]
-                                                : [DesignTokens.Accent.primary, Color(red: 0.10, green: 0.38, blue: 0.90)],
+                                            // (or red, in danger mode) rather than swapping
+                                            // in a translucent glass wash (this button
+                                            // intentionally stays solid).
+                                            colors: primaryActionDangerMode
+                                                ? (hovering
+                                                    ? [Color(red: 1.0, green: 0.42, blue: 0.38), Color(red: 0.85, green: 0.18, blue: 0.16)]
+                                                    : [DesignTokens.Accent.danger, Color(red: 0.70, green: 0.12, blue: 0.12)])
+                                                : (hovering
+                                                    ? [Color(red: 0.30, green: 0.58, blue: 1.0), Color(red: 0.16, green: 0.46, blue: 0.98)]
+                                                    : [DesignTokens.Accent.primary, Color(red: 0.10, green: 0.38, blue: 0.90)]),
                                             startPoint: .topLeading, endPoint: .bottomTrailing
                                         ) :
                                         LinearGradient(
@@ -216,10 +239,9 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                                     )
                                     .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
                                         .stroke(enabled ? Color.white.opacity(hovering ? 0.85 : DesignTokens.Interactive.strokeHover) : Color.white.opacity(DesignTokens.Interactive.strokeDisabled), lineWidth: 0.75))
-                                    .shadow(color: enabled ? DesignTokens.Accent.primary.opacity(hovering ? 0.6 : 0.4) : .clear, radius: hovering ? 16 : 12, y: 4)
+                                    .shadow(color: enabled ? accentColor.opacity(hovering ? 0.6 : 0.4) : .clear, radius: hovering ? 16 : 12, y: 4)
                             )
                             .foregroundColor(enabled ? .white.opacity(DesignTokens.Text.primary) : .white.opacity(DesignTokens.Text.disabled))
-                            .scaleEffect(hovering ? DesignTokens.Interactive.scaleHover : 1.0)
                         }
                         .buttonStyle(.plain)
                         .disabled(!enabled)

@@ -818,7 +818,8 @@ struct Download: Identifiable {
                 result.append(ChipData(label: "", value: "VIDEO + AUDIO", color: .blue, icon: "video.badge.waveform"))
             }
         }
-        let audioParts = [snapshot.sourceAudioCodec, snapshot.sourceChannelLabel].compactMap { $0 }
+        let inputBitrate = snapshot.sourceABR > 0 ? "\(snapshot.sourceABR)kbps" : nil
+        let audioParts = [snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, inputBitrate].compactMap { $0 }
         if !audioParts.isEmpty {
             result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
         } else if mediaMode == .audioOnly {
@@ -862,18 +863,23 @@ struct Download: Identifiable {
         }
         switch mediaMode {
         case .audioOnly:
-            let parts = format != .m4a
-                ? [format.rawValue.uppercased(), audioQuality.label]
-                : [format.rawValue.uppercased()]
+            // M4A is native passthrough (no re-encode), so its real bitrate
+            // is the source's own rather than one of the quality presets,
+            // which only apply when actually re-encoding to MP3/WAV/FLAC.
+            let bitrateLabel = format == .m4a ? (snapshot.sourceABR > 0 ? "\(snapshot.sourceABR)kbps" : nil) : audioQuality.label
+            let parts = [format.rawValue.uppercased(), snapshot.sourceChannelLabel, bitrateLabel].compactMap { $0 }
             result.append(ChipData(label: "", value: parts.joined(separator: " · "), color: .green, icon: "waveform"))
         case .videoAndAudio:
-            let parts = [videoFormat.rawValue.uppercased(), videoQuality.label]
-            result.append(ChipData(label: "", value: parts.joined(separator: " · "), color: .blue, icon: "video"))
+            // Video is never re-encoded when merging video+audio, so the
+            // output codec matches the source's own selected stream.
+            let videoParts = [videoFormat.rawValue.uppercased(), snapshot.sourceVideoCodec, videoQuality.label].compactMap { $0 }
+            result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: "video"))
             // Audio track is stream-copied (not re-encoded) when merging
-            // video+audio, so the output codec/channels match the source
-            // exactly — reuse the detected source audio info here instead
-            // of leaving the output row without a green audio chip.
-            let audioParts = [snapshot.sourceAudioCodec, snapshot.sourceChannelLabel].compactMap { $0 }
+            // video+audio, so the output codec/channels/bitrate match the
+            // source exactly — reuse the detected source audio info here
+            // instead of leaving the output row without a green audio chip.
+            let outputBitrate = snapshot.sourceABR > 0 ? "\(snapshot.sourceABR)kbps" : nil
+            let audioParts = [snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, outputBitrate].compactMap { $0 }
             if !audioParts.isEmpty {
                 result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
             } else {
@@ -3316,14 +3322,37 @@ struct HoverIconButton: View {
     var isActive: Bool = false
     var disabled: Bool = false
     var help: String = ""
+    /// Optional caption revealed on hover, next to the icon. nil (default)
+    /// keeps every existing call site exactly as it was -- icon only. When
+    /// set, the icon stays anchored on the trailing side and the label
+    /// fades/grows in on its leading side on hover, so the button visually
+    /// expands leftward to explain itself instead of relying on the .help
+    /// tooltip alone.
+    var label: String? = nil
     let action: () -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
         let resolvedColor = isActive ? (activeColor ?? color) : color
         GlassInteractive(shape: .roundedRect(DesignTokens.Radius.small), tint: resolvedColor, isActive: isActive, disabled: disabled, action: action) {
-            Image(systemName: icon)
-                .font(.appMono(size: size))
-                .padding(6)
+            HStack(spacing: (label != nil && isHovering) ? 5 : 0) {
+                if let label, isHovering {
+                    Text(label)
+                        .font(.appMono(size: max(9, size * 0.8), weight: .medium))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .transition(.opacity)
+                }
+                Image(systemName: icon)
+                    .font(.appMono(size: size))
+            }
+            .padding(6)
+            .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isHovering)
+        }
+        .onHover { hovering in
+            guard label != nil, !disabled else { return }
+            isHovering = hovering
         }
         .help(help)
     }
@@ -4040,7 +4069,14 @@ struct ContentView: View {
     // modifiers. Measuring once via GeometryReader on the shared parent and
     // handing every row the exact same number removes the ambiguity.
     @State private var mainPanelWidth: CGFloat = 0
-    @State private var convertJobs: [ConvertJob] = []
+    @State private var convertStagingJobs: [ConvertJob] = []
+    @State private var convertQueue: [ConvertJob] = []
+    /// Lives here (not as local @State in ConvertView) because activeTab
+    /// switches unmount/remount ConvertView -- local @State would reset to
+    /// nil on every trip back to the tab, making the Analyze panel look
+    /// like it "lost" its staged files even though stagingJobs itself
+    /// (also lifted here for the same reason) still had them.
+    @State private var convertSelectedStagingID: ConvertJob.ID? = nil
 
     /// Select mode — mirrors Convert's Batch Apply toggle. Off by default;
     /// checkboxes on link cards only show while this is true. Outside Select
@@ -4180,12 +4216,13 @@ struct ContentView: View {
                                 // Treat Reconvert exactly like freshly dropping/importing the original
                                 // input file into the Convert tab — no stored snapshot reused, the file
                                 // is re-probed from scratch just like a first-time add.
-                                guard !convertJobs.contains(where: { $0.inputURL == fileURL }) else {
+                                guard !convertStagingJobs.contains(where: { $0.inputURL == fileURL }),
+                                      !convertQueue.contains(where: { $0.inputURL == fileURL }) else {
                                     activeTab = .convert
                                     return
                                 }
                                 let job = ConvertJob(inputURL: fileURL)
-                                withAnimation(.spring(response: 0.35)) { convertJobs.append(job) }
+                                withAnimation(.spring(response: 0.35)) { convertStagingJobs.append(job) }
                                 activeTab = .convert
                             })
                             // History is one continuous panel rather than a stack of
@@ -4196,7 +4233,7 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity)
                             .transition(.identity)
                         } else if activeTab == .convert {
-                            ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, jobs: $convertJobs, config: config, manager: manager)
+                            ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
                                 .transition(.identity)
                         } else if activeTab == .devRelease {
                             // Real content is devReleaseOverlay below, kept
@@ -4774,6 +4811,11 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
+                // Card within a card -- same nested-glass treatment as
+                // Convert's Queue drawer, so both tabs' bottom-bar sections
+                // read as one shared system even though what's inside differs.
+                .padding(10)
+                .glassCard(cornerRadius: DesignTokens.Radius.medium, opacity: 0.35)
             }
         }
         // Measures this VStack's real resolved width once per layout pass
@@ -5746,8 +5788,9 @@ struct ContentView: View {
                     result.append(ChipData(label: "", value: "VIDEO + AUDIO", color: .blue, icon: "video.badge.waveform"))
                 }
             }
-            // Green: source audio info (codec + channels) — always present
-            let audioParts = [sourceAudioCodec, sourceChannelLabel].compactMap { $0 }
+            // Green: source audio info (codec + channels + bitrate) — always present
+            let audioBitrate = sourceABR > 0 ? "\(sourceABR)kbps" : nil
+            let audioParts = [sourceAudioCodec, sourceChannelLabel, audioBitrate].compactMap { $0 }
             if !audioParts.isEmpty {
                 result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
             } else if !hasVideo {
@@ -5776,16 +5819,22 @@ struct ContentView: View {
             }
             switch mediaMode {
             case .audioOnly:
-                let parts = audioFormat != .m4a
-                    ? [audioFormat.rawValue.uppercased(), audioQuality.label]
-                    : [audioFormat.rawValue.uppercased()]
+                // M4A is native passthrough (no re-encode -- see audioFormat's
+                // own doc comment), so its real bitrate is the source's own
+                // rather than one of the quality presets, which only apply
+                // when actually re-encoding to MP3/WAV/FLAC.
+                let bitrateLabel = audioFormat == .m4a ? (sourceABR > 0 ? "\(sourceABR)kbps" : nil) : audioQuality.label
+                let parts = [audioFormat.rawValue.uppercased(), sourceChannelLabel, bitrateLabel].compactMap { $0 }
                 result.append(ChipData(label: "", value: parts.joined(separator: " · "), color: .green, icon: "waveform"))
             case .videoAndAudio:
-                let parts = [videoFormat.rawValue.uppercased(), videoQuality.label]
-                result.append(ChipData(label: "", value: parts.joined(separator: " · "), color: .blue, icon: "video"))
+                // Video is never re-encoded when merging video+audio, so the
+                // output codec matches the source's own selected stream.
+                let videoParts = [videoFormat.rawValue.uppercased(), sourceVideoCodec, videoQuality.label].compactMap { $0 }
+                result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: "video"))
                 // Audio track is stream-copied (not re-encoded) when merging
-                // video+audio, so the output codec/channels match the source.
-                let audioParts = [sourceAudioCodec, sourceChannelLabel].compactMap { $0 }
+                // video+audio, so the output codec/channels/bitrate match the source.
+                let audioBitrate = sourceABR > 0 ? "\(sourceABR)kbps" : nil
+                let audioParts = [sourceAudioCodec, sourceChannelLabel, audioBitrate].compactMap { $0 }
                 if !audioParts.isEmpty {
                     result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
                 } else {

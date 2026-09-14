@@ -415,10 +415,24 @@ struct CompletedCard<Status: View>: View {
     /// Hides the selection checkbox entirely when false. Defaults to true so
     /// existing call sites (Download tab) keep the always-visible checkbox.
     var showCheckbox: Bool = true
+    /// Optional small control rendered immediately after the checkbox --
+    /// e.g. Convert's queue-row drag handle. nil (the default) renders
+    /// nothing extra, unchanged from before this existed.
+    var leadingAccessory: AnyView? = nil
+    /// Optional small control stacked directly beneath the remove (x) button
+    /// in the header's trailing corner -- e.g. Convert's per-row Edit icon.
+    /// nil (the default) renders nothing extra.
+    var trailingAccessory: AnyView? = nil
     var thumbnail: AnyView?
     var thumbnailPlaceholder: String = "doc"
     var title: String
     var subtitle: AnyView?
+    /// False hides the divider + status() section entirely -- for rows
+    /// where that section would otherwise render as an empty divider with
+    /// nothing beneath it (e.g. a freshly-queued Convert job with no
+    /// buttons or progress to show yet). Defaults to true, unchanged from
+    /// before this existed.
+    var hasStatusContent: Bool = true
 
     // Status content
     @ViewBuilder var status: () -> Status
@@ -426,8 +440,10 @@ struct CompletedCard<Status: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             cardHeader
-            GlassDivider()
-            status()
+            if hasStatusContent {
+                GlassDivider()
+                status()
+            }
         }
         .padding(16)
         // Same proportional-width fix as PreviewCard.fullCard above.
@@ -448,6 +464,7 @@ struct CompletedCard<Status: View>: View {
                     size: 18, isActive: isSelected
                 ) { onToggleSelect() }
             }
+            if let leadingAccessory { leadingAccessory }
 
             ZStack {
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
@@ -477,9 +494,13 @@ struct CompletedCard<Status: View>: View {
 
             // Destructive action -- same red treatment as PreviewCard's
             // remove control, so "this deletes the item" reads identically
-            // everywhere in the app.
-            HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red) {
-                onRemove()
+            // everywhere in the app. trailingAccessory (e.g. Edit) stacks
+            // directly beneath it rather than living in its own row/section.
+            VStack(spacing: 6) {
+                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red) {
+                    onRemove()
+                }
+                if let trailingAccessory { trailingAccessory }
             }
         }
     }

@@ -50,7 +50,8 @@ enum ConvertAudioCodec: String, CaseIterable, Identifiable {
         }
     }
     /// True when the given ffprobe-detected raw codec name matches this case —
-    /// drives the "Original" badge on the codec chip.
+    /// used to auto-copy without re-encoding when this codec is chosen and it
+    /// already equals the source's own codec.
     func matchesSource(_ raw: String?) -> Bool {
         guard let raw else { return false }
         return probeNames.contains(raw)
@@ -109,7 +110,8 @@ enum ConvertVideoCodec: String, CaseIterable, Identifiable {
         }
     }
     /// True when the given ffprobe-detected raw codec name matches this case —
-    /// drives the "Original" badge on the codec chip.
+    /// used to auto-copy without re-encoding when this codec is chosen and it
+    /// already equals the source's own codec.
     func matchesSource(_ raw: String?) -> Bool {
         guard let raw else { return false }
         return probeNames.contains(raw)
@@ -157,113 +159,6 @@ enum ConvertMediaMode: String, CaseIterable {
     }
 }
 
-/// One-tap combinations of output format + codecs for common conversion goals.
-/// The available presets depend on the current CONVERT AS (media mode) selection,
-/// so switching between Video+Audio / Video Only / Audio Only shows a different
-/// preset row — each preset only offers combinations that are actually valid for
-/// that mode's compatible codecs.
-enum ConvertPreset: String, CaseIterable, Identifiable {
-    case resolveImportFix = "Resolve Import Fix"
-    case smallerFileSize = "Smaller File Size"
-    case maxCompatibility = "Max Compatibility"
-    case losslessAudio = "Lossless Audio"
-    var id: String { rawValue }
-
-    var icon: String {
-        switch self {
-        case .resolveImportFix:  return "speaker.wave.3.fill"
-        case .smallerFileSize:   return "arrow.down.circle"
-        case .maxCompatibility:  return "checkmark.seal"
-        case .losslessAudio:     return "waveform.badge.plus"
-        }
-    }
-    var shortLabel: String {
-        switch self {
-        case .resolveImportFix:  return "Resolve Import Fix"
-        case .smallerFileSize:   return "Smaller File"
-        case .maxCompatibility:  return "Max Compatibility"
-        case .losslessAudio:     return "Lossless Audio"
-        }
-    }
-    var note: String {
-        switch self {
-        case .resolveImportFix:  return "WAV audio, AAC video, keeps channels"
-        case .smallerFileSize:   return "Best compression"
-        case .maxCompatibility:  return "Plays everywhere"
-        case .losslessAudio:     return "Uncompressed/lossless"
-        }
-    }
-
-    /// Which presets make sense for a given media mode. Video+Audio and Video Only
-    /// both care about the video-safe options; Audio Only drops anything that talks
-    /// about "video re-encode" since there's no video track to protect.
-    static func options(for mode: ConvertMediaMode) -> [ConvertPreset] {
-        switch mode {
-        case .videoAndAudio, .videoOnly:
-            return [.resolveImportFix, .smallerFileSize, .maxCompatibility, .losslessAudio]
-        case .audio:
-            return [.smallerFileSize, .maxCompatibility, .losslessAudio]
-        }
-    }
-
-    /// Resolves this preset into a concrete (format, videoCodec, audioCodec) choice
-    /// for the given job, picking the source-matching codec for "no re-encode" cases
-    /// and falling back gracefully when a container doesn't support the ideal codec.
-    func resolve(for job: ConvertJob) -> (format: ConvertOutputFormat, video: ConvertVideoCodec?, audio: ConvertAudioCodec) {
-        let isAudioOnly = job.mediaMode == .audio
-        switch self {
-        case .resolveImportFix:
-            // One-tap fix for the classic "movie/TV rip MKV won't import into Resolve, or
-            // imports with no audio" problem — whatever the source audio codec is (E-AC-3,
-            // AC3, DTS, TrueHD, etc.), always re-encode it to AAC, which Resolve reliably
-            // decodes. AAC with no -ac flag keeps whatever channel count ffmpeg reads from
-            // the source (5.1 stays 5.1, stereo stays stereo) — see the 384k multichannel
-            // bump in runConversion(job:). The video stream is always left on its
-            // source-matching codec so it stream-copies and never re-encodes.
-            //
-            // MOV over MKV is a deliberate compatibility choice, not a technical requirement —
-            // AAC is equally valid inside MKV (Matroska holds any codec) and ffmpeg has no
-            // preference either way. MOV is picked because Resolve's decode/playback engine
-            // is built around the QuickTime family (MOV/MP4): even after a successful MKV
-            // import, Resolve has shown more scrubbing hitches, dropped frames, and audio-sync
-            // drift on MKV timelines than on the same content muxed into MOV. Since the whole
-            // point of this preset is guaranteed Resolve reliability (not just codec validity),
-            // MOV is the safer target — but ONLY when the source is already an MKV. Resolve
-            // already imports MP4 reliably, so an MP4 source is left as MP4 (container AND
-            // video codec both untouched) and only its audio is re-encoded to AAC.
-            let sourceExt = job.inputURL.pathExtension.lowercased()
-            let format: ConvertOutputFormat
-            if isAudioOnly {
-                // Uncompressed WAV/PCM avoids Resolve's AAC/M4A decode-quality issue entirely
-                // (no lossy decode pass), unlike re-encoding to AAC/M4A.
-                format = .wav
-            } else if ConvertOutputFormat.mp4.matchesSource(sourceExt) {
-                format = .mp4
-            } else {
-                format = .mov
-            }
-            let videoSourceMatch = job.mediaInfo?.videoCodec.flatMap { raw in format.compatibleVideoCodecs.first { $0.probeNames.contains(raw) } }
-            let video: ConvertVideoCodec? = isAudioOnly ? nil : (videoSourceMatch ?? job.videoCodec)
-            let audio: ConvertAudioCodec = isAudioOnly ? .pcm : .aac
-            return (format, video, audio)
-        case .smallerFileSize:
-            let format: ConvertOutputFormat = isAudioOnly ? .m4a : .mkv
-            let video: ConvertVideoCodec? = isAudioOnly ? nil : .h265
-            let audio: ConvertAudioCodec = format.compatibleAudioCodecs.contains(.opus) ? .opus : .aac
-            return (format, video, audio)
-        case .maxCompatibility:
-            let format: ConvertOutputFormat = isAudioOnly ? .m4a : .mp4
-            let video: ConvertVideoCodec? = isAudioOnly ? nil : .h264
-            return (format, video, .aac)
-        case .losslessAudio:
-            let format: ConvertOutputFormat = isAudioOnly ? .flac : .mkv
-            let videoSourceMatch = job.mediaInfo?.videoCodec.flatMap { raw in format.compatibleVideoCodecs.first { $0.probeNames.contains(raw) } }
-            let video: ConvertVideoCodec? = isAudioOnly ? nil : (videoSourceMatch ?? job.videoCodec)
-            let audio: ConvertAudioCodec = format.compatibleAudioCodecs.contains(.flac) ? .flac : (format.compatibleAudioCodecs.first ?? .flac)
-            return (format, video, audio)
-        }
-    }
-}
 
 enum ConvertOutputFormat: String, CaseIterable, Identifiable {
     case mp4  = "MP4"
@@ -302,7 +197,7 @@ enum ConvertOutputFormat: String, CaseIterable, Identifiable {
         }
     }
     /// True when the imported file's own extension already matches this container —
-    /// drives the "Original" badge on the OUTPUT FORMAT chip.
+    /// used to default a fresh job's output format to its own source container.
     func matchesSource(_ inputExtension: String) -> Bool {
         sourceExtensionAliases.contains(inputExtension.lowercased())
     }
@@ -347,22 +242,11 @@ struct ConvertMediaInfo {
     var pixelWidth: Int? = nil
     var pixelHeight: Int? = nil
     var fileSizeBytes: Int? = nil  // raw source size, for stream-copy size estimation
+    var videoFrameRateLabel: String? = nil  // e.g. "30fps", "29.97fps" -- from r_frame_rate
+    var audioBitrateKbps: Int? = nil        // from the audio stream's own bit_rate
 }
 
 enum ConvertJobStatus { case queued, converting, done, failed, cancelled }
-
-/// A job's Batch Apply choices. Every field is optional and independent —
-/// only the fields the user actually touched in Select Mode are set, and only
-/// those fields override the job's own base settings. Nothing here is ever
-/// written back onto the base fields, so leaving Select Mode or unchecking the
-/// job leaves its individual-card settings exactly as they were.
-struct BatchOverride: Equatable {
-    var mode: ConvertMediaMode? = nil
-    var format: ConvertOutputFormat? = nil
-    var videoCodec: ConvertVideoCodec? = nil
-    var audioCodec: ConvertAudioCodec? = nil
-    var preset: ConvertPreset? = nil
-}
 
 class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     /// Formats a remaining-seconds countdown as "Ns" or "Nm Ss", matching the
@@ -376,7 +260,6 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     }
 
     let id = UUID()
-    let addedAt: Date = Date()
     let inputURL: URL
     @Published var status: ConvertJobStatus = .queued
     @Published var progress: String = "Queued"
@@ -391,33 +274,24 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     @Published var etaText: String = ""
     @Published var outputURL: URL? = nil
     @Published var isSelected: Bool = true
-    /// Whether this card's settings section is expanded. Transient UI state
-    /// only (like isSelected) — starts collapsed, matching Download's queued
-    /// cards, never persisted. Lives on the job itself (rather than local
-    /// @State in the card view) so the "collapse all" toggle in the header
-    /// can drive every card in lockstep.
-    @Published var isExpanded: Bool = false
     @Published var thumbnail: NSImage? = nil
     @Published var audioCodec: ConvertAudioCodec = .aac
     @Published var videoCodec: ConvertVideoCodec = .h264
     @Published var outputFormat: ConvertOutputFormat = .mp4
     @Published var mediaMode: ConvertMediaMode = .videoAndAudio
-    /// The preset last applied via applyPreset(_:), if any. Cleared the moment
-    /// the user manually changes format/video/audio/mode so the preset chip
-    /// only stays highlighted while its exact combination is still in effect.
-    @Published var activePreset: ConvertPreset? = nil
+    /// Independent of mediaMode (which decides whether a track is IN the output
+    /// at all): these decide whether an included track gets re-encoded or left
+    /// exactly as the source. true = transcode with the codec chosen in the
+    /// chip row (set automatically when a real codec chip is tapped); false =
+    /// stream-copy untouched (the default -- "Same as Source" starts selected
+    /// on both tracks, so a freshly-imported file is a pure remux until you
+    /// deliberately pick a codec), so e.g. only the audio can be changed on a
+    /// clip without ever re-encoding its video, or vice versa.
+    @Published var transcodeVideo: Bool = false
+    @Published var transcodeAudio: Bool = false
     @Published var mediaInfo: ConvertMediaInfo? = nil {
         didSet { applyDefaultCodecsFromSource() }
     }
-    /// Batch Apply's choices for this job, kept completely separate from the
-    /// individual-card settings above. Selecting this job in Select Mode and
-    /// choosing a mode/preset/format/codec there only ever writes here — it
-    /// never touches mediaMode/outputFormat/videoCodec/audioCodec/activePreset,
-    /// so the individual card keeps showing exactly what it showed before the
-    /// job was ever checked. When present, these override the base fields only
-    /// for conversion and for the batch panel's own chip highlighting.
-    @Published var batchOverride: BatchOverride? = nil
-    var outputDir: URL? = nil
     var process: Process? = nil
 
     func cancel() {
@@ -495,95 +369,17 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         }
     }
 
-    /// Applies a preset's resolved format/codec combination in one action, then
-    /// re-validates so nothing ends up in an impossible state for the container.
-    func applyPreset(_ preset: ConvertPreset) {
-        let resolved = preset.resolve(for: self)
-        outputFormat = resolved.format
-        if let video = resolved.video {
-            videoCodec = video
-        }
-        audioCodec = resolved.audio
-        ensureCodecsValidForFormat()
-        activePreset = preset
-    }
-
-    // MARK: - Batch override / effective settings
-    //
-    // "Effective" values are what actually gets used for conversion and for
-    // the batch panel's own display: the override component if Select Mode set
-    // one, otherwise this job's own base setting. The individual card never
-    // reads these — it binds directly to the base fields below, so Batch Apply
-    // choices can never leak backwards into a card's own settings.
-
-    var effectiveMediaMode: ConvertMediaMode { batchOverride?.mode ?? mediaMode }
-    var effectiveOutputFormat: ConvertOutputFormat { batchOverride?.format ?? outputFormat }
-    var effectiveVideoCodec: ConvertVideoCodec { batchOverride?.videoCodec ?? videoCodec }
-    var effectiveAudioCodec: ConvertAudioCodec { batchOverride?.audioCodec ?? audioCodec }
-    var effectiveActivePreset: ConvertPreset? { batchOverride?.preset ?? activePreset }
-
-    var effectiveAvailableFormats: [ConvertOutputFormat] {
-        switch effectiveMediaMode {
-        case .audio:                    return [.wav, .mp3, .m4a, .flac]
-        case .videoAndAudio, .videoOnly: return [.mp4, .mov, .mkv]
-        }
-    }
-    var effectiveAvailableAudioCodecs: [ConvertAudioCodec] { effectiveOutputFormat.compatibleAudioCodecs }
-    var effectiveAvailableVideoCodecs: [ConvertVideoCodec] { effectiveOutputFormat.compatibleVideoCodecs }
-
-    var effectiveVideoCodecMatchesSource: Bool {
+    var videoCodecMatchesSource: Bool {
         guard let raw = mediaInfo?.videoCodec else { return false }
-        return effectiveVideoCodec.probeNames.contains(raw)
+        return videoCodec.probeNames.contains(raw)
     }
-    var effectiveAudioCodecMatchesSource: Bool {
+    var audioCodecMatchesSource: Bool {
         guard let raw = mediaInfo?.audioCodec else { return false }
-        return effectiveAudioCodec.probeNames.contains(raw)
+        return audioCodec.probeNames.contains(raw)
     }
-    var effectiveOutputFilename: String {
+    var outputFilename: String {
         let base = inputURL.deletingPathExtension().lastPathComponent
-        return "\(base)_converted.\(effectiveOutputFormat.fileExtension)"
-    }
-
-    /// If this job has no Batch Apply choices yet, seeds them with Resolve
-    /// Import Fix — the same one-tap-safe default a fresh job's own settings
-    /// already amount to — resolved entirely into the override, never touching
-    /// the base fields. Call this the moment a job is checked in Select Mode.
-    func seedBatchOverrideIfNeeded() {
-        guard batchOverride == nil else { return }
-        var override = BatchOverride()
-        let preset = ConvertPreset.resolveImportFix
-        let resolved = preset.resolve(for: self)
-        override.mode = mediaMode
-        override.format = resolved.format
-        if let video = resolved.video {
-            override.videoCodec = video
-        } else {
-            override.videoCodec = videoCodec
-        }
-        override.audioCodec = resolved.audio
-        override.preset = preset
-        batchOverride = override
-    }
-
-    /// Clears this job's Batch Apply choices, restoring it to showing only its
-    /// own base settings for conversion. Call when unchecking a job.
-    func clearBatchOverride() {
-        batchOverride = nil
-    }
-
-    /// Applies a preset into this job's Batch Apply override only — mirrors
-    /// `applyPreset(_:)` exactly but never touches the base fields.
-    func applyPresetToOverride(_ preset: ConvertPreset) {
-        var override = batchOverride ?? BatchOverride()
-        let resolved = preset.resolve(for: self)
-        override.format = resolved.format
-        if let video = resolved.video {
-            override.videoCodec = video
-        }
-        override.audioCodec = resolved.audio
-        override.mode = override.mode ?? mediaMode
-        override.preset = preset
-        batchOverride = override
+        return "\(base)_converted.\(outputFormat.fileExtension)"
     }
 
     init(inputURL: URL) {
@@ -655,9 +451,31 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
                                 info.pixelWidth = w
                                 info.pixelHeight = h
                             }
+                            // r_frame_rate is a "num/den" fraction string (e.g. "30000/1001"
+                            // for 29.97fps, "30/1" for a flat 30fps) -- avg_frame_rate can be
+                            // "0/0" for some still-image-like streams, so r_frame_rate (the
+                            // stream's declared rate) is the more reliable of the two.
+                            if let raw = s["r_frame_rate"] as? String {
+                                let comps = raw.split(separator: "/")
+                                if comps.count == 2, let num = Double(comps[0]), let den = Double(comps[1]), den > 0 {
+                                    let fps = num / den
+                                    let rounded = (fps * 100).rounded() / 100
+                                    let label = rounded == rounded.rounded()
+                                        ? String(format: "%.0ffps", rounded)
+                                        : String(format: "%.2ffps", rounded)
+                                    info.videoFrameRateLabel = label
+                                }
+                            }
                         }
                         if ct == "audio" && info.audioCodec == nil {
                             info.audioCodec = cn.uppercased()
+                            // Some codecs (FLAC, lossless PCM) don't report their own
+                            // bit_rate at the stream level -- left nil rather than falling
+                            // back to the container's overall bit_rate, which would include
+                            // the video track's share too and overstate the audio number.
+                            if let raw = s["bit_rate"] as? String, let bps = Int(raw) {
+                                info.audioBitrateKbps = bps / 1000
+                            }
                             // Derive from raw channel COUNT, not the channel_layout string —
                             // ffprobe reports many layout spellings for the same count ("5.1",
                             // "5.1(side)", "hexagonal", etc.), so count is the unambiguous source
@@ -679,9 +497,20 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
                             }
                         }
                     }
-                    if let fmt = json["format"] as? [String: Any],
-                       let durStr = fmt["duration"] as? String,
-                       let dur = Double(durStr) {
+                    // The container-level format.duration can come back
+                    // missing or "N/A" for some files (e.g. certain MKVs
+                    // without a Duration element, or anything ffprobe can't
+                    // resolve from headers alone) even though every stream
+                    // still reports its own duration just fine -- fall back
+                    // to the longest stream-level one so codec/resolution
+                    // chips aren't the only thing that ends up populated.
+                    let formatDuration = (json["format"] as? [String: Any])
+                        .flatMap { $0["duration"] as? String }
+                        .flatMap(Double.init)
+                    let streamDuration = streams
+                        .compactMap { ($0["duration"] as? String).flatMap(Double.init) }
+                        .max()
+                    if let dur = formatDuration ?? streamDuration, dur > 0 {
                         info.durationSeconds = dur
                         let total = Int(dur)
                         let h = total / 3600
@@ -712,43 +541,45 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     /// share of the estimate comes from the real source size, not rule-of-thumb bitrate
     /// math. Only tracks that will actually be re-encoded use the bitrate estimate.
     var estimatedOutputBytes: Int? {
-        guard let info = mediaInfo, let duration = info.durationSeconds, duration > 0 else { return nil }
-        // Uses effective* settings so Select mode's Batch Apply overrides (if
-        // any) are reflected in the estimate for this run, without touching
-        // the job's own base codec/mode fields.
-        let videoIsCopy = effectiveMediaMode != .audio && effectiveVideoCodec.matchesSource(info.videoCodec)
-        let audioIsCopy = effectiveMediaMode != .videoOnly && effectiveAudioCodec.matchesSource(info.audioCodec)
+        guard let info = mediaInfo else { return nil }
+        let videoIsCopy = mediaMode != .audio && (!transcodeVideo || videoCodec.matchesSource(info.videoCodec))
+        let audioIsCopy = mediaMode != .videoOnly && (!transcodeAudio || audioCodec.matchesSource(info.audioCodec))
         // If every relevant track is being stream-copied (the all-default "Original"
         // case), the output is essentially the source file — same container muxing
         // overhead aside — so just report the real source size instead of running it
-        // through the bitrate model at all.
-        let allTracksCopied = (effectiveMediaMode == .audio || videoIsCopy) && (effectiveMediaMode == .videoOnly || audioIsCopy)
+        // through the bitrate model at all. Checked BEFORE the duration guard below:
+        // this path never needs duration at all, and gating it on durationSeconds
+        // (which ffprobe can't always determine from a container's header) was
+        // silently blanking the output size/duration chip for files whose duration
+        // just happens to be unknown, even when they're a plain default remux.
+        let allTracksCopied = (mediaMode == .audio || videoIsCopy) && (mediaMode == .videoOnly || audioIsCopy)
         if allTracksCopied, let sourceBytes = info.fileSizeBytes, sourceBytes > 0 {
             return sourceBytes
         }
+        guard let duration = info.durationSeconds, duration > 0 else { return nil }
         // Otherwise split the known source size between video/audio using the same
         // rule-of-thumb bitrate ratio, so a copied track's share reflects the source's
         // real weight rather than assuming it's the whole file.
-        let sourceVideoKbps = effectiveMediaMode != .audio ? ConvertVideoCodec.h264.typicalMbpsAt1080p * 1000 * sourceResolutionRatio(info) : 0
-        let sourceAudioKbps = effectiveMediaMode != .videoOnly ? Double(ConvertAudioCodec.aac.typicalBitrateKbps) : 0
+        let sourceVideoKbps = mediaMode != .audio ? ConvertVideoCodec.h264.typicalMbpsAt1080p * 1000 * sourceResolutionRatio(info) : 0
+        let sourceAudioKbps = mediaMode != .videoOnly ? Double(ConvertAudioCodec.aac.typicalBitrateKbps) : 0
         let sourceTotalKbps = max(sourceVideoKbps + sourceAudioKbps, 1)
         let sourceBytes = info.fileSizeBytes ?? 0
 
         var totalKbps: Double = 0
         var copiedBytes: Double = 0
 
-        if effectiveMediaMode != .audio {
+        if mediaMode != .audio {
             if videoIsCopy, sourceBytes > 0 {
                 copiedBytes += Double(sourceBytes) * (sourceVideoKbps / sourceTotalKbps)
             } else {
-                totalKbps += effectiveVideoCodec.typicalMbpsAt1080p * 1000 * sourceResolutionRatio(info)
+                totalKbps += videoCodec.typicalMbpsAt1080p * 1000 * sourceResolutionRatio(info)
             }
         }
-        if effectiveMediaMode != .videoOnly {
+        if mediaMode != .videoOnly {
             if audioIsCopy, sourceBytes > 0 {
                 copiedBytes += Double(sourceBytes) * (sourceAudioKbps / sourceTotalKbps)
             } else {
-                totalKbps += Double(effectiveAudioCodec.typicalBitrateKbps)
+                totalKbps += Double(audioCodec.typicalBitrateKbps)
             }
         }
 
@@ -792,17 +623,22 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         } else if let size = mediaInfo?.fileSize {
             result.append(ChipData(label: "", value: size, color: .white, icon: "internaldrive"))
         }
-        if effectiveMediaMode != .audio {
-            let videoParts = [mediaInfo?.videoCodec, mediaInfo?.resolution].compactMap { $0 }
-            if !videoParts.isEmpty {
-                result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: isVideoFile ? "video" : "waveform"))
-            }
+        // Unlike outputChips below, these describe the SOURCE file's own
+        // characteristics, so they're gated on whether the source actually
+        // has that track (mediaInfo data present) -- never on the selected
+        // output mode. Switching to Audio Only doesn't erase the source's
+        // own video track from existence, so its input chip should stay.
+        // Order: format, codec, framerate, resolution.
+        let sourceFormat = isVideoFile ? inputURL.pathExtension.uppercased() : nil
+        let videoParts = [sourceFormat, mediaInfo?.videoCodec, mediaInfo?.videoFrameRateLabel, mediaInfo?.resolution].compactMap { $0 }
+        if !videoParts.isEmpty {
+            result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: isVideoFile ? "video" : "waveform"))
         }
-        if effectiveMediaMode != .videoOnly {
-            let audioParts = [mediaInfo?.audioCodec, mediaInfo?.audioChannelLabel].compactMap { $0 }
-            if !audioParts.isEmpty {
-                result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
-            }
+        // Order: codec, channels, bitrate.
+        let sourceBitrate = mediaInfo?.audioBitrateKbps.map { "\($0)kbps" }
+        let audioParts = [mediaInfo?.audioCodec, mediaInfo?.audioChannelLabel, sourceBitrate].compactMap { $0 }
+        if !audioParts.isEmpty {
+            result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
         }
         return result
     }
@@ -818,10 +654,13 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         } else if let sizeLabel = estimatedOutputSizeLabel {
             result.append(ChipData(label: "", value: sizeLabel, color: .white, icon: "internaldrive"))
         }
-        if effectiveMediaMode != .audio {
-            result.append(ChipData(label: "", value: "\(effectiveOutputFormat.rawValue.uppercased()) · \(effectiveVideoCodec.rawValue)", color: .blue, icon: "video"))
+        if mediaMode != .audio {
+            // Frame rate and resolution are unchanged by conversion (Convert
+            // never retimes or resizes), so they carry over from the source.
+            let videoParts: [String?] = [outputFormat.rawValue.uppercased(), displayVideoCodec, mediaInfo?.videoFrameRateLabel, mediaInfo?.resolution]
+            result.append(ChipData(label: "", value: videoParts.compactMap { $0 }.joined(separator: " · "), color: .blue, icon: "video"))
         }
-        if effectiveMediaMode != .videoOnly {
+        if mediaMode != .videoOnly {
             // Convert never changes the channel layout -- the encoder always
             // stream-copies or re-tags the SOURCE channel count (5.1 stays
             // 5.1, stereo stays stereo; see runConversion's -channel_layout
@@ -829,13 +668,25 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
             // audioChannelLabel the input chip shows instead of omitting
             // it, which previously made the output side look like it might
             // downmix when it never does.
-            let codecPart = effectiveMediaMode == .audio ? effectiveOutputFormat.rawValue.uppercased() : effectiveAudioCodec.rawValue
-            let audioOutParts = [codecPart, mediaInfo?.audioChannelLabel].compactMap { $0 }
+            let codecPart = mediaMode == .audio ? outputFormat.rawValue.uppercased() : displayAudioCodec
+            let audioOutParts = [codecPart, mediaInfo?.audioChannelLabel, displayAudioBitrateLabel].compactMap { $0 }
             result.append(ChipData(label: "", value: audioOutParts.joined(separator: " · "), color: .green, icon: "waveform"))
         }
         return result
     }
 
+    /// True once QuickLook has genuinely finished trying and came back
+    /// empty (not merely "still pending") -- generateRepresentations' own
+    /// completion handler only fires once, on success or failure, so this
+    /// is a reliable "give up, show the fallback symbol" signal rather than
+    /// a guess based on elapsed time.
+    @Published var thumbnailFailed: Bool = false
+
+    /// QuickLook can pull real embedded artwork (e.g. ID3 cover art) for
+    /// audio-only files too, so this still runs for them -- the view layer
+    /// just doesn't wait on it before showing the waveform placeholder,
+    /// since a generic result there is far less likely to be useful than a
+    /// real video frame is for video.
     private func generateThumbnail() {
         let size = CGSize(width: 80, height: 80)
         let scale = NSScreen.main?.backingScaleFactor ?? 2.0
@@ -846,8 +697,12 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
             representationTypes: .thumbnail
         )
         QLThumbnailGenerator.shared.generateRepresentations(for: request) { [weak self] rep, _, _ in
-            if let image = rep?.nsImage {
-                DispatchQueue.main.async { self?.thumbnail = image }
+            DispatchQueue.main.async {
+                if let image = rep?.nsImage {
+                    self?.thumbnail = image
+                } else {
+                    self?.thumbnailFailed = true
+                }
             }
         }
     }
@@ -857,13 +712,71 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
             .contains(inputURL.pathExtension.lowercased())
     }
 
+    /// Pretty-prints a raw ffprobe codec string against a known codec's
+    /// probeNames, falling back to the raw string for anything unrecognized.
+    private static func prettyCodec<C: RawRepresentable>(_ raw: String, matching cases: [C], probeNames: (C) -> [String]) -> String where C.RawValue == String {
+        cases.first(where: { probeNames($0).contains(raw) })?.rawValue ?? raw
+    }
+
+    /// "Original: " subtext for the VIDEO layer -- pretty-printed source codec
+    /// plus resolution, e.g. "H.264 · 1920x1080".
+    var videoSourceLabel: String? {
+        guard let raw = mediaInfo?.videoCodec else { return nil }
+        let pretty = Self.prettyCodec(raw, matching: ConvertVideoCodec.allCases, probeNames: { $0.probeNames })
+        return [pretty, mediaInfo?.resolution].compactMap { $0 }.joined(separator: " · ")
+    }
+    /// "Original: " subtext for the AUDIO layer -- pretty-printed source codec
+    /// plus channel layout, e.g. "AAC · 5.1".
+    var audioSourceLabel: String? {
+        guard let raw = mediaInfo?.audioCodec else { return nil }
+        let pretty = Self.prettyCodec(raw, matching: ConvertAudioCodec.allCases, probeNames: { $0.probeNames })
+        return [pretty, mediaInfo?.audioChannelLabel].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// The codec that will actually end up in the output, accounting for the
+    /// VIDEO layer's "Same as Source" chip: the chosen codec while transcoding,
+    /// otherwise the source's own codec (stream-copied through untouched) --
+    /// used anywhere the UI previews what the output will actually contain.
+    var displayVideoCodec: String {
+        guard !transcodeVideo, let raw = mediaInfo?.videoCodec else { return videoCodec.rawValue }
+        return Self.prettyCodec(raw, matching: ConvertVideoCodec.allCases, probeNames: { $0.probeNames })
+    }
+    /// Same idea as `displayVideoCodec`, for the AUDIO layer's "Same as Source" chip.
+    var displayAudioCodec: String {
+        guard !transcodeAudio, let raw = mediaInfo?.audioCodec else { return audioCodec.rawValue }
+        return Self.prettyCodec(raw, matching: ConvertAudioCodec.allCases, probeNames: { $0.probeNames })
+    }
+    /// Bitrate that will actually end up in the output: the source's own
+    /// probed bitrate while stream-copying ("Same as Source"), or the chosen
+    /// codec's typical encode bitrate while transcoding. nil (chip simply
+    /// omits it) when copying a source whose own bitrate isn't knowable
+    /// (e.g. FLAC/PCM don't report one) rather than showing a guess.
+    var displayAudioBitrateLabel: String? {
+        if transcodeAudio { return "\(audioCodec.typicalBitrateKbps)kbps" }
+        return mediaInfo?.audioBitrateKbps.map { "\($0)kbps" }
+    }
+
 }
 
 struct ConvertView: View {
     let ffmpegPath: String?
     var toolsReady: Bool = true
     @ObservedObject var history: HistoryStore
-    @Binding var jobs: [ConvertJob]
+    /// Files imported but not yet committed to the Convert Queue -- the
+    /// Analyze panel shows exactly one of these at a time (via the dropdown)
+    /// so its full settings can be reviewed/changed before queuing.
+    @Binding var stagingJobs: [ConvertJob]
+    /// Files committed to convert, in the exact order they'll be processed
+    /// (drag-reorderable). Lives in the bottom bar's queue drawer as compact
+    /// read-only rows -- editing a queued job's settings means pulling it
+    /// back into `stagingJobs` first (see editFromQueue).
+    @Binding var queue: [ConvertJob]
+    /// Which staged job the Analyze panel is currently showing. nil when
+    /// stagingJobs is empty. Owned by the parent (not local @State) because
+    /// switching tabs unmounts/remounts this view -- local @State would
+    /// reset to nil on every trip back, making the panel look like it lost
+    /// its staged files even though stagingJobs itself still had them.
+    @Binding var selectedStagingID: ConvertJob.ID?
     @ObservedObject var config: Config
     /// Shared app-wide log (same store/panel Download writes to) so ffmpeg
     /// commands, stderr output, and results are visible/exportable from the
@@ -873,59 +786,89 @@ struct ConvertView: View {
     @State private var isDragging = false
     @State private var isDropZoneHovering = false
     /// Measured once via GeometryReader on the outer VStack (see body's
-    /// .background below) and shared by the list header row, card queue,
-    /// and bottom bar so all three are pinned to the exact same pixel
-    /// width -- matching Download's mainPanelWidth pattern. Using this one
-    /// shared number instead of each row calling containerRelativeFrame
-    /// independently is required because the card queue lives inside a
-    /// ScrollView, which establishes its own separate container geometry;
-    /// containerRelativeFrame resolves against the NEAREST container, so
-    /// the list header row (outside the ScrollView) and the card queue
-    /// (inside it) were computing 60% against two different base widths
-    /// and visibly disagreeing with each other and with the full-width
-    /// drop zone above them.
+    /// .background below) and shared by the Analyze panel and bottom bar so
+    /// both are pinned to the exact same pixel width -- matching Download's
+    /// mainPanelWidth pattern.
     @State private var mainPanelWidth: CGFloat = 0
 
-    /// Select mode: reveals per-card checkboxes, collapses per-card settings,
-    /// and swaps the bottom bar's settings row for one that applies to every
-    /// checked card at once. Off by default — normal single-card editing.
-    @State private var isBatchMode = false
+    /// Convert Queue drawer collapse state -- the item-count subtext stays
+    /// visible either way; collapsing only hides the row list beneath it.
+    @State private var isQueueExpanded = true
 
-    /// Bumped on every checkbox toggle to force SwiftUI to recompute
-    /// `batchCheckedJobs`/`selectedJobs` and re-render dependent views.
-    /// `jobs` is a `@Binding` array of reference-type `ConvertJob`s, so a
-    /// `@Published` change on one job's `isSelected` does not by itself
-    /// invalidate this view's body — this counter closes that gap.
+    /// Bumped whenever a job's own @Published state changes in a way this
+    /// view needs to react to (isSelected, status) -- `queue`/`stagingJobs`
+    /// are arrays of reference-type ConvertJobs behind @Binding, so a change
+    /// on one job doesn't by itself invalidate this view's body.
     @State private var selectionVersion = 0
 
-    private var hasJobs: Bool { !jobs.isEmpty }
-    /// Outside Batch Apply mode every queued job counts as "selected" for the
-    /// Convert action (checkboxes are hidden, so nothing is excluded). Inside
-    /// Batch Apply mode, selection reflects only what's actually checked.
-    private var selectedJobs: [ConvertJob] { _ = selectionVersion; return isBatchMode ? jobs.filter { $0.isSelected } : jobs }
-    private var hasSelected: Bool { !selectedJobs.isEmpty }
-    private var hasSelectedQueued: Bool { selectedJobs.contains { $0.status == .queued } }
+    /// Custom file-switcher popup open state (Analyze panel) -- a plain
+    /// Bool, not a native Menu, so the popup can be fully custom-styled.
+    @State private var isFileSwitcherOpen = false
+    /// Measured width of the trigger pill (via background GeometryReader
+    /// below), so the popup can be pinned to that exact same width instead
+    /// of sizing itself independently off its widest row.
+    @State private var fileSwitcherTriggerWidth: CGFloat = 0
+
+    /// Queue drag-reorder state, shared across every QueueRowView (not
+    /// local to the dragged row) so every OTHER row can react to it too --
+    /// see queueDrawer's ForEach for why this replaced row-local @State.
+    /// id of the job currently being dragged, nil when nothing is.
+    @State private var draggingJobID: ConvertJob.ID? = nil
+    /// Live cumulative vertical translation of the drag, only meaningful
+    /// while draggingJobID != nil. The actual `queue` array is NOT mutated
+    /// while this changes -- only read to compute a proposed index, and
+    /// display offsets on affected rows. The real reorder happens once, on
+    /// drop (see QueueRowView's onEnded). Continuously swapping the array
+    /// mid-drag (the previous approach) meant every row crossing restarted
+    /// an animated re-layout of the whole list while the next pointer-move
+    /// event could already be queued behind it, which is what produced the
+    /// jump/stutter reported twice now -- this version only ever touches
+    /// the source of truth once per gesture.
+    @State private var dragTranslation: CGFloat = 0
+
+    /// Captured once the queue's ScrollView appears, so runConversion can
+    /// scroll a just-started job into view without needing its own
+    /// reactive hook into job.status (mutating a class's @Published
+    /// property doesn't by itself invalidate this view -- see
+    /// selectionVersion's own comment above for the same issue elsewhere).
+    @State private var queueScrollProxy: ScrollViewProxy? = nil
+
+    private var hasStaging: Bool { !stagingJobs.isEmpty }
+    private var hasQueue: Bool { !queue.isEmpty }
+    private var hasJobs: Bool { hasStaging || hasQueue }
+
+    private var selectedStagingJob: ConvertJob? { stagingJobs.first { $0.id == selectedStagingID } }
+
+    /// "current/total" position of the file currently shown in Analyze
+    /// among every staged file (e.g. "2/3") -- nil when there's nothing to
+    /// count (0 or 1 staged file), matching the old count-only label's
+    /// visibility rule.
+    private var stagingProgressLabel: String? {
+        guard stagingJobs.count > 1,
+              let selectedStagingID,
+              let idx = stagingJobs.firstIndex(where: { $0.id == selectedStagingID }) else { return nil }
+        return "\(idx + 1)/\(stagingJobs.count)"
+    }
+
+    /// Every queue row always shows its own checkbox now (no separate Select
+    /// Mode toggle) -- "selected" just means "will be included the next time
+    /// Convert is pressed."
+    private var selectedQueueJobs: [ConvertJob] { _ = selectionVersion; return queue.filter { $0.isSelected } }
+    private var hasSelectedQueued: Bool { selectedQueueJobs.contains { $0.status == .queued } }
     /// Any queued job at all, regardless of checkbox state — used to decide
     /// whether the Convert button shows up in the bar in the first place.
-    /// Reads `selectionVersion` purely to force recomputation: `jobs` is a
+    /// Reads `selectionVersion` purely to force recomputation: `queue` is a
     /// `[ConvertJob]` of reference types behind a `@Binding`, so mutating a
     /// job's own `@Published status` (e.g. Retry/Reconvert) doesn't trigger
     /// this parent view to re-render on its own — without this, the Convert
     /// button stayed hidden after Retry even though the job was re-queued.
-    private var hasQueuedJobs: Bool { _ = selectionVersion; return jobs.contains { $0.status == .queued } }
-    private var batchCheckedJobs: [ConvertJob] { _ = selectionVersion; return jobs.filter { $0.isSelected } }
-    /// Only the checked jobs that are still queued (batch actions are no-ops
-    /// on jobs that are converting/done/failed, so those shouldn't influence
-    /// which chips render as available).
-    private var batchEligibleJobs: [ConvertJob] { batchCheckedJobs.filter { $0.status == .queued } }
+    private var hasQueuedJobs: Bool { _ = selectionVersion; return queue.contains { $0.status == .queued } }
 
-    // Sum of estimated output sizes across all selected, still-queued jobs —
-    // shown as a chip next to SAVE TO while Select mode is active, mirroring
-    // Download's estimated-size chip. Only meaningful in Select mode since
-    // that's when a specific subset of jobs is being converted together.
+    // Sum of estimated output sizes across every checked, still-queued job —
+    // shown as a chip next to the always-visible SAVE TO field, mirroring
+    // Download's estimated-size chip.
     private var totalEstimatedSizeLabel: String? {
-        guard isBatchMode else { return nil }
-        let bytes = selectedJobs
+        let bytes = selectedQueueJobs
             .filter { $0.status == .queued }
             .compactMap { $0.estimatedOutputBytes }
             .reduce(0, +)
@@ -937,202 +880,20 @@ struct ConvertView: View {
         return "~\(bytes) B"
     }
 
-    /// True once every checkable card is checked — flips the header button to
-    /// "Deselect All". Only counts queued jobs since those are the only ones
-    /// that show a checkbox / participate in Select Mode.
-    private var allEligibleJobsSelected: Bool {
-        _ = selectionVersion
-        let eligible = jobs.filter { $0.status == .queued }
-        guard !eligible.isEmpty else { return false }
-        return eligible.allSatisfy { $0.isSelected }
-    }
-
-    /// Select All when nothing (or not everything) is checked; Deselect All
-    /// once every eligible card is already checked. Seeds/clears each job's
-    /// Batch Apply override to match, exactly like tapping its own checkbox.
-    private func toggleSelectAll() {
-        let eligible = jobs.filter { $0.status == .queued }
-        let shouldSelect = !allEligibleJobsSelected
-        for job in eligible {
-            job.isSelected = shouldSelect
-            if shouldSelect {
-                job.seedBatchOverrideIfNeeded()
-            } else {
-                job.clearBatchOverride()
-            }
-        }
-        selectionVersion += 1
-    }
-
-    /// True once every card currently in the list is collapsed — flips the
-    /// header button to "Expand All". Empty list counts as not-collapsed.
-    /// Reads `selectionVersion` purely to force recomputation — `jobs` is a
-    /// plain array of reference-type ConvertJob, so ConvertView's body isn't
-    /// otherwise notified when a job's own @Published isExpanded changes.
-    private var allCardsCollapsed: Bool {
-        _ = selectionVersion
-        let queued = jobs.filter { $0.status == .queued }
-        return !queued.isEmpty && queued.allSatisfy { !$0.isExpanded }
-    }
-
-    /// True when at least one card can actually be collapsed/expanded. Only
-    /// queued cards have a collapse toggle at all — converting/done/failed
-    /// cards don't, and Select mode force-collapses + locks every card's
-    /// toggle, so nothing is expandable while it's active either.
-    private var hasExpandableCards: Bool {
-        !isBatchMode && jobs.contains { $0.status == .queued }
-    }
-
-    /// Collapses every card if any are still expanded; expands every card
-    /// once they're all already collapsed.
-    private func toggleCollapseAll() {
-        let shouldCollapse = !allCardsCollapsed
-        // Scoped to .queued only, matching allCardsCollapsed above and
-        // Download's own toggleCollapseAllLinks -- a converting/done job's
-        // isExpanded has no visible effect today (only the queued settings
-        // card reads it), but leaving it untouched avoids a stale toggle
-        // silently taking effect later if that job gets Reconverted back to
-        // .queued.
-        for job in jobs where job.status == .queued {
-            job.isExpanded = !shouldCollapse
-        }
-        selectionVersion += 1
-    }
-
-    /// CONVERT AS modes relevant to the checked selection — mirrors the
-    /// per-card filter (video-only modes hidden for audio-only files), but
-    /// unioned across every checked job so a mixed selection still shows
-    /// every mode that applies to at least one of them.
-    private var batchAvailableModes: [ConvertMediaMode] {
-        let jobs = batchEligibleJobs
-        guard !jobs.isEmpty else { return ConvertMediaMode.allCases }
-        let allowVideoModes = jobs.contains { $0.isVideoFile }
-        return ConvertMediaMode.allCases.filter { allowVideoModes || $0 == .audio }
-    }
-
-    /// PRESETS relevant to the checked selection — union of `ConvertPreset
-    /// .options(for:)` across each checked job's current mode.
-    private var batchAvailablePresets: [ConvertPreset] {
-        let jobs = batchEligibleJobs
-        guard !jobs.isEmpty else { return ConvertPreset.allCases }
-        var seen: Set<ConvertPreset> = []
-        var ordered: [ConvertPreset] = []
-        for job in jobs {
-            for preset in ConvertPreset.options(for: job.effectiveMediaMode) where !seen.contains(preset) {
-                seen.insert(preset)
-                ordered.append(preset)
-            }
-        }
-        return ordered
-    }
-
-    /// OUTPUT FORMAT choices relevant to the checked selection — union of
-    /// `job.effectiveAvailableFormats` (which depends on each job's effective mode).
-    private var batchAvailableFormats: [ConvertOutputFormat] {
-        let jobs = batchEligibleJobs
-        guard !jobs.isEmpty else { return ConvertOutputFormat.allCases }
-        var seen: Set<ConvertOutputFormat> = []
-        var ordered: [ConvertOutputFormat] = []
-        for job in jobs {
-            for fmt in job.effectiveAvailableFormats where !seen.contains(fmt) {
-                seen.insert(fmt)
-                ordered.append(fmt)
-            }
-        }
-        return ordered
-    }
-
-    /// Whether any checked job is currently in a video mode (effective) — gates
-    /// whether the VIDEO CODEC row renders at all, matching the per-card behavior.
-    private var batchHasVideoModeJob: Bool { batchEligibleJobs.contains { $0.effectiveMediaMode.isVideo } }
-
-    /// Whether any checked job would actually show an AUDIO CODEC row —
-    /// matches the per-card gate (`effectiveMediaMode != .videoOnly` and more
-    /// than one codec choice).
-    private var batchHasAudioCodecChoice: Bool {
-        batchEligibleJobs.contains { $0.effectiveMediaMode != .videoOnly && $0.effectiveAvailableAudioCodecs.count > 1 }
-    }
-
-    /// VIDEO CODEC choices relevant to the checked selection.
-    private var batchAvailableVideoCodecs: [ConvertVideoCodec] {
-        let jobs = batchEligibleJobs.filter { $0.effectiveMediaMode.isVideo }
-        guard !jobs.isEmpty else { return [] }
-        var seen: Set<ConvertVideoCodec> = []
-        var ordered: [ConvertVideoCodec] = []
-        for job in jobs {
-            for codec in job.effectiveAvailableVideoCodecs where !seen.contains(codec) {
-                seen.insert(codec)
-                ordered.append(codec)
-            }
-        }
-        return ordered
-    }
-
-    /// AUDIO CODEC choices relevant to the checked selection.
-    private var batchAvailableAudioCodecs: [ConvertAudioCodec] {
-        let jobs = batchEligibleJobs.filter { $0.effectiveMediaMode != .videoOnly }
-        guard !jobs.isEmpty else { return [] }
-        var seen: Set<ConvertAudioCodec> = []
-        var ordered: [ConvertAudioCodec] = []
-        for job in jobs {
-            for codec in job.effectiveAvailableAudioCodecs where !seen.contains(codec) {
-                seen.insert(codec)
-                ordered.append(codec)
-            }
-        }
-        return ordered
-    }
-
-    // MARK: Batch chip highlight state
-    //
-    // Mirrors the per-card chips exactly: a chip lights up when it reflects
-    // the checked jobs' ACTUAL current value, not a "last tapped" flag. Since
-    // every job defaults to Video + Audio / MP4 / H.264 / AAC with no active
-    // preset, that's what shows highlighted on a fresh selection, same as it
-    // would look on an individual card.
-
-    /// True only if every checked eligible job currently has this mode set
-    /// (a uniform match), so mixed selections don't falsely highlight a chip
-    /// that only applies to some of the checked jobs.
-    private func batchModeSelected(_ mode: ConvertMediaMode) -> Bool {
-        let jobs = batchEligibleJobs
-        guard !jobs.isEmpty else { return false }
-        return jobs.allSatisfy { $0.effectiveMediaMode == mode }
-    }
-
-    private func batchPresetSelected(_ preset: ConvertPreset) -> Bool {
-        let jobs = batchEligibleJobs
-        guard !jobs.isEmpty else { return false }
-        return jobs.allSatisfy { $0.effectiveActivePreset == preset }
-    }
-
-    private func batchFormatSelected(_ format: ConvertOutputFormat) -> Bool {
-        let jobs = batchEligibleJobs
-        guard !jobs.isEmpty else { return false }
-        return jobs.allSatisfy { $0.effectiveOutputFormat == format }
-    }
-
-    private func batchVideoCodecSelected(_ codec: ConvertVideoCodec) -> Bool {
-        let jobs = batchEligibleJobs.filter { $0.effectiveMediaMode.isVideo }
-        guard !jobs.isEmpty else { return false }
-        return jobs.allSatisfy { $0.effectiveVideoCodec == codec }
-    }
-
-    private func batchAudioCodecSelected(_ codec: ConvertAudioCodec) -> Bool {
-        let jobs = batchEligibleJobs.filter { $0.effectiveMediaMode != .videoOnly }
-        guard !jobs.isEmpty else { return false }
-        return jobs.allSatisfy { $0.effectiveAudioCodec == codec }
-    }
-
     private var convertButtonLabel: String {
-        let count = selectedJobs.filter { $0.status == .queued }.count
+        let count = selectedQueueJobs.filter { $0.status == .queued }.count
         if count > 1 { return "Convert \(count) Items" }
-        if count == 1, let job = selectedJobs.first(where: { $0.status == .queued }) {
+        if count == 1, let job = selectedQueueJobs.first(where: { $0.status == .queued }) {
             return job.isVideoFile ? "Convert Video" : "Convert Audio"
         }
         return "Convert"
     }
-    private var isConverting: Bool { jobs.contains { $0.status == .converting } }
+    private var isConverting: Bool { _ = selectionVersion; return queue.contains { $0.status == .converting } }
+
+    private var queueCountLabel: String {
+        let n = queue.count
+        return n == 0 ? "No items in queue" : "\(n) item\(n == 1 ? "" : "s") in queue"
+    }
 
     // Drop zone — matches urlCard's black-frosted-glass capsule/pill
     // exactly (same fieldHeight, same VisualEffectBlur + black tint +
@@ -1255,208 +1016,59 @@ struct ConvertView: View {
                 .padding(.top, 40)
                 .padding(.bottom, 20)
 
-            // ── List header — top-left: Select mode + Select/Deselect All.
-            // Top-right: Collapse/Expand All + Clear All. All four buttons
-            // share one consistent compact GlassButton style.
-            // Floats as its own bubble card, separate from the input area.
-            if hasJobs {
-                HStack {
-                    GlassButton(
-                        label: isBatchMode ? "Done" : "Select",
-                        icon: isBatchMode ? "xmark.circle" : "checkmark.circle",
-                        tint: DesignTokens.Accent.primary,
-                        fitContent: true
-                    ) {
-                        withAnimation(.spring(response: 0.25)) {
-                            isBatchMode.toggle()
-                            // Select mode always starts unchecked so checkmarks
-                            // never carry over stale state. Exiting Select mode
-                            // resets every item back to fully included, since
-                            // outside Select mode checkboxes are hidden and
-                            // nothing should be silently excluded -- same
-                            // convention as Download's own Select/Done toggle.
-                            // Also clear every job's Batch Apply override so
-                            // leaving Select Mode fully resets it.
-                            jobs.forEach { $0.isSelected = !isBatchMode; $0.clearBatchOverride() }
-                            selectionVersion += 1
-                        }
-                    }
-                    if isBatchMode {
-                        GlassButton(
-                            label: allEligibleJobsSelected ? "Deselect All" : "Select All",
-                            icon: allEligibleJobsSelected ? "circle" : "checkmark.circle",
-                            tint: .white,
-                            fitContent: true
-                        ) {
-                            withAnimation(.spring(response: 0.25)) {
-                                toggleSelectAll()
-                            }
-                        }
-                    }
-                    Spacer()
-                    GlassButton(
-                        label: allCardsCollapsed ? "Expand All" : "Collapse All",
-                        icon: allCardsCollapsed ? "chevron.down" : "chevron.up",
-                        tint: .white,
-                        fitContent: true,
-                        disabled: !hasExpandableCards
-                    ) {
-                        withAnimation(.spring(response: 0.25)) {
-                            toggleCollapseAll()
-                        }
-                    }
-                    GlassButton(
-                        label: isBatchMode ? "Clear Selected" : "Clear All",
-                        icon: "trash",
-                        tint: .red,
-                        fitContent: true,
-                        disabled: isBatchMode && batchCheckedJobs.isEmpty
-                    ) {
-                        withAnimation(.spring(response: 0.3)) {
-                            // Cancel any job still converting before removing it --
-                            // otherwise ffmpeg kept running headless with no
-                            // reference left to it, and no truncated-file cleanup
-                            // ever ran. Mirrors Download's own Clear All fix.
-                            if isBatchMode {
-                                for job in jobs where job.isSelected && job.status == .converting {
-                                    job.cancel()
-                                }
-                                jobs.removeAll { $0.isSelected }
-                            } else {
-                                for job in jobs where job.status == .converting {
-                                    job.cancel()
-                                }
-                                jobs.removeAll()
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
-                .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
-                .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
-                // Pinned to mainPanelWidth (measured once via GeometryReader
-                // on the outer VStack below) instead of
-                // containerRelativeFrame -- see mainPanelWidth's declaration
-                // for why that resolved to a different width than the card
-                // queue below it.
-                .frame(width: mainPanelWidth > 0 ? mainPanelWidth * 0.60 : nil)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 16)
-            }
+            // ── Analyze panel — fixed in place (never scrolls): exactly one
+            // staged file at a time, switchable via the dropdown, so every
+            // imported file gets its own full settings review before joining
+            // the Convert Queue below.
+            // zIndex above every later sibling in this VStack (the Spacer and
+            // TabBottomBar below) -- the file-switcher popup is an .overlay
+            // living inside analyzePanel and can extend past its own frame,
+            // and without this it was being painted UNDER TabBottomBar
+            // (later siblings in a VStack paint on top by default) any time
+            // it overlapped it.
+            analyzePanel
+                .zIndex(99)
 
-            // ── Scrollable card area ──────────────────────────────────────
-            ScrollViewReader { proxy in
-                ScrollView(showsIndicators: true) {
-                    // LazyVStack (not VStack) so off-screen cards don't
-                    // eagerly render their full view tree while scrolling --
-                    // same fix applied to Download's card queue, which
-                    // fixed a scroll stutter caused by every card's blur +
-                    // (for analyzing cards) TimelineView-driven rim redraw
-                    // running regardless of scroll position.
-                    LazyVStack(spacing: 12) {
-                        ForEach(jobs) { job in
-                            ConvertPreviewCard(
-                                job: job,
-                                onRemove: {
-                                    // Cancel first if still converting -- see the
-                                    // Clear All fix above for why.
-                                    if job.status == .converting { job.cancel() }
-                                    withAnimation(.spring(response: 0.3)) {
-                                        jobs.removeAll { $0.id == job.id }
-                                    }
-                                },
-                                isBatchMode: isBatchMode,
-                                onSelectionChange: {
-                                    selectionVersion += 1
-                                }
-                            )
-                            // Same scale-pop-in on spawn as Download's cards
-                            // (see previewCard's own .cardPopIn) -- insert/
-                            // remove only, same-identity updates don't hit
-                            // this. Removal stays instant.
-                            .transition(.cardPopIn)
-                        }
-                        Color.clear.frame(height: 4).id("convertBottom")
-                    }
-                    // Pinned to mainPanelWidth instead of
-                    // containerRelativeFrame -- this VStack lives inside a
-                    // ScrollView, which is its own containerRelativeFrame
-                    // reference frame, separate from the plain VStack the
-                    // header row and bottom bar sit in directly. Using the
-                    // one shared GeometryReader measurement from mainPanel
-                    // fixes this at the root instead of chasing padding deltas.
-                    .frame(width: mainPanelWidth > 0 ? mainPanelWidth * 0.60 : nil)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 20)
-                    .padding(.bottom, 8)
-                }
-                // Fade scrolled cards out near the top edge instead of a hard
-                // clip against the frosted header above.
-                .mask(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0),
-                            .init(color: .black, location: 0.035),
-                        ],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                )
-                .onChange(of: jobs.count) {
-                    withAnimation(.spring(response: 0.4)) {
-                        proxy.scrollTo("convertBottom", anchor: .bottom)
-                    }
-                }
-                .overlay {
-                    if jobs.isEmpty {
-                        EmptyStateView(
-                            icon: "arrow.triangle.2.circlepath",
-                            title: "Drop files to convert",
-                            subtitle: "Supports any format ffmpeg can read"
-                        )
-                        .transition(.fadeInOnly)
-                    }
-                }
-                .animation(.easeOut(duration: 0.25), value: jobs.isEmpty)
-            }
+            Spacer(minLength: 0)
 
-            // ── Pinned bottom bar ─────────────────────────────────────────
+            // ── Pinned bottom bar — SAVE TO (always on, single shared
+            // destination for every job) plus the Convert Queue drawer.
             TabBottomBar(
                 config: config,
                 hasItems: hasJobs,
-                showPrimaryAction: hasQueuedJobs,
+                // Always shown now -- never hidden just because the queue
+                // is empty. It reads "No Items in Queue" (greyed,
+                // disabled) instead of disappearing, and swaps into "Cancel
+                // All" (primaryActionDangerMode) the moment anything's
+                // actually converting.
+                showPrimaryAction: true,
                 toolsReady: toolsReady,
                 primaryActionEnabled: hasSelectedQueued,
-                primaryActionDisabledLabel: isBatchMode ? "No Items Selected" : convertButtonLabel,
+                primaryActionDisabledLabel: hasQueuedJobs ? "Select Items to Convert" : "No Items in Queue",
+                primaryActionDangerMode: isConverting,
                 primaryActionLabel: convertButtonLabel,
                 primaryActionIcon: "arrow.triangle.2.circlepath",
                 onClearAll: {},
-                onPrimaryAction: { convertSelected() },
-                showClearAll: false,
-                pinnedWidth: mainPanelWidth * 0.60,
-                hasBatchDirectoryControl: isBatchMode,
-                leftControls: { EmptyView() },
-                extraControls: {
-                    if isBatchMode {
-                        batchApplyControls
+                onPrimaryAction: {
+                    if isConverting {
+                        for job in queue where job.status == .converting { job.cancel() }
+                        selectionVersion += 1
                     } else {
-                        EmptyView()  // extraControls: no save-to field (per-card)
+                        convertSelected()
                     }
                 },
-                batchDirectoryControl: {
-                    if isBatchMode {
-                        batchDirectoryField
-                    } else {
-                        EmptyView()
-                    }
-                }
+                showClearAll: false,
+                pinnedWidth: mainPanelWidth * 0.60,
+                hasBatchDirectoryControl: true,
+                leftControls: { EmptyView() },
+                extraControls: { queueDrawer },
+                batchDirectoryControl: { batchDirectoryField }
             )
         }
         // Measures this VStack's real resolved width once per layout pass
-        // and stores it so the list header row, card queue, and bottom bar
-        // all derive their 60% proportional width from the exact same
-        // number -- matching Download's mainPanelWidth pattern exactly.
+        // and stores it so the Analyze panel and bottom bar both derive
+        // their 60% proportional width from the exact same number --
+        // matching Download's mainPanelWidth pattern exactly.
         .background(
             GeometryReader { geo in
                 Color.clear
@@ -1466,6 +1078,287 @@ struct ConvertView: View {
                     }
             }
         )
+    }
+
+    // MARK: - Analyze panel
+
+    /// Custom popup listing every staged file, styled as a plain greyscale
+    /// expansion of the trigger pill (no accent color -- that's reserved for
+    /// the trigger itself) rather than a native macOS menu. Rendered via
+    /// .overlay on the trigger, so it floats above the rest of the panel
+    /// without pushing or resizing anything. Pinned to fileSwitcherTriggerWidth
+    /// so it reads as a literal expansion of the pill, not an independently
+    /// sized menu.
+    private var fileSwitcherPopup: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(stagingJobs) { staged in
+                let isCurrent = staged.id == selectedStagingID
+                Button {
+                    withAnimation(.spring(response: 0.2)) {
+                        selectedStagingID = staged.id
+                        isFileSwitcherOpen = false
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.text")
+                            .font(.appMono(size: 10, weight: .semibold))
+                        Text(staged.inputURL.deletingPathExtension().lastPathComponent)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 8)
+                        if isCurrent {
+                            Image(systemName: "checkmark")
+                                .font(.appMono(size: 10, weight: .bold))
+                        }
+                    }
+                    .font(.appMono(size: 12, weight: .medium))
+                    .foregroundColor(isCurrent ? .white : .white.opacity(DesignTokens.Text.secondary))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(isCurrent ? Color.white.opacity(0.14) : Color.clear)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .frame(width: fileSwitcherTriggerWidth > 0 ? fileSwitcherTriggerWidth : nil)
+        .background(
+            ZStack {
+                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                Color.black.opacity(DesignTokens.Glass.blackTint)
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
+            .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 16, y: 8)
+    }
+
+    /// The one staged file currently being configured, plus a dropdown to
+    /// switch between every staged file and buttons to commit it (or all of
+    /// them) to the Convert Queue. Empty state when nothing's staged.
+    @ViewBuilder
+    private var analyzePanel: some View {
+        if let job = selectedStagingJob {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("ANALYZE", systemImage: "slider.horizontal.3")
+                    .font(.appMono(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                // zIndex(99) here, not just on the popup's own local ZStack
+                // below -- this HStack is the EARLIER of two siblings in
+                // analyzePanel's VStack (ConvertPreviewCard, the full
+                // settings card, comes right after it), and a VStack paints
+                // later children on top of earlier ones by default. The
+                // popup is an .overlay attached deep inside this HStack, so
+                // without raising the HStack itself, ConvertPreviewCard's
+                // own opaque background was painting over the popup even
+                // though the popup's local zIndex(20) "won" against its own
+                // tap-catcher sibling -- that locality is exactly the bug:
+                // zIndex only orders siblings sharing the same parent, and
+                // the real occluding view lived one level up.
+                HStack(alignment: .center, spacing: 8) {
+                    // Pill-chip design (Capsule, accent-tinted fill + border,
+                    // matching the app's chip language elsewhere), and the
+                    // popup itself is fully custom -- an expanded version of
+                    // the same pill acting as an .overlay (so it floats above
+                    // everything without shifting any surrounding layout,
+                    // and never a native macOS menu).
+                    Button {
+                        withAnimation(.spring(response: 0.25)) { isFileSwitcherOpen.toggle() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc.text")
+                                .font(.appMono(size: 10, weight: .semibold))
+                            Text(job.inputURL.deletingPathExtension().lastPathComponent)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Image(systemName: isFileSwitcherOpen ? "chevron.up" : "chevron.down")
+                                .font(.appMono(size: 9, weight: .bold))
+                        }
+                        .font(.appMono(size: 12, weight: .medium))
+                        .foregroundColor(DesignTokens.Accent.primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(DesignTokens.Accent.primary.opacity(isFileSwitcherOpen ? 0.22 : 0.14))
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(DesignTokens.Accent.primary.opacity(0.4), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.onAppear { fileSwitcherTriggerWidth = geo.size.width }
+                                .onChange(of: geo.size.width) { _, w in fileSwitcherTriggerWidth = w }
+                        }
+                    )
+                    .overlay(alignment: .topLeading) {
+                        if isFileSwitcherOpen {
+                            ZStack(alignment: .topLeading) {
+                                // Oversized, effectively-invisible tap catcher
+                                // so clicking anywhere else dismisses the
+                                // popup -- sits behind it in this same
+                                // overlay group, never affecting layout.
+                                Color.black.opacity(0.001)
+                                    .frame(width: 3000, height: 3000)
+                                    .offset(x: -1200, y: -1200)
+                                    .onTapGesture {
+                                        withAnimation(.spring(response: 0.2)) { isFileSwitcherOpen = false }
+                                    }
+                                fileSwitcherPopup
+                                    .offset(y: 40)
+                            }
+                            .zIndex(20)
+                        }
+                    }
+                    if let stagingProgressLabel {
+                        Text(stagingProgressLabel)
+                            .font(.appMono(size: 11))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                    }
+                    Spacer()
+                    if stagingJobs.count > 1 {
+                        GlassButton(label: "Add All to Queue", icon: "tray.and.arrow.down", tint: .white, fitContent: true) {
+                            addAllToQueue()
+                        }
+                    }
+                    GlassButton(label: "Add to Queue", icon: "arrow.turn.down.right", tint: DesignTokens.Accent.primary, fitContent: true) {
+                        addToQueue(job)
+                    }
+                }
+                .zIndex(99)
+                ConvertPreviewCard(
+                    job: job,
+                    config: config,
+                    onRemove: { removeFromStaging(job) },
+                    isQueueRow: false
+                )
+            }
+            .padding(16)
+            .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
+            .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
+            .frame(width: mainPanelWidth > 0 ? mainPanelWidth * 0.60 : nil)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
+        } else {
+            EmptyStateView(
+                icon: "arrow.triangle.2.circlepath",
+                title: "Drop files to convert",
+                subtitle: "Supports any format ffmpeg can read"
+            )
+            .frame(maxWidth: .infinity, minHeight: 220)
+            .transition(.fadeInOnly)
+        }
+    }
+
+    // MARK: - Convert Queue drawer (lives in the bottom bar, above SAVE TO)
+
+    /// Rough row height (card + spacing) used as the drag-swap threshold
+    /// below, and to derive the drawer's fixed viewport height -- doesn't
+    /// need to be exact, just close enough that crossing into a neighbor's
+    /// row triggers the swap around the same point the dragged row visually
+    /// reaches it.
+    private let queueRowStride: CGFloat = 96
+
+    /// Fixed viewport height for the row list -- always this tall while
+    /// expanded (about 2.5 rows), regardless of how many items are actually
+    /// queued. It does NOT grow with item count (extra items scroll inside
+    /// it instead); it only ever shrinks if the window itself is too short
+    /// to offer this much room, via ordinary layout compression, not a
+    /// content-driven calculation.
+    private var queueDrawerHeight: CGFloat { queueRowStride * 2.5 }
+
+    /// Collapsible drawer rendered inside the bottom bar's extraControls
+    /// slot, above the SAVE TO row. Card within a card: this whole drawer is
+    /// its own nested glass surface. The row list (when expanded) sits on
+    /// top with the select toolbar (collapse toggle, count, Clear Queue)
+    /// pinned as a bottom bar beneath it, separated by a divider -- so
+    /// expanding grows the list upward from that fixed bottom edge rather
+    /// than pushing content down from a fixed top.
+    private var queueDrawer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isQueueExpanded && hasQueue {
+                // Plain ScrollView + LazyVStack (not List) -- same container
+                // pattern already proven throughout the rest of the app, and
+                // avoids List's native macOS drag visual (a free-floating
+                // snapshot of the row) that doesn't match the confined,
+                // swap-in-place behavior implemented in QueueRowView below.
+                //
+                // Fixed .frame(height:) instead of a GeometryReader-derived
+                // size -- the previous GeometryReader approach reported
+                // whatever leftover space the surrounding VStack happened to
+                // have at that moment, which both grew with item count and
+                // occasionally mismatched the glassCard's own background
+                // height (the "black bar" clipping mid-row). A plain fixed
+                // height is deterministic: the card background and the
+                // scroll viewport are now sized off the exact same number.
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 6) {
+                            ForEach(Array(queue.enumerated()), id: \.element.id) { index, job in
+                                QueueRowView(
+                                    job: job, index: index, position: index + 1, queue: $queue, config: config,
+                                    queueRowStride: queueRowStride,
+                                    draggingJobID: $draggingJobID,
+                                    dragTranslation: $dragTranslation,
+                                    onSelectionChange: { selectionVersion += 1 },
+                                    onEditRequested: (job.status == .queued || job.status == .failed || job.status == .cancelled)
+                                        ? { editFromQueue(job) } : nil
+                                )
+                                .id(job.id)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .onAppear { queueScrollProxy = proxy }
+                }
+                // When the Analyze card is showing (hasStaging), it and the
+                // queue are competing for the same vertical space, so this
+                // is only a CAP (maxHeight) -- ordinary layout can still
+                // compress it if the window's genuinely too short. When
+                // there's no Analyze card, nothing else needs that room, so
+                // this locks to exactly queueDrawerHeight (a real
+                // .frame(height:), not just a cap) rather than letting it
+                // sit smaller than its stated max just because the current
+                // queue is short.
+                .frame(height: hasStaging ? nil : queueDrawerHeight)
+                .frame(maxHeight: queueDrawerHeight)
+                GlassDivider()
+            }
+            HStack(spacing: 8) {
+                if hasQueue {
+                    HoverIconButton(
+                        icon: isQueueExpanded ? "chevron.down" : "chevron.up",
+                        size: 11,
+                        help: isQueueExpanded ? "Collapse queue" : "Expand queue",
+                        label: isQueueExpanded ? "Collapse" : "Expand"
+                    ) {
+                        withAnimation(.spring(response: 0.25)) { isQueueExpanded.toggle() }
+                    }
+                }
+                Text(queueCountLabel)
+                    .font(.appMono(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                Spacer()
+                if hasQueue {
+                    // .fixedSize() locks this to its own natural size --
+                    // without it, the Text inside GlassButton has a
+                    // minimumScaleFactor that can shrink the label if
+                    // anything upstream ever proposes it less width than it
+                    // wants, which is what made it visibly shrink when the
+                    // row list above pushed this bar's layout around.
+                    GlassButton(label: "Clear Queue", icon: "trash", tint: .red, fitContent: true) {
+                        withAnimation(.spring(response: 0.3)) {
+                            for job in queue where job.status == .converting { job.cancel() }
+                            queue.removeAll()
+                        }
+                    }
+                    .fixedSize()
+                }
+            }
+        }
+        .padding(12)
+        .glassCard(cornerRadius: DesignTokens.Radius.medium, opacity: 0.35)
     }
 
     private func openFilePicker() {
@@ -1480,234 +1373,78 @@ struct ConvertView: View {
     }
 
     private func addFile(_ url: URL) {
-        guard !jobs.contains(where: { $0.inputURL == url }) else { return }
         let job = ConvertJob(inputURL: url)
-        withAnimation(.spring(response: 0.35)) { jobs.append(job) }
+        withAnimation(.spring(response: 0.35)) {
+            stagingJobs.append(job)
+            // Jump the Analyze panel to whatever was just imported -- for a
+            // multi-file import this lands on the last one, which still puts
+            // every file in the dropdown for review in any order.
+            selectedStagingID = job.id
+        }
+    }
+
+    /// Commits one staged job to the Convert Queue (appended at the end) and
+    /// moves the Analyze panel to another remaining staged file, if any.
+    private func addToQueue(_ job: ConvertJob) {
+        withAnimation(.spring(response: 0.35)) {
+            stagingJobs.removeAll { $0.id == job.id }
+            queue.append(job)
+            selectedStagingID = stagingJobs.last?.id
+        }
+        selectionVersion += 1
+    }
+
+    /// Commits every remaining staged job to the Convert Queue at once, each
+    /// with whatever settings it currently has (default or already customized).
+    private func addAllToQueue() {
+        withAnimation(.spring(response: 0.35)) {
+            queue.append(contentsOf: stagingJobs)
+            stagingJobs.removeAll()
+            selectedStagingID = nil
+        }
+        selectionVersion += 1
+    }
+
+    private func removeFromStaging(_ job: ConvertJob) {
+        withAnimation(.spring(response: 0.3)) {
+            stagingJobs.removeAll { $0.id == job.id }
+            if selectedStagingID == job.id { selectedStagingID = stagingJobs.last?.id }
+        }
+    }
+
+    /// Pulls a queued (or failed/cancelled) job back out to the Analyze
+    /// panel for editing/reconverting. Resets any partial-run state
+    /// (progress/output) so it starts clean once it's added back to the
+    /// queue -- this is now the only path back to a runnable state for a
+    /// failed/cancelled job, since there's no more dedicated Retry/
+    /// Reconvert button on the row itself.
+    private func editFromQueue(_ job: ConvertJob) {
+        withAnimation(.spring(response: 0.3)) {
+            queue.removeAll { $0.id == job.id }
+            job.status = .queued
+            job.progress = "Queued"
+            job.progressFraction = nil
+            job.etaText = ""
+            job.outputURL = nil
+            stagingJobs.append(job)
+            selectedStagingID = job.id
+        }
+        selectionVersion += 1
     }
 
     private func convertSelected() {
-        // Convert in order: oldest added first
-        let pending = selectedJobs
-            .filter { $0.status == .queued }
-            .sorted { $0.addedAt < $1.addedAt }
-        for job in pending {
-            // In Select mode, every converted file goes to the shared batch
-            // output folder (config.convertOutputDir) instead of each job's
-            // own per-card SAVE TO location — this only affects where THIS
-            // run writes its output; it never overwrites job.outputDir, so
-            // the individual card's own folder choice is untouched and still
-            // shown/used the next time that card is converted outside Select mode.
-            runConversion(job: job, batchDestination: isBatchMode ? URL(fileURLWithPath: config.convertOutputDir) : nil)
+        // Convert in the queue's own drag-arranged order (top to bottom),
+        // not insertion order.
+        for job in queue where job.isSelected && job.status == .queued {
+            runConversion(job: job)
         }
     }
 
-    // MARK: - Batch Apply
-
-    /// Applies a preset to every checked job at once. Each job resolves the
-    /// preset against its own source codec (same logic as the single-card
-    /// preset chip), so a batch of mixed-codec MKVs each get the correct
-    /// source-aware result rather than one shared guess.
-    private func batchApplyPreset(_ preset: ConvertPreset) {
-        withAnimation(.spring(response: 0.25)) {
-            for job in batchCheckedJobs where job.status == .queued {
-                job.applyPresetToOverride(preset)
-            }
-            selectionVersion += 1
-        }
-    }
-
-    /// Sets CONVERT AS mode on every checked job's Batch Apply override only,
-    /// re-validating override format/codecs afterward. Never touches the base
-    /// mediaMode/outputFormat/videoCodec/audioCodec/activePreset fields.
-    private func batchApplyMode(_ mode: ConvertMediaMode) {
-        withAnimation(.spring(response: 0.25)) {
-            for job in batchCheckedJobs where job.status == .queued {
-                guard job.isVideoFile || mode == .audio else { continue }
-                var override = job.batchOverride ?? BatchOverride()
-                override.mode = mode
-                override.preset = nil
-                let currentFormat = override.format ?? job.outputFormat
-                let allowedFormats: [ConvertOutputFormat] = {
-                    switch mode {
-                    case .audio: return [.wav, .mp3, .m4a, .flac]
-                    case .videoAndAudio, .videoOnly: return [.mp4, .mov, .mkv]
-                    }
-                }()
-                if !allowedFormats.contains(currentFormat) {
-                    override.format = allowedFormats.first
-                }
-                job.batchOverride = override
-            }
-            selectionVersion += 1
-        }
-    }
-
-    /// Sets OUTPUT FORMAT on every checked job's Batch Apply override that
-    /// supports it. Jobs whose effective mode can't use this format (e.g. an
-    /// audio-only job offered a video container) are skipped rather than forced.
-    private func batchApplyFormat(_ format: ConvertOutputFormat) {
-        withAnimation(.spring(response: 0.25)) {
-            for job in batchCheckedJobs where job.status == .queued {
-                guard job.effectiveAvailableFormats.contains(format) else { continue }
-                var override = job.batchOverride ?? BatchOverride()
-                override.format = format
-                override.preset = nil
-                if let vc = override.videoCodec, !format.compatibleVideoCodecs.contains(vc) {
-                    override.videoCodec = format.compatibleVideoCodecs.first
-                }
-                let currentAudio = override.audioCodec ?? job.audioCodec
-                if !format.compatibleAudioCodecs.contains(currentAudio) {
-                    override.audioCodec = format.compatibleAudioCodecs.first
-                }
-                job.batchOverride = override
-            }
-            selectionVersion += 1
-        }
-    }
-
-    /// Sets VIDEO CODEC on every checked job's Batch Apply override for which
-    /// this codec is valid in its effective container. Invalid jobs are skipped.
-    private func batchApplyVideoCodec(_ codec: ConvertVideoCodec) {
-        withAnimation(.spring(response: 0.25)) {
-            for job in batchCheckedJobs where job.status == .queued {
-                guard job.effectiveMediaMode.isVideo, job.effectiveAvailableVideoCodecs.contains(codec) else { continue }
-                var override = job.batchOverride ?? BatchOverride()
-                override.videoCodec = codec
-                override.preset = nil
-                job.batchOverride = override
-            }
-            selectionVersion += 1
-        }
-    }
-
-    /// Sets AUDIO CODEC on every checked job's Batch Apply override for which
-    /// this codec is valid in its effective container. Invalid jobs are skipped.
-    private func batchApplyAudioCodec(_ codec: ConvertAudioCodec) {
-        withAnimation(.spring(response: 0.25)) {
-            for job in batchCheckedJobs where job.status == .queued {
-                guard job.effectiveMediaMode != .videoOnly, job.effectiveAvailableAudioCodecs.contains(codec) else { continue }
-                var override = job.batchOverride ?? BatchOverride()
-                override.audioCodec = codec
-                override.preset = nil
-                job.batchOverride = override
-            }
-            selectionVersion += 1
-        }
-    }
-
-    /// Batch Apply's bottom-bar settings row. Unlike the per-card version, chip
-    /// selection state isn't meaningful here (checked jobs may already differ
-    /// in mode/format/codec), so every chip is a one-tap action rather than a
-    /// persistent selection — tapping applies that choice to every checked job.
-    private var batchApplyControls: some View {
-        let _ = selectionVersion // force recompute when checked jobs' settings change
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.appMono(size: 11))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                Text(batchCheckedJobs.isEmpty ? "Check items above to batch apply" : "\(batchCheckedJobs.count) item\(batchCheckedJobs.count == 1 ? "" : "s") checked")
-                    .font(.appMono(size: 11, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-            }
-
-            GlassDivider()
-
-            // CONVERT AS — shown first, same order as the per-card version.
-            // Only modes that apply to at least one checked file are offered
-            // (e.g. no video-only modes if every checked item is audio-only).
-            VStack(alignment: .leading, spacing: 6) {
-                Label("CONVERT AS", systemImage: "switch.2")
-                    .font(.appMono(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                HStack(spacing: 8) {
-                    ForEach(batchAvailableModes, id: \.rawValue) { mode in
-                        SelectorChip(label: mode.label, icon: mode.icon, isSelected: batchModeSelected(mode), tint: mode.chipTint) {
-                            batchApplyMode(mode)
-                        }
-                    }
-                }
-            }
-
-            // PRESETS — filtered by the modes actually present in the checked
-            // selection, same as the per-card row filters by that job's mode.
-            if !batchAvailablePresets.isEmpty {
-                GlassDivider()
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("PRESETS", systemImage: "wand.and.stars")
-                        .font(.appMono(size: 10, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    HStack(spacing: 6) {
-                        ForEach(batchAvailablePresets) { preset in
-                            SelectorChip(label: preset.shortLabel, note: preset.note, isSelected: batchPresetSelected(preset)) {
-                                batchApplyPreset(preset)
-                            }
-                        }
-                    }
-                }
-            }
-
-            GlassDivider()
-            VStack(alignment: .leading, spacing: 6) {
-                Label("OUTPUT FORMAT", systemImage: "doc.badge.arrow.up")
-                    .font(.appMono(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                HStack(spacing: 6) {
-                    ForEach(batchAvailableFormats) { fmt in
-                        SelectorChip(label: fmt.rawValue, isSelected: batchFormatSelected(fmt)) {
-                            batchApplyFormat(fmt)
-                        }
-                    }
-                }
-            }
-
-            // VIDEO CODEC — hidden entirely when nothing checked is currently
-            // in a video mode, mirroring the per-card `if job.mediaMode.isVideo` gate.
-            if batchHasVideoModeJob {
-                GlassDivider()
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("VIDEO CODEC", systemImage: "video")
-                        .font(.appMono(size: 10, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    HStack(spacing: 6) {
-                        ForEach(batchAvailableVideoCodecs) { codec in
-                            SelectorChip(label: codec.rawValue, isSelected: batchVideoCodecSelected(codec)) {
-                                batchApplyVideoCodec(codec)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // AUDIO CODEC — hidden when nothing checked would actually offer a
-            // codec choice, mirroring the per-card gate (`mediaMode != .videoOnly`
-            // and more than one available codec).
-            if batchHasAudioCodecChoice {
-                GlassDivider()
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("AUDIO CODEC", systemImage: "waveform")
-                        .font(.appMono(size: 10, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    HStack(spacing: 6) {
-                        ForEach(batchAvailableAudioCodecs) { codec in
-                            SelectorChip(label: codec.rawValue, isSelected: batchAudioCodecSelected(codec)) {
-                                batchApplyAudioCodec(codec)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .padding(14)
-        .glassCard(cornerRadius: DesignTokens.Radius.medium)
-    }
-
-    /// Compact inline SAVE TO control for Select mode, rendered in TabBottomBar's
-    /// top row (to the right of the Auto-Open Folder toggle) instead of inside the
-    /// batch apply card below. Shared destination folder for every file converted
-    /// while in Select mode; defaults to Downloads and remembers the last folder
-    /// picked (persisted in config.convertOutputDir). Independent of each card's
-    /// own per-card SAVE TO location, which stays untouched.
+    /// Compact inline SAVE TO control, rendered in TabBottomBar's top row (to
+    /// the right of the Auto-Open Folder toggle). Always visible now -- one
+    /// shared destination folder for every conversion, batch mode or not,
+    /// matching Download's own permanent SAVE TO field. Defaults to Downloads
+    /// and remembers the last folder picked (persisted in config.convertOutputDir).
     private var batchDirectoryField: some View {
         VStack(alignment: .leading, spacing: DropGrid.labelSpacing) {
             HStack(spacing: DropGrid.labelSpacing) {
@@ -1769,42 +1506,62 @@ struct ConvertView: View {
                     }
                 }
                 .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
+                // Always-available Reveal -- replaces the per-row "Reveal in
+                // Finder" button a completed job used to have. This one
+                // isn't tied to any single job: it just opens the shared
+                // SAVE TO destination, usable any time regardless of
+                // whether anything's finished converting yet.
+                HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Open the SAVE TO folder in Finder", label: "Reveal") {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: config.convertOutputDir))
+                }
+                .frame(height: DropGrid.controlHeight)
             }
         }
         .frame(maxWidth: .infinity)
+        // Card within a card -- same nested-glass treatment as Download's
+        // own SAVE TO section and Convert's Queue drawer above, so this
+        // slot reads consistently across both tabs.
+        .padding(10)
+        .glassCard(cornerRadius: DesignTokens.Radius.medium, opacity: 0.35)
     }
 
-    private func runConversion(job: ConvertJob, batchDestination: URL? = nil) {
+    private func runConversion(job: ConvertJob) {
         guard let ffmpeg = ffmpegPath else { return }
-        // Uses effective* settings throughout: Select Mode's Batch Apply choices
-        // (if any) override the job's own base settings for this conversion run
-        // only — the base fields on `job` are never written to, so its individual
-        // card keeps showing exactly what it showed before. Same principle for
-        // the destination folder: batchDestination (Select mode's shared SAVE TO
-        // field) takes priority for this run only, without touching job.outputDir.
-        let dir = batchDestination ?? job.outputDir ?? job.inputURL.deletingLastPathComponent()
-        let output = dir.appendingPathComponent(job.effectiveOutputFilename)
+        // Destination folder is the single shared SAVE TO field in the bottom
+        // bar (same folder for every job, mirrors Download's tab).
+        let dir = URL(fileURLWithPath: config.convertOutputDir)
+        let output = dir.appendingPathComponent(job.outputFilename)
         job.status = .converting
+        selectionVersion += 1
         job.progress = "Starting…"
         job.progressFraction = nil
         job.etaText = "0%"
         job.outputURL = output
         manager.appendLog("Convert: Starting \(job.inputURL.lastPathComponent) → \(output.lastPathComponent)")
+        withAnimation(.easeOut(duration: 0.3)) {
+            queueScrollProxy?.scrollTo(job.id, anchor: .center)
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
             let p = Process()
             job.process = p
             p.executableURL = URL(fileURLWithPath: ffmpeg)
             var args = ["-y", "-i", job.inputURL.path]  // -y: always overwrite, always run a fresh process
-            // Audio stream — stream-copy (no re-encode) when the chosen codec matches the source.
-            if job.effectiveMediaMode != .videoOnly {
-                let audioMatches = job.effectiveAudioCodecMatchesSource
-                args += ["-c:a", audioMatches ? "copy" : job.effectiveAudioCodec.ffmpegCodec]
+            // Audio stream — stream-copy (no re-encode) whenever the chosen codec
+            // already matches the source (as before), OR the VIDEO/AUDIO layer's
+            // "Same as Source" chip is selected ("leave this side alone"). That
+            // chip never forces a copy that isn't actually valid for the source/
+            // container combination — it only skips re-encoding when the source
+            // already is (or can be treated as) the selected codec.
+            if job.mediaMode != .videoOnly {
+                let audioMatches = job.audioCodecMatchesSource
+                let encodeAudio = job.transcodeAudio && !audioMatches
+                args += ["-c:a", encodeAudio ? job.audioCodec.ffmpegCodec : "copy"]
                 // 5.1/7.1 sources need more headroom than stereo to avoid audible
                 // compression artifacts — 384k covers 5.1 cleanly, 256k is plenty for stereo/mono.
                 let isMultichannel = (job.mediaInfo?.audioChannelLabel).map { $0 == "5.1" || $0 == "7.1" } ?? false
-                if !audioMatches && job.effectiveAudioCodec == .aac { args += ["-b:a", isMultichannel ? "384k" : "256k"] }
-                if !audioMatches && job.effectiveAudioCodec == .mp3 { args += ["-b:a", "320k"] }
+                if encodeAudio && job.audioCodec == .aac { args += ["-b:a", isMultichannel ? "384k" : "256k"] }
+                if encodeAudio && job.audioCodec == .mp3 { args += ["-b:a", "320k"] }
                 // Explicitly re-tag the channel layout when re-encoding multichannel audio
                 // to AAC. Root cause of "audio imports but is silent / gets split into
                 // separate mono tracks in Resolve": many sources (esp. Dolby/E-AC-3 rips)
@@ -1820,7 +1577,7 @@ struct ConvertView: View {
                 // "5.1"/"7.1"/"stereo" layout name via -channel_layout normalizes the tag
                 // ffmpeg writes into the container, and the same re-read test showed a
                 // clean tag with no guessing afterward.
-                if !audioMatches && job.effectiveAudioCodec == .aac {
+                if encodeAudio && job.audioCodec == .aac {
                     let layoutArg: String? = {
                         switch job.mediaInfo?.audioChannelLabel {
                         case "5.1": return "5.1"
@@ -1835,22 +1592,25 @@ struct ConvertView: View {
             } else {
                 args += ["-an"] // no audio
             }
-            // Video stream — stream-copy (no re-encode) when the chosen codec matches the source.
-            if job.effectiveMediaMode.isVideo {
-                let videoMatches = job.effectiveVideoCodecMatchesSource
-                args += ["-c:v", videoMatches ? "copy" : job.effectiveVideoCodec.ffmpegCodec]
+            // Video stream — same copy-vs-encode rule as audio above: stream-copy
+            // when the chosen codec already matches the source, or when the VIDEO
+            // layer's "Same as Source" chip is selected.
+            if job.mediaMode.isVideo {
+                let videoMatches = job.videoCodecMatchesSource
+                let encodeVideo = job.transcodeVideo && !videoMatches
+                args += ["-c:v", encodeVideo ? job.videoCodec.ffmpegCodec : "copy"]
                 // -preset fast: significantly faster encode with minimal quality loss
-                if !videoMatches && (job.effectiveVideoCodec == .h264 || job.effectiveVideoCodec == .h265) {
+                if encodeVideo && (job.videoCodec == .h264 || job.videoCodec == .h265) {
                     args += ["-preset", "fast"]
                 }
                 // libsvtav1 uses its own preset scale (0-13, lower = slower/better) — 8 is a
                 // reasonable speed/quality balance, verified to encode successfully on-device.
-                if !videoMatches && job.effectiveVideoCodec == .av1 {
+                if encodeVideo && job.videoCodec == .av1 {
                     args += ["-preset", "8", "-crf", "35"]
                 }
                 // libvpx-vp9 needs -b:v 0 to actually respect -crf (otherwise it defaults to
                 // a bitrate-controlled mode and ignores the quality target).
-                if !videoMatches && job.effectiveVideoCodec == .vp9 {
+                if encodeVideo && job.videoCodec == .vp9 {
                     args += ["-crf", "32", "-b:v", "0"]
                 }
             } else {
@@ -1947,6 +1707,7 @@ struct ConvertView: View {
                     guard job.status != .cancelled else { return }
                     let success = p.terminationStatus == 0
                     job.status = success ? .done : .failed
+                    self.selectionVersion += 1
                     job.progress = success ? "Done" : "Failed (exit \(p.terminationStatus))"
                     job.etaText = ""
                     self.manager.appendLog(success ? "Convert: ✓ Done: \(output.lastPathComponent)" : "Convert: ERROR — \(job.inputURL.lastPathComponent) failed (exit \(p.terminationStatus))")
@@ -1959,13 +1720,13 @@ struct ConvertView: View {
                     // Codec/quality descriptor for the history chip — video gets codec + resolution,
                     // audio-only gets codec + bitrate. Falls back gracefully if info is unavailable.
                     let qualityDescriptor: String = {
-                        if job.effectiveMediaMode.isVideo {
+                        if job.mediaMode.isVideo {
                             if let w = job.mediaInfo?.pixelWidth, let h = job.mediaInfo?.pixelHeight, w > 0, h > 0 {
-                                return "\(job.effectiveVideoCodec.rawValue) · \(h)p"
+                                return "\(job.displayVideoCodec) · \(h)p"
                             }
-                            return job.effectiveVideoCodec.rawValue
+                            return job.displayVideoCodec
                         } else {
-                            return "\(job.effectiveAudioCodec.rawValue) · \(job.effectiveAudioCodec.typicalBitrateKbps)kbps"
+                            return "\(job.displayAudioCodec) · \(job.audioCodec.typicalBitrateKbps)kbps"
                         }
                     }()
                     // Save to history. `url` stays the ORIGINAL input path for
@@ -1974,7 +1735,7 @@ struct ConvertView: View {
                     let e = HistoryEntry(
                         title: output.deletingPathExtension().lastPathComponent,
                         url: job.inputURL.path,
-                        format: job.effectiveOutputFormat.rawValue,  // use output format, not audio codec
+                        format: job.outputFormat.rawValue,  // use output format, not audio codec
                         quality: qualityDescriptor,
                         outputDir: dir.path,
                         fileSize: outputSizeString,
@@ -1984,7 +1745,7 @@ struct ConvertView: View {
                         thumbnailURL: "",
                         entryType: "conversion",
                         outputFilePath: success ? output.path : job.inputURL.path,
-                        audioCodecLabel: job.effectiveMediaMode != .videoOnly ? job.effectiveAudioCodec.rawValue : ""
+                        audioCodecLabel: job.mediaMode != .videoOnly ? job.displayAudioCodec : ""
                     )
                     self.history.add(e)
                     if success {
@@ -2000,6 +1761,7 @@ struct ConvertView: View {
                 DispatchQueue.main.async {
                     guard job.status != .cancelled else { return }
                     job.status = .failed
+                    self.selectionVersion += 1
                     job.progress = error.localizedDescription
                     self.manager.appendLog("Convert: ERROR — \(job.inputURL.lastPathComponent): \(error.localizedDescription)")
                     var e = HistoryEntry(
@@ -2007,7 +1769,7 @@ struct ConvertView: View {
                         url: job.inputURL.path,
                         format: job.audioCodec.rawValue,
                         quality: "",
-                        outputDir: job.inputURL.deletingLastPathComponent().path,
+                        outputDir: dir.path,
                         fileSize: nil,
                         failed: true,
                         errorMessage: error.localizedDescription
@@ -2020,39 +1782,181 @@ struct ConvertView: View {
     }
 }
 
-
-// MARK: - ConvertPreviewCard
-//
-// Switch between PreviewCard (queued) and CompletedCard (active/done/failed).
-
-struct ConvertPreviewCard: View {
+/// One Convert Queue row: position badge + the compact card, with its own
+/// vertical-only drag-to-reorder handle. A real View struct (not a
+/// @ViewBuilder function) specifically so its drag state and gesture
+/// recognizer have stable identity across `queue` reorders -- when this used
+/// to be a function called fresh from a ForEach on every array mutation, the
+/// mid-drag `queue.swapAt` inside onChanged caused the enclosing view (and
+/// therefore the DragGesture recognizer) to be rebuilt while the mouse
+/// button was still down, which SwiftUI read as a new, disconnected gesture
+/// and made the row jump/jitter. Keeping the gesture on a persistent struct
+/// (matched across reorders by ForEach's `id: \.element.id`) fixes that.
+private struct QueueRowView: View {
     @ObservedObject var job: ConvertJob
-    var onRemove: () -> Void
-    /// True while Batch Apply mode is active — hides the checkbox-less normal
-    /// state and instead shows the checkbox while collapsing per-card settings,
-    /// since all editing happens via the bottom bar's batch controls.
-    var isBatchMode: Bool = false
-    /// Called right after the checkbox toggles `job.isSelected`, so the parent
-    /// `ConvertView` (a sibling, not an observer of this specific job) can bump
-    /// its own state and re-render the batch controls' count/enabled state.
-    var onSelectionChange: () -> Void = {}
+    /// This row's stable position in `queue` as of the last render -- used
+    /// (not `position`, which is just the display label) to work out which
+    /// OTHER rows need to visually shift out of the way while a different
+    /// row is being dragged past them.
+    let index: Int
+    let position: Int
+    @Binding var queue: [ConvertJob]
+    let config: Config
+    let queueRowStride: CGFloat
+    /// Shared across every row in the queue (lives on ConvertView, not
+    /// here) so a row that ISN'T being dragged can still react to one that
+    /// is -- see queueDrawer's comment for why this replaced row-local
+    /// @State entirely.
+    @Binding var draggingJobID: ConvertJob.ID?
+    @Binding var dragTranslation: CGFloat
+    let onSelectionChange: () -> Void
+    let onEditRequested: (() -> Void)?
 
-    /// Collapses the settings sections (CONVERT AS → AUDIO CODEC) down to just
-    /// the header + output folder + Convert button. Lives on `job.isExpanded`
-    /// (not local @State) so the header's "collapse all" toggle can drive every
-    /// card in lockstep — still transient UI state, never persisted.
-    private var isExpanded: Binding<Bool> {
-        Binding(
-            get: { job.isExpanded },
-            set: { job.isExpanded = $0; onSelectionChange() }
+    private var isBeingDragged: Bool { draggingJobID == job.id }
+
+    private var draggedIndex: Int? {
+        guard let draggingJobID else { return nil }
+        return queue.firstIndex(where: { $0.id == draggingJobID })
+    }
+
+    /// Where the dragged row would land if dropped right now, clamped to
+    /// the queue's bounds. Purely a display computation during the
+    /// gesture -- `queue` itself isn't reordered until onEnded commits it.
+    private var proposedIndex: Int? {
+        guard let draggedIndex else { return nil }
+        let delta = Int((dragTranslation / queueRowStride).rounded())
+        return max(0, min(queue.count - 1, draggedIndex + delta))
+    }
+
+    /// Non-dragged rows shift by one row's height, in whichever direction
+    /// makes room for the dragged row at its proposed slot -- the same
+    /// "placeholder gap" visual every reorderable list uses, computed live
+    /// instead of by actually mutating the array on every row crossing
+    /// (mutating + animating the array mid-gesture, the previous approach,
+    /// is what produced the reported jump/stutter: each crossing restarted
+    /// a spring re-layout of the whole list while the pointer kept moving).
+    private var displacement: CGFloat {
+        guard !isBeingDragged, let draggedIndex, let proposedIndex, draggedIndex != proposedIndex else { return 0 }
+        if draggedIndex < proposedIndex {
+            return (index > draggedIndex && index <= proposedIndex) ? -queueRowStride : 0
+        } else {
+            return (index >= proposedIndex && index < draggedIndex) ? queueRowStride : 0
+        }
+    }
+
+    private var dragHandle: AnyView {
+        AnyView(
+            Image(systemName: "line.3.horizontal")
+                .font(.appMono(size: 12))
+                .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 4, coordinateSpace: .local)
+                        .onChanged { value in
+                            draggingJobID = job.id
+                            dragTranslation = value.translation.height
+                        }
+                        .onEnded { _ in
+                            // Commit exactly once, here -- not per row
+                            // crossing. If the proposed slot differs from
+                            // where this row actually started, move it
+                            // there; either way, clearing the drag state in
+                            // the SAME (non-animated) transaction as the
+                            // reorder means this row's natural post-reorder
+                            // position and the offset being removed land at
+                            // the same place at once, so nothing visibly
+                            // jumps.
+                            if let draggedIndex, let proposedIndex, draggedIndex != proposedIndex {
+                                let moved = queue.remove(at: draggedIndex)
+                                queue.insert(moved, at: proposedIndex)
+                            }
+                            draggingJobID = nil
+                            dragTranslation = 0
+                        }
+                )
         )
     }
 
     var body: some View {
-        if job.status == .queued {
-            convertSettingsCard
-        } else {
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(position)")
+                .font(.appMono(size: 11, weight: .bold))
+                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                .frame(width: 18, alignment: .center)
+                .padding(.top, 14)
+            ConvertPreviewCard(
+                job: job,
+                config: config,
+                onRemove: {
+                    if job.status == .converting { job.cancel() }
+                    withAnimation(.spring(response: 0.3)) { queue.removeAll { $0.id == job.id } }
+                },
+                isQueueRow: true,
+                onSelectionChange: onSelectionChange,
+                onEditRequested: onEditRequested,
+                leadingAccessory: dragHandle
+            )
+            // Highlights the row actually being interacted with, so it's
+            // visually obvious which one is under the cursor while
+            // everything else shifts around it.
+            .overlay(
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
+                    .stroke(DesignTokens.Accent.primary.opacity(isBeingDragged ? 0.8 : 0), lineWidth: 1.5)
+            )
+            .shadow(color: .black.opacity(isBeingDragged ? 0.35 : 0), radius: 12, y: 6)
+        }
+        // Vertical-only: no x offset, so the row can never drift outside its
+        // own column the way a freely-draggable "image" would. The dragged
+        // row tracks the raw translation directly (continuous, no
+        // animation -- it should feel glued to the cursor); displaced rows
+        // animate into their shifted slot since they're reacting, not
+        // being driven directly.
+        .offset(y: isBeingDragged ? dragTranslation : displacement)
+        .animation(isBeingDragged ? nil : .spring(response: 0.25, dampingFraction: 0.85), value: displacement)
+        .zIndex(isBeingDragged ? 1 : 0)
+    }
+}
+
+// MARK: - ConvertPreviewCard
+//
+// Switch between PreviewCard (Analyze) and CompletedCard (queue row, any status).
+
+struct ConvertPreviewCard: View {
+    @ObservedObject var job: ConvertJob
+    /// Shared SAVE TO destination -- output folder now lives in the bottom
+    /// bar (one folder for every job, matching Download's tab) instead of a
+    /// per-card field, so this card only needs it for the completed-card's
+    /// fallback path construction below.
+    let config: Config
+    var onRemove: () -> Void
+    /// True when this card is rendering as a row in the Convert Queue drawer
+    /// (compact summary, checkbox always visible, no editable settings —
+    /// editing happens by pulling the job back to the Analyze panel). False
+    /// when rendering as the single file being configured in Analyze (full
+    /// settings, no checkbox). This is a fixed rendering context per call
+    /// site, not a toggleable mode.
+    var isQueueRow: Bool = false
+    /// Called right after the checkbox toggles `job.isSelected`, so the parent
+    /// `ConvertView` (a sibling, not an observer of this specific job) can bump
+    /// its own state and re-render the queue drawer's count/enabled state.
+    var onSelectionChange: () -> Void = {}
+    /// Pulls this job out of the Convert Queue and back into the Analyze
+    /// panel for editing. Only ever passed (non-nil) for queue rows whose
+    /// status allows it (queued/failed/cancelled) — nil hides the Edit button.
+    var onEditRequested: (() -> Void)? = nil
+    /// Queue rows' drag handle, built by the caller (ConvertView's queueRow)
+    /// since the actual drag gesture/reorder state lives there, not here --
+    /// this view just places whatever's given next to the checkbox.
+    var leadingAccessory: AnyView? = nil
+
+    var body: some View {
+        if isQueueRow {
+            // Every status (including queued-but-not-started) renders as the
+            // same compact summary in the drawer -- settings are never edited
+            // in place there, only via Edit -> back to Analyze.
             convertCompletedCard
+        } else {
+            convertSettingsCard
         }
     }
 
@@ -2062,19 +1966,32 @@ struct ConvertPreviewCard: View {
     /// own thumbnail (see downloadPreviewCard's thumbView) -- always
     /// returns a real view instead of nil while job.thumbnail is still
     /// nil, so the shell's own generic placeholder glyph never shows;
-    /// QuickLook's async generation (see fetchThumbnail) is the local
-    /// equivalent of Download's AsyncImage load.
+    /// QuickLook's async generation (see generateThumbnail) is the local
+    /// equivalent of Download's AsyncImage load. Audio-only files show the
+    /// waveform symbol immediately rather than waiting on QuickLook (a
+    /// generic result there is rarely worth the wait); video files show a
+    /// loading skeleton until QuickLook genuinely finishes, then either the
+    /// real frame or a plain video symbol if it came back empty.
     private var thumbView: AnyView {
         AnyView(
             ZStack {
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                    .fill(Color.clear)
-                    .overlay(ThumbnailSkeleton().clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)))
+                    .fill(Color.white.opacity(DesignTokens.Interactive.fillRest))
                 if let img = job.thumbnail {
                     Image(nsImage: img)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .transition(.fadeInOnly)
+                } else if !job.isVideoFile {
+                    Image(systemName: "waveform")
+                        .font(.appMono(size: 18))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                } else if job.thumbnailFailed {
+                    Image(systemName: "video")
+                        .font(.appMono(size: 18))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                } else {
+                    ThumbnailSkeleton().clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
                 }
             }
             .frame(width: 80, height: 52)
@@ -2108,11 +2025,11 @@ struct ConvertPreviewCard: View {
         )
     }
 
-    /// Always-visible CONVERT AS mode toggle -- same visual language as
-    /// Download's modeRow (Video+Audio/Audio Only), just with the extra
-    /// Video Only case Convert supports. Lives below the header, outside
-    /// the thumbnail-centered group, so switching modes never touches the
-    /// input side of subtitleView above.
+    /// CONVERT AS mode toggle -- same visual language as Download's modeRow
+    /// (Video+Audio/Audio Only), just with the extra Video Only case Convert
+    /// supports. Lives below the header, outside the thumbnail-centered
+    /// group, so switching modes never touches the input side of
+    /// subtitleView above.
     private var modeRow: AnyView {
         AnyView(
             HStack(spacing: 6) {
@@ -2120,7 +2037,6 @@ struct ConvertPreviewCard: View {
                     CompactModeChip(label: mode.label, icon: mode.icon, isSelected: job.mediaMode == mode, tint: mode.chipTint) {
                         withAnimation(.spring(response: 0.25)) {
                             job.mediaMode = mode
-                            job.activePreset = nil
                             if !job.availableFormats.contains(job.outputFormat) {
                                 job.outputFormat = job.availableFormats.first ?? job.outputFormat
                             }
@@ -2132,19 +2048,19 @@ struct ConvertPreviewCard: View {
         )
     }
 
-    /// Below the header, full-width -- divider, then the mode toggle sharing
-    /// its line with the collapse toggle (trailing edge), matching Download's
-    /// belowHeaderRow exactly.
-    private func belowHeaderRow(isExpandedBinding: Binding<Bool>) -> AnyView {
+    /// OUTPUT FORMAT chip row -- last of the four sections now (see
+    /// convertSettingsCard), after the codec choices are settled.
+    private var formatRow: AnyView {
         AnyView(
-            VStack(alignment: .leading, spacing: 9) {
-                GlassDivider()
-                HStack(spacing: 6) {
-                    modeRow
-                    Spacer()
-                    if !isBatchMode {
-                        CollapseToggleButton(isExpanded: isExpandedBinding.wrappedValue) {
-                            withAnimation(.spring(response: 0.25)) { isExpandedBinding.wrappedValue.toggle() }
+            HStack(spacing: 6) {
+                ForEach(job.availableFormats) { fmt in
+                    SelectorChip(
+                        label: fmt.rawValue,
+                        isSelected: job.outputFormat == fmt
+                    ) {
+                        withAnimation(.spring(response: 0.25)) {
+                            job.outputFormat = fmt
+                            job.ensureCodecsValidForFormat()
                         }
                     }
                 }
@@ -2152,118 +2068,74 @@ struct ConvertPreviewCard: View {
         )
     }
 
-    // MARK: Settings card (queued)
+    /// Below the header, full-width -- divider, then CONVERT AS (conversion
+    /// type) on its own, ahead of everything else. This card is only ever
+    /// used in the Analyze panel now (one file, always fully shown), so
+    /// there's no collapse toggle to share the line with.
+    private var belowHeaderRow: AnyView {
+        AnyView(
+            VStack(alignment: .leading, spacing: 9) {
+                GlassDivider()
+                Label("CONVERT AS", systemImage: "switch.2")
+                    .font(.appMono(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                modeRow
+            }
+        )
+    }
+
+    // MARK: Settings card (Analyze panel)
 
     private var convertSettingsCard: some View {
         PreviewCard(
             isSelected: job.isSelected,
-            onToggleSelect: {
-                withAnimation(.spring(response: 0.2)) {
-                    job.isSelected.toggle()
-                    // Checking a job in Select Mode seeds its Batch Apply
-                    // override with Resolve Import Fix pre-highlighted, without
-                    // touching this card's own settings. Unchecking clears it,
-                    // so a job that's checked again later starts blank, not
-                    // carrying over a choice from its last time being checked.
-                    if job.isSelected {
-                        job.seedBatchOverrideIfNeeded()
-                    } else {
-                        job.clearBatchOverride()
-                    }
-                }
-                onSelectionChange()
-            },
+            onToggleSelect: {},
             onRemove: onRemove,
-            showCheckbox: isBatchMode,
+            showCheckbox: false,
             thumbnail: thumbView,
             thumbnailPlaceholder: job.isVideoFile ? "video" : "waveform",
             title: job.inputURL.deletingPathExtension().lastPathComponent,
-            subtitle: subtitleView, // path + input->output chip row -- always visible, even collapsed
-            belowHeader: isBatchMode ? nil : belowHeaderRow(isExpandedBinding: isExpanded), // divider + CONVERT AS mode toggle + collapse button -- outside the thumbnail-centered group
-            isExpanded: isBatchMode ? .constant(false) : isExpanded,
-            collapseLocked: isBatchMode,
-            // Collapse button now lives inside belowHeaderRow, on the same
-            // line as the mode toggle, matching Download exactly. In Batch
-            // Select mode there's no belowHeaderRow (mode editing moves to
-            // the shared batch controls), so the header keeps its own button.
-            collapseButtonInHeader: isBatchMode
+            subtitle: subtitleView, // path + input->output chip row
+            belowHeader: belowHeaderRow // divider + CONVERT AS mode toggle, ahead of everything else
         ) {
-            // One outer VStack, no dividers between sections -- matches
-            // Download's settings body exactly (Drop.swift's downloadPreviewCard
-            // VIDEO/AUDIO sections), just with more sections stacked since
-            // Convert has more independent choices to offer than Download does.
+            // Four sections, each with its own label, top to bottom:
+            // CONVERT AS (above, in belowHeaderRow) -> VIDEO CODEC ->
+            // AUDIO CODEC -> OUTPUT FORMAT. OUTPUT FOLDER lives in the
+            // bottom bar (shared across every job), not here.
             VStack(alignment: .leading, spacing: 11) {
-                // PRESETS — one-tap format/codec combinations, filtered by the
-                // mode selected in the always-visible belowHeaderRow (CONVERT AS)
-                // so switching modes shows presets that actually apply (e.g.
-                // "Compatible Audio, No Video Re-encode" only appears when
-                // there's a video track to protect). Download has no equivalent
-                // section, so no legend row here.
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("PRESETS", systemImage: "wand.and.stars")
-                        .font(.appMono(size: 10, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    HStack(spacing: 8) {
-                        ForEach(ConvertPreset.options(for: job.mediaMode)) { preset in
-                            SelectorChip(
-                                label: preset.shortLabel,
-                                note: preset.note,
-                                isSelected: job.activePreset == preset
-                            ) {
-                                withAnimation(.spring(response: 0.25)) {
-                                    job.applyPreset(preset)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // OUTPUT FORMAT (filtered by mode)
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Label("OUTPUT FORMAT", systemImage: "doc.badge.arrow.up")
-                            .font(.appMono(size: 10, weight: .semibold))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        Spacer()
-                        nativeLegend()
-                    }
-                    HStack(spacing: 8) {
-                        ForEach(job.availableFormats) { fmt in
-                            SelectorChip(
-                                label: fmt.rawValue,
-                                isSelected: job.outputFormat == fmt,
-                                nativeBadge: fmt.matchesSource(job.inputURL.pathExtension) ? true : nil
-                            ) {
-                                withAnimation(.spring(response: 0.25)) {
-                                    job.outputFormat = fmt
-                                    job.activePreset = nil
-                                    job.ensureCodecsValidForFormat()
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // VIDEO CODEC (video mode only)
+                // VIDEO CODEC — "Same as Source" is a chip alongside the real
+                // codec choices rather than a separate checkbox: selecting it
+                // stream-copies the source video untouched; selecting any other
+                // chip transcodes with that codec. Lets you change only the
+                // audio (or only the video) on a clip without touching the
+                // other track.
                 if job.mediaMode.isVideo {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
+                        HStack(spacing: 8) {
                             Label("VIDEO CODEC", systemImage: "video")
                                 .font(.appMono(size: 10, weight: .semibold))
                                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                            Spacer()
-                            nativeLegend()
+                            if let source = job.videoSourceLabel {
+                                Spacer()
+                                Text("Original: \(source)")
+                                    .font(.appMono(size: 10))
+                                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                            }
                         }
                         HStack(spacing: 8) {
+                            SelectorChip(label: "Same as Source", isSelected: !job.transcodeVideo) {
+                                withAnimation(.spring(response: 0.25)) {
+                                    job.transcodeVideo = false
+                                }
+                            }
                             ForEach(job.availableVideoCodecs) { codec in
                                 SelectorChip(
                                     label: codec.rawValue,
-                                    isSelected: job.videoCodec == codec,
-                                    nativeBadge: codec.matchesSource(job.mediaInfo?.videoCodec) ? true : nil
+                                    isSelected: job.transcodeVideo && job.videoCodec == codec
                                 ) {
                                     withAnimation(.spring(response: 0.25)) {
                                         job.videoCodec = codec
-                                        job.activePreset = nil
+                                        job.transcodeVideo = true
                                     }
                                 }
                             }
@@ -2271,28 +2143,43 @@ struct ConvertPreviewCard: View {
                     }
                 }
 
-                // AUDIO CODEC (hidden for video-only mode, and hidden when the output
-                // format only has one possible audio codec — e.g. MP3/FLAC are self-contained,
-                // so there's no real choice to present)
-                if job.mediaMode != .videoOnly && job.availableAudioCodecs.count > 1 {
+                // AUDIO CODEC — same shape as VIDEO CODEC above. Hidden
+                // entirely for video-only mode (no audio track in the
+                // output at all).
+                if job.mediaMode != .videoOnly {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
+                        HStack(spacing: 8) {
                             Label("AUDIO CODEC", systemImage: "waveform")
                                 .font(.appMono(size: 10, weight: .semibold))
                                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                            Spacer()
-                            nativeLegend()
+                            if let source = job.audioSourceLabel {
+                                Spacer()
+                                Text("Original: \(source)")
+                                    .font(.appMono(size: 10))
+                                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                            }
                         }
                         HStack(spacing: 8) {
-                            ForEach(job.availableAudioCodecs) { codec in
-                                SelectorChip(
-                                    label: codec.rawValue,
-                                    isSelected: job.audioCodec == codec,
-                                    nativeBadge: codec.matchesSource(job.mediaInfo?.audioCodec) ? true : nil
-                                ) {
-                                    withAnimation(.spring(response: 0.25)) {
-                                        job.audioCodec = codec
-                                        job.activePreset = nil
+                            SelectorChip(label: "Same as Source", isSelected: !job.transcodeAudio) {
+                                withAnimation(.spring(response: 0.25)) {
+                                    job.transcodeAudio = false
+                                }
+                            }
+                            // Real codec chips hidden when the output format only has
+                            // one possible audio codec (e.g. MP3/FLAC are self-contained
+                            // — codec == container, so there's no real choice besides
+                            // Same as Source vs. that one codec, and picking the format
+                            // above already implies the latter).
+                            if job.availableAudioCodecs.count > 1 {
+                                ForEach(job.availableAudioCodecs) { codec in
+                                    SelectorChip(
+                                        label: codec.rawValue,
+                                        isSelected: job.transcodeAudio && job.audioCodec == codec
+                                    ) {
+                                        withAnimation(.spring(response: 0.25)) {
+                                            job.audioCodec = codec
+                                            job.transcodeAudio = true
+                                        }
                                     }
                                 }
                             }
@@ -2300,37 +2187,13 @@ struct ConvertPreviewCard: View {
                     }
                 }
 
-                // OUTPUT FOLDER
+                // OUTPUT FORMAT — last section, after both codec choices are
+                // settled.
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Label("OUTPUT FOLDER", systemImage: "folder")
-                            .font(.appMono(size: 10, weight: .semibold))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        if let sizeLabel = job.estimatedOutputSizeLabel {
-                            Spacer()
-                            HistoryChip(label: "", value: sizeLabel, color: .white, icon: "internaldrive")
-                        }
-                    }
-                    HStack(spacing: 8) {
-                        Image(systemName: "folder.fill")
-                            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                            .font(.appMono(size: 12))
-                        Text(job.outputDir?.path ?? job.inputURL.deletingLastPathComponent().path)
-                            .font(.appMono(size: 12))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                        GlassButton(label: "Browse...", icon: "folder.badge.plus", tint: DesignTokens.Accent.primary) {
-                            pickOutputFolder()
-                        }
-                        .frame(width: 120)
-                    }
-                    .padding(8)
-                    .background(Color.white.opacity(DesignTokens.Field.fillRest))
-                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Field.cornerRadius, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: DesignTokens.Field.cornerRadius, style: .continuous)
-                        .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: DesignTokens.Field.borderWidth))
+                    Label("OUTPUT FORMAT", systemImage: "doc.badge.arrow.up")
+                        .font(.appMono(size: 10, weight: .semibold))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                    formatRow
                 }
             }
         }
@@ -2347,9 +2210,9 @@ struct ConvertPreviewCard: View {
     /// in the actions row (see `statusView` below), not in this row.
     private var outputLayer: AnyView {
         let outPath = job.outputURL?.path ?? {
-            let dir = job.outputDir?.path ?? job.inputURL.deletingLastPathComponent().path
+            let dir = config.convertOutputDir
             let name = job.inputURL.deletingPathExtension().lastPathComponent
-            return (dir as NSString).appendingPathComponent("\(name).\(job.effectiveOutputFormat.fileExtension)")
+            return (dir as NSString).appendingPathComponent("\(name).\(job.outputFormat.fileExtension)")
         }()
 
         var chips: [ChipData] = []
@@ -2404,20 +2267,20 @@ struct ConvertPreviewCard: View {
             chips.append(ChipData(label: "", value: sizeValue, color: .white, icon: "internaldrive"))
         }
 
-        // Blue: format + video codec + resolution. Resolution is unchanged
-        // by conversion (Convert never resizes), so it carries over from
-        // the source media info, matching the input row's video chip.
-        if job.effectiveMediaMode.isVideo {
-            let parts = [job.effectiveOutputFormat.rawValue.uppercased(), job.effectiveVideoCodec.rawValue, job.mediaInfo?.resolution]
-                .compactMap { $0 }
-            chips.append(ChipData(label: "", value: parts.joined(separator: " \u{b7} "), color: .blue, icon: "video"))
+        // Blue: format, codec, framerate, resolution. Framerate and resolution
+        // are unchanged by conversion (Convert never retimes or resizes), so
+        // they carry over from the source media info, matching the input row's
+        // video chip.
+        if job.mediaMode.isVideo {
+            let parts: [String?] = [job.outputFormat.rawValue.uppercased(), job.displayVideoCodec, job.mediaInfo?.videoFrameRateLabel, job.mediaInfo?.resolution]
+            chips.append(ChipData(label: "", value: parts.compactMap { $0 }.joined(separator: " \u{b7} "), color: .blue, icon: "video"))
         }
 
-        // Green: audio codec + channels. Channels are unchanged by
+        // Green: codec, channels, bitrate. Channels are unchanged by
         // conversion (Convert never remixes), so they carry over from the
         // source media info, matching the input row's audio chip.
-        if job.effectiveMediaMode != .videoOnly {
-            let parts = [job.effectiveAudioCodec.rawValue, job.mediaInfo?.audioChannelLabel].compactMap { $0 }
+        if job.mediaMode != .videoOnly {
+            let parts = [job.displayAudioCodec, job.mediaInfo?.audioChannelLabel, job.displayAudioBitrateLabel].compactMap { $0 }
             chips.append(ChipData(label: "", value: parts.joined(separator: " \u{b7} "), color: .green, icon: "waveform"))
         }
 
@@ -2441,9 +2304,14 @@ struct ConvertPreviewCard: View {
     }
 
     /// Status icon + pill — lives in the actions row, to the left of the
-    /// Reveal/Reconvert/Retry buttons, not in the header subtitle.
+    /// Reveal/Reconvert/Retry buttons, not in the header subtitle. Nothing
+    /// shown for `.queued` -- sitting in the Convert Queue already says that,
+    /// so a redundant "Queued" pill on every row was just noise.
     private var statusView: AnyView {
-        AnyView(
+        if job.status == .queued {
+            return AnyView(EmptyView())
+        }
+        return AnyView(
             HStack(spacing: 6) {
                 Group {
                     switch job.status {
@@ -2454,7 +2322,7 @@ struct ConvertPreviewCard: View {
                     case .converting:
                         Image(systemName: "arrow.triangle.2.circlepath").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
                     case .queued:
-                        Image(systemName: "clock").foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                        EmptyView()
                     case .cancelled:
                         Image(systemName: "slash.circle.fill").foregroundColor(.orange)
                     }
@@ -2465,26 +2333,33 @@ struct ConvertPreviewCard: View {
         )
     }
 
-    /// Shared shape for Reconvert (done/cancelled) and Retry (failed) --
-    /// same requeue logic, only the label/tint differ, mirroring Download's
-    /// own restoreActionButton for the same three-status pattern.
-    @ViewBuilder
-    private func requeueButton(label: String, tint: Color) -> some View {
-        GlassButton(label: label, icon: "arrow.uturn.down", tint: tint, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
-            withAnimation(.spring(response: 0.25)) {
-                job.status = .queued
-                job.progress = "Queued"
-                job.progressFraction = nil
-                job.etaText = ""
-                job.outputURL = nil
-            }
-            // Requeuing mutates job.status on a class instance behind the
-            // parent's [ConvertJob] @Binding — that alone doesn't trigger the
-            // parent to recompute hasQueuedJobs/hasSelectedQueued, so the
-            // bottom Convert button would stay hidden. Force it.
-            onSelectionChange()
-        }
+    /// Queue-row-only subtitle: just the output format/codec chips, no input
+    /// side and no file paths -- condenses each row down to "what this will
+    /// become," since the full input->output comparison (outputLayer) is
+    /// still there in Analyze where settings are actually being decided.
+    private var queueRowSubtitle: AnyView {
+        AnyView(ChipRow(chips: job.outputChips))
     }
+
+    /// Edit control -- pulls this job back to the Analyze panel for
+    /// reconfiguring. Rendered by CompletedCard directly beneath the remove
+    /// (x) button rather than down in the actions row, so it never sits in
+    /// its own divided section. Only offered for statuses where editing
+    /// makes sense: not yet started, or didn't finish.
+    private var editAccessory: AnyView? {
+        guard let onEditRequested, job.status == .queued || job.status == .failed || job.status == .cancelled else { return nil }
+        return AnyView(
+            HoverIconButton(icon: "slider.horizontal.3", size: 15, help: "Edit", label: "Edit") {
+                onEditRequested()
+            }
+        )
+    }
+
+    /// Only .converting/.done/.cancelled/.failed put anything in the actions
+    /// row below (buttons, progress bar, error text) now that Edit lives up
+    /// in the header next to Remove -- a freshly-queued job with none of
+    /// those would otherwise show a divider over empty space.
+    private var hasCompletedCardStatusContent: Bool { job.status != .queued }
 
     private var convertCompletedCard: some View {
         CompletedCard(
@@ -2492,50 +2367,38 @@ struct ConvertPreviewCard: View {
             onToggleSelect: {
                 withAnimation(.spring(response: 0.2)) {
                     job.isSelected.toggle()
-                    if job.isSelected {
-                        job.seedBatchOverrideIfNeeded()
-                    } else {
-                        job.clearBatchOverride()
-                    }
                 }
                 onSelectionChange()
             },
             onRemove: onRemove,
-            showCheckbox: isBatchMode,
+            showCheckbox: isQueueRow,
+            leadingAccessory: leadingAccessory,
+            trailingAccessory: editAccessory,
             thumbnail: thumbView,
             thumbnailPlaceholder: job.isVideoFile ? "video" : "waveform",
             title: job.inputURL.deletingPathExtension().lastPathComponent,
-            subtitle: outputLayer
+            subtitle: isQueueRow ? queueRowSubtitle : outputLayer,
+            hasStatusContent: hasCompletedCardStatusContent
         ) {
             // Actions row — buttons stretch to fill the full card width (each
             // GlassButton defaults to maxWidth: .infinity), so this HStack
             // itself must also claim the full width. A leading Spacer() here
             // previously ate the extra space and left a gap on the left with
             // the buttons hugging the right edge instead of spanning the card.
+            // Per-row action buttons (Reveal in Finder, Reconvert, Retry,
+            // per-row Cancel) are gone -- Cancel is now global (the bottom
+            // bar's primary button becomes "Cancel All" while anything is
+            // converting), Reveal in Finder is now a single always-on
+            // control pointed at the SAVE TO directory (see
+            // batchDirectoryField), and Reconvert/Retry both have the same
+            // effect Edit already provides (pull back to Analyze, then Add
+            // to Queue again) so a dedicated one-click button was
+            // redundant. Every non-queued row still gets `statusView`'s
+            // icon+pill (Converting/Done/Failed/Cancelled) so nothing goes
+            // fully silent -- that's just an indicator, not a control.
             HStack(spacing: 10) {
                     statusView
-                    if job.status == .done, let out = job.outputURL {
-                        GlassButton(label: "Reveal in Finder", icon: "folder.fill", tint: DesignTokens.Accent.primary, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
-                            NSWorkspace.shared.activateFileViewerSelecting([out])
-                        }
-                        requeueButton(label: "Reconvert", tint: DesignTokens.Accent.warning)
-                    }
-                    // Split into two branches (not `.failed || .cancelled` in one),
-                    // and same icon/tint mapping as Download's cancelled->amber
-                    // Redownload / error->red Retry -- matches its semantic
-                    // meaning (amber = "you stopped it", red = "it broke") instead
-                    // of treating a deliberate cancel the same as a real failure.
-                    if job.status == .cancelled {
-                        requeueButton(label: "Reconvert", tint: DesignTokens.Accent.warning)
-                    }
-                    if job.status == .failed {
-                        requeueButton(label: "Retry", tint: DesignTokens.Accent.danger)
-                    }
-                    if job.status == .converting {
-                        GlassButton(label: "Cancel", icon: "stop.fill", tint: .red, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
-                            job.cancel()
-                        }
-                    }
+                    Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity)
 
@@ -2616,15 +2479,4 @@ struct ConvertPreviewCard: View {
         }
     }
 
-    private func pickOutputFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Select Folder"
-        if panel.runModal() == .OK {
-            job.outputDir = panel.url
-        }
-    }
 }

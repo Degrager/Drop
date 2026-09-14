@@ -3769,6 +3769,7 @@ struct CheckForUpdatesButton: View {
             verticalPadding: 8,
             isLoading: isChecking,
             disabled: isDisabled,
+            showRimBeam: isChecking,
             action: action
         )
         .help(disabledUntilSetup ? "Bundled yt-dlp/ffmpeg missing — reinstall Drop" : "")
@@ -4817,6 +4818,7 @@ struct ContentView: View {
                     primaryActionEnabled: !linkPreviews.contains(where: { $0.isPending }),
                     primaryActionDisabledLabel: linkPreviews.contains(where: { $0.isPending }) ? "Analyzing…" : nil,
                     primaryActionDisabledIcon: linkPreviews.contains(where: { $0.isPending }) ? "hourglass" : nil,
+                    primaryActionInProgress: manager.downloads.contains { $0.status == .downloading },
                     primaryActionLabel: downloadButton_label,
                     primaryActionIcon: "arrow.down.circle",
                     onClearAll: {},
@@ -7099,6 +7101,15 @@ struct GlassButton: View {
     // Passthrough to GlassInteractive -- see its declaration for details.
     var embeddedGlowStroke: Bool = false
     var scaleOverride: (hover: CGFloat, press: CGFloat)? = nil
+    // Same Tron-style traveling light beam used on the Analyze card's rim
+    // (see GlassCard.isActive/RimBeam) -- reserved for a button that
+    // represents real work actively in progress (checking for updates,
+    // converting, downloading), not a resting decoration. cornerRadius is
+    // passed a large constant below since this button's shape is a
+    // capsule, not a fixed-radius rounded rect -- RimBeam's own rim math
+    // already clamps radius to min(width, height)/2, so any sufficiently
+    // large value traces a true capsule regardless of this button's size.
+    var showRimBeam: Bool = false
     let action: () -> Void
 
     var body: some View {
@@ -7125,6 +7136,11 @@ struct GlassButton: View {
             .frame(maxWidth: fitContent ? nil : .infinity)
             .padding(.horizontal, horizontalPadding).padding(.vertical, verticalPadding)
             .frame(maxHeight: fillHeight ? .infinity : nil)
+        }
+        .overlay {
+            if showRimBeam {
+                RimBeam(cornerRadius: 999)
+            }
         }
     }
 }

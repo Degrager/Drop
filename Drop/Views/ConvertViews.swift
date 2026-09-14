@@ -2361,10 +2361,13 @@ struct ConvertPreviewCard: View {
         let lengthValue = job.mediaInfo?.durationSeconds.flatMap { formatDurationChip(seconds: Int($0)) }
             ?? job.mediaInfo?.duration
         let sizeValue: String? = {
-            guard job.status == .done else {
-                DropLogger.shared.write("Convert size chip: skipped, status=\(job.status)")
-                return nil
-            }
+            // Bail out before any logging while still converting -- this
+            // closure re-runs on every body pass (i.e. every progress tick,
+            // many times per second during an active conversion), and "not
+            // done yet" isn't a failure worth a disk write each time. The
+            // logging below is for genuinely unexpected failures once
+            // status actually is .done, which only happens once per job.
+            guard job.status == .done else { return nil }
             guard let out = job.outputURL else {
                 DropLogger.shared.write("Convert size chip: outputURL is nil")
                 return nil

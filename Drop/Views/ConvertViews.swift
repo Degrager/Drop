@@ -1361,16 +1361,36 @@ struct ConvertView: View {
                                 // spacing) so queueRowStride always matches
                                 // reality instead of a hand-tuned guess.
                                 // Every row reports this, not just the
-                                // first -- harmless (rows are visually
-                                // uniform, and onChange only re-renders on
-                                // an actual value change) and means a
-                                // future change to any row's content still
-                                // keeps this in sync automatically.
+                                // first -- harmless the rest of the time
+                                // (rows are visually uniform, and onChange
+                                // only fires on an actual value change).
+                                //
+                                // Frozen while a drag is in progress
+                                // (draggingJobID != nil), though: this used
+                                // to update live throughout, and any
+                                // sub-pixel geometry jitter from the drag's
+                                // own continuous re-layout (offsets/zIndex
+                                // changing many times a second as the mouse
+                                // moves) fed straight back into
+                                // queueRowStride -- which proposedIndex and
+                                // displacement both multiply by -- producing
+                                // a fast visible "magnetized" wobble on
+                                // every row the instant the drag actually
+                                // moved, even though it was perfectly still
+                                // while just holding a row in place. Locking
+                                // the value for the gesture's duration
+                                // removes that feedback loop entirely; it
+                                // still stays live the rest of the time (a
+                                // resize, a font change, queue content
+                                // changing) since nothing is dragging then.
                                 .background(
                                     GeometryReader { geo in
                                         Color.clear
                                             .onAppear { queueRowStride = geo.size.height + 6 }
-                                            .onChange(of: geo.size.height) { _, h in queueRowStride = h + 6 }
+                                            .onChange(of: geo.size.height) { _, h in
+                                                guard draggingJobID == nil else { return }
+                                                queueRowStride = h + 6
+                                            }
                                     }
                                 )
                             }

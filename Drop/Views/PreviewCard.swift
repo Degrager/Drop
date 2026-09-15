@@ -303,14 +303,16 @@ struct PreviewCard<Settings: View>: View {
                     }
                 }
 
-                // Destructive action -- red tint so its intent is unambiguous at
-                // a glance, matching SkeletonCancelButton's cancel treatment,
-                // instead of blending in with neutral chrome controls.
+                // Quiet by default (matching the rest of this card's chrome
+                // controls) rather than a permanent bright-red X -- a
+                // constantly-on red "danger" tint for a plain single-item
+                // removal (not a bulk/irreversible action) read as visually
+                // loud, especially with several cards on screen at once.
                 // Only expandable when CollapseToggleButton isn't also
                 // showing right beside it -- that one already has its own
                 // permanent text label, and this one's hover caption would
                 // render right on top of it otherwise.
-                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: !(collapseButtonInHeader && isExpanded != nil && !collapseLocked)) {
+                HoverIconButton(icon: "xmark.circle.fill", size: 16, help: "Remove", expandable: !(collapseButtonInHeader && isExpanded != nil && !collapseLocked)) {
                     onRemove()
                 }
             }
@@ -501,12 +503,12 @@ struct CompletedCard<Status: View>: View {
 
             Spacer()
 
-            // Destructive action -- same red treatment as PreviewCard's
-            // remove control, so "this deletes the item" reads identically
-            // everywhere in the app. trailingAccessory (e.g. Edit) stacks
-            // directly beneath it rather than living in its own row/section.
+            // Quiet by default -- same as PreviewCard's own remove control,
+            // see its comment for why this moved off a permanent red tint.
+            // trailingAccessory (e.g. Edit) stacks directly beneath it
+            // rather than living in its own row/section.
             VStack(spacing: 6) {
-                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: true) {
+                HoverIconButton(icon: "xmark.circle.fill", size: 16, help: "Remove", expandable: true) {
                     onRemove()
                 }
                 if let trailingAccessory { trailingAccessory }

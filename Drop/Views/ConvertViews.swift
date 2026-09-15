@@ -1297,15 +1297,18 @@ struct ConvertView: View {
 
     // MARK: - Convert Queue drawer (lives in the bottom bar, above SAVE TO)
 
-    /// Rough row height (card + spacing) used as the drag-swap threshold
-    /// below, and to derive the drawer's fixed viewport height -- doesn't
-    /// need to be exact, just close enough that crossing into a neighbor's
-    /// row triggers the swap around the same point the dragged row visually
-    /// reaches it. Lowered alongside the queue rows' own compact sizing
-    /// (smaller thumbnail/padding) -- kept matching the two, or the drag
-    /// threshold and the drawer's height both drift out of sync with what
-    /// a row actually measures.
-    private let queueRowStride: CGFloat = 76
+    /// Real row height (including the LazyVStack's own inter-row spacing),
+    /// measured live off the first rendered row rather than hardcoded --
+    /// used as the drag-swap threshold below, and to derive the drawer's
+    /// fixed viewport height. This used to be a hardcoded guess that had to
+    /// be manually re-tuned by hand every time the row's own content
+    /// changed height (exactly what motivated switching to a real
+    /// measurement: the row's leading drag-handle column has grown twice
+    /// now as arrows were added to it, and a stale guess here silently
+    /// desyncs the drag-swap point from where the row actually is on
+    /// screen). Starts at a reasonable fallback before the first row has
+    /// ever reported its real size.
+    @State private var queueRowStride: CGFloat = 76
 
     /// Fixed viewport height for the row list -- always this tall while
     /// expanded (about 2.5 rows), regardless of how many items are actually
@@ -1353,6 +1356,23 @@ struct ConvertView: View {
                                         ? { editFromQueue(job) } : nil
                                 )
                                 .id(job.id)
+                                // Measures the real on-screen stride (row
+                                // height + the LazyVStack's own 6pt
+                                // spacing) so queueRowStride always matches
+                                // reality instead of a hand-tuned guess.
+                                // Every row reports this, not just the
+                                // first -- harmless (rows are visually
+                                // uniform, and onChange only re-renders on
+                                // an actual value change) and means a
+                                // future change to any row's content still
+                                // keeps this in sync automatically.
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear
+                                            .onAppear { queueRowStride = geo.size.height + 6 }
+                                            .onChange(of: geo.size.height) { _, h in queueRowStride = h + 6 }
+                                    }
+                                )
                             }
                         }
                         .padding(.vertical, 2)
@@ -1907,39 +1927,31 @@ private struct QueueRowView: View {
         }
     }
 
-    /// Jump-to-top / jump-to-bottom, stacked above and below the drag icon --
-    /// a one-tap alternative to a drag for moving something far up or down a
-    /// long queue. Built as a plain Button rather than HoverIconButton,
-    /// which bakes in 6pt of padding around its icon regardless of `size` --
-    /// stacking two of those above/below the drag icon would have pushed
-    /// this whole column well past queueRowStride's hardcoded 76pt (see its
-    /// own comment on staying in sync with the row's real measured height),
-    /// so these stay deliberately tiny and tight instead. Re-looks-up this
-    /// row's real position via job.id rather than trusting `index` for the
-    /// actual mutation (index is only "as of the last render" -- fine for
-    /// the disabled check, not for a mutation that should always act on
-    /// where the row genuinely is right now).
-    private func queueJumpButton(icon: String, help: String, disabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.appMono(size: 7, weight: .bold))
-                .foregroundColor(.white.opacity(disabled ? DesignTokens.Text.disabled * 0.4 : DesignTokens.Text.disabled))
-                .frame(width: 22, height: 9)
-                .contentShape(Rectangle())
+    /// Moves this row one step up or down (a swap with its immediate
+    /// neighbor), re-looking-up its real position via job.id rather than
+    /// trusting `index` -- index is only "as of the last render," fine for
+    /// the disabled check on the buttons below, not for a mutation that
+    /// should always act on where the row genuinely is right now.
+    private func moveQueueItem(by delta: Int) {
+        guard let current = queue.firstIndex(where: { $0.id == job.id }) else { return }
+        let target = current + delta
+        guard queue.indices.contains(target) else { return }
+        withAnimation(.spring(response: 0.3)) {
+            queue.swapAt(current, target)
         }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .help(help)
     }
 
     private var dragHandle: AnyView {
         AnyView(
-            VStack(spacing: 1) {
-                queueJumpButton(icon: "chevron.up", help: "Move to top", disabled: index == 0) {
-                    guard let current = queue.firstIndex(where: { $0.id == job.id }), current != 0 else { return }
-                    withAnimation(.spring(response: 0.3)) {
-                        queue.insert(queue.remove(at: current), at: 0)
-                    }
+            VStack(spacing: 2) {
+                // Real circular HoverIconButtons (not a bare glyph) so
+                // they're actually visible at a glance, not just barely
+                // legible -- these plus the drag icon between them are why
+                // queueRowStride is now measured live instead of hardcoded
+                // (see its own comment): this column is genuinely taller
+                // than the single drag icon it replaced.
+                HoverIconButton(icon: "chevron.up", size: 9, disabled: index == 0, help: "Move up", shape: .circle) {
+                    moveQueueItem(by: -1)
                 }
                 // Hit area enlarged well past the glyph's own tiny bounds
                 // (previously just ~12pt of icon with no padding at all) --
@@ -1983,12 +1995,8 @@ private struct QueueRowView: View {
                                 dragTranslation = 0
                             }
                     )
-                queueJumpButton(icon: "chevron.down", help: "Move to bottom", disabled: index == queue.count - 1) {
-                    guard let current = queue.firstIndex(where: { $0.id == job.id }), current != queue.count - 1 else { return }
-                    withAnimation(.spring(response: 0.3)) {
-                        let moved = queue.remove(at: current)
-                        queue.append(moved)
-                    }
+                HoverIconButton(icon: "chevron.down", size: 9, disabled: index == queue.count - 1, help: "Move down", shape: .circle) {
+                    moveQueueItem(by: 1)
                 }
             }
         )

@@ -814,10 +814,6 @@ struct ConvertView: View {
     /// Custom file-switcher popup open state (Analyze panel) -- a plain
     /// Bool, not a native Menu, so the popup can be fully custom-styled.
     @State private var isFileSwitcherOpen = false
-    /// Measured width of the trigger pill (via background GeometryReader
-    /// below), so the popup can be pinned to that exact same width instead
-    /// of sizing itself independently off its widest row.
-    @State private var fileSwitcherTriggerWidth: CGFloat = 0
     /// Row currently hovered inside fileSwitcherPopup -- drives its hover
     /// highlight, the same interactive-fill-on-hover language every other
     /// button/row in the app uses (DesignTokens.Interactive.fillHover),
@@ -1102,9 +1098,9 @@ struct ConvertView: View {
     /// expansion of the trigger pill (no accent color -- that's reserved for
     /// the trigger itself) rather than a native macOS menu. Rendered via
     /// .overlay on the trigger, so it floats above the rest of the panel
-    /// without pushing or resizing anything. Pinned to fileSwitcherTriggerWidth
-    /// so it reads as a literal expansion of the pill, not an independently
-    /// sized menu.
+    /// without pushing or resizing anything. Always shows each file's full
+    /// name (no truncation), capped at ~65% of the Analyze card's own width
+    /// so a very long name wraps instead of growing the popup unbounded.
     private var fileSwitcherPopup: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(stagingJobs.enumerated()), id: \.element.id) { index, staged in
@@ -1124,9 +1120,11 @@ struct ConvertView: View {
                             .font(.appMono(size: 10, weight: .bold))
                             .foregroundColor(.white.opacity(isCurrent ? DesignTokens.Text.primary : DesignTokens.Text.tertiary))
                             .frame(width: 14, alignment: .center)
+                        // No lineLimit/truncation here -- the popup should
+                        // always show the full filename rather than an
+                        // ellipsis, relying on the popup's own maxWidth cap
+                        // below (and natural wrapping) to keep it bounded.
                         Text(staged.inputURL.deletingPathExtension().lastPathComponent)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
                         Spacer(minLength: 8)
                         if isCurrent {
                             Image(systemName: "checkmark")
@@ -1156,7 +1154,13 @@ struct ConvertView: View {
             }
         }
         .padding(4)
-        .frame(width: fileSwitcherTriggerWidth > 0 ? fileSwitcherTriggerWidth : nil)
+        // Capped at ~65% of the Analyze card's own width (mainPanelWidth *
+        // 0.60 is the card's width -- see analyzePanel's own frame) rather
+        // than pinned to fileSwitcherTriggerWidth like before -- full
+        // filenames need room to grow past the trigger pill's width, but
+        // still shouldn't be free to blow out to an arbitrary width for a
+        // very long name.
+        .frame(maxWidth: mainPanelWidth > 0 ? mainPanelWidth * 0.60 * 0.65 : nil, alignment: .leading)
         .background(
             ZStack {
                 VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
@@ -1223,12 +1227,6 @@ struct ConvertView: View {
                         .overlay(Capsule().stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.onAppear { fileSwitcherTriggerWidth = geo.size.width }
-                                .onChange(of: geo.size.width) { _, w in fileSwitcherTriggerWidth = w }
-                        }
-                    )
                     .overlay(alignment: .topLeading) {
                         if isFileSwitcherOpen {
                             ZStack(alignment: .topLeading) {
@@ -1254,6 +1252,22 @@ struct ConvertView: View {
                             .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                     }
                     Spacer()
+                }
+                .zIndex(99)
+                ConvertPreviewCard(
+                    job: job,
+                    config: config,
+                    onRemove: { removeFromStaging(job) },
+                    isQueueRow: false
+                )
+                // Add to Queue / Add All to Queue -- moved to the bottom of
+                // the Analyze card (below the full settings card) rather
+                // than sitting up in the header row beside the file
+                // switcher, so committing a file to the queue reads as the
+                // final action after reviewing/adjusting its settings, not
+                // a header-row control competing with the switcher for space.
+                HStack(spacing: 8) {
+                    Spacer()
                     if stagingJobs.count > 1 {
                         GlassButton(label: "Add All to Queue", icon: "tray.and.arrow.down", tint: .white, fitContent: true) {
                             addAllToQueue()
@@ -1263,13 +1277,6 @@ struct ConvertView: View {
                         addToQueue(job)
                     }
                 }
-                .zIndex(99)
-                ConvertPreviewCard(
-                    job: job,
-                    config: config,
-                    onRemove: { removeFromStaging(job) },
-                    isQueueRow: false
-                )
             }
             .padding(16)
             .glassCard(cornerRadius: DesignTokens.Radius.xlarge)

@@ -542,8 +542,14 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     /// math. Only tracks that will actually be re-encoded use the bitrate estimate.
     var estimatedOutputBytes: Int? {
         guard let info = mediaInfo else { return nil }
-        let videoIsCopy = mediaMode != .audio && (!transcodeVideo || videoCodec.matchesSource(info.videoCodec))
-        let audioIsCopy = mediaMode != .videoOnly && (!transcodeAudio || audioCodec.matchesSource(info.audioCodec))
+        // Matches runConversion's actual copy-vs-encode decision: only the
+        // real codec match determines this, never the transcode toggle
+        // alone (see runConversion's comment) -- otherwise this estimate
+        // would report the source's own file size for a track that's
+        // actually about to be re-encoded into something much smaller
+        // (or larger).
+        let videoIsCopy = mediaMode != .audio && videoCodec.matchesSource(info.videoCodec)
+        let audioIsCopy = mediaMode != .videoOnly && audioCodec.matchesSource(info.audioCodec)
         // If every relevant track is being stream-copied (the all-default "Original"
         // case), the output is essentially the source file — same container muxing
         // overhead aside — so just report the real source size instead of running it
@@ -733,17 +739,21 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         return [pretty, mediaInfo?.audioChannelLabel].compactMap { $0 }.joined(separator: " · ")
     }
 
-    /// The codec that will actually end up in the output, accounting for the
-    /// VIDEO layer's "Same as Source" chip: the chosen codec while transcoding,
-    /// otherwise the source's own codec (stream-copied through untouched) --
-    /// used anywhere the UI previews what the output will actually contain.
+    /// The codec that will actually end up in the output: the source's own
+    /// codec (stream-copied through untouched) when that codec is actually
+    /// valid for the chosen container, otherwise the chosen codec while
+    /// transcoding -- used anywhere the UI previews what the output will
+    /// actually contain. Gated on videoCodecMatchesSource rather than the
+    /// transcodeVideo toggle alone: a self-contained/mismatched-codec case
+    /// (e.g. ProRes source into MP4) always encodes regardless of whether
+    /// "Same as Source" looks selected, so the label must agree with that.
     var displayVideoCodec: String {
-        guard !transcodeVideo, let raw = mediaInfo?.videoCodec else { return videoCodec.rawValue }
+        guard videoCodecMatchesSource, let raw = mediaInfo?.videoCodec else { return videoCodec.rawValue }
         return Self.prettyCodec(raw, matching: ConvertVideoCodec.allCases, probeNames: { $0.probeNames })
     }
-    /// Same idea as `displayVideoCodec`, for the AUDIO layer's "Same as Source" chip.
+    /// Same idea as `displayVideoCodec`, for the audio layer.
     var displayAudioCodec: String {
-        guard !transcodeAudio, let raw = mediaInfo?.audioCodec else { return audioCodec.rawValue }
+        guard audioCodecMatchesSource, let raw = mediaInfo?.audioCodec else { return audioCodec.rawValue }
         return Self.prettyCodec(raw, matching: ConvertAudioCodec.allCases, probeNames: { $0.probeNames })
     }
     /// Bitrate that will actually end up in the output: the source's own
@@ -752,7 +762,7 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     /// omits it) when copying a source whose own bitrate isn't knowable
     /// (e.g. FLAC/PCM don't report one) rather than showing a guess.
     var displayAudioBitrateLabel: String? {
-        if transcodeAudio { return "\(audioCodec.typicalBitrateKbps)kbps" }
+        if !audioCodecMatchesSource { return "\(audioCodec.typicalBitrateKbps)kbps" }
         return mediaInfo?.audioBitrateKbps.map { "\($0)kbps" }
     }
 
@@ -1585,7 +1595,20 @@ struct ConvertView: View {
             // already is (or can be treated as) the selected codec.
             if job.mediaMode != .videoOnly {
                 let audioMatches = job.audioCodecMatchesSource
-                let encodeAudio = job.transcodeAudio && !audioMatches
+                // Stream-copy is only ever valid when the codec ffmpeg would
+                // be asked to copy already matches the source -- NOT merely
+                // whenever transcodeAudio is false ("Same as Source"
+                // selected). A self-contained target format like MP3/WAV/
+                // FLAC has exactly one legal codec (audioCodec is forced to
+                // it regardless of the toggle), and there is no "Same as
+                // Source" option to fall back to when the real source codec
+                // isn't already that one -- ffmpeg then rejects "-c:a copy"
+                // outright ("Invalid audio stream. Exactly one MP3 audio
+                // stream is required.") since raw PCM can't be poured into
+                // an MP3 container unencoded. transcodeAudio only decides
+                // which chip glows as selected in the UI; it must never be
+                // allowed to force an impossible copy.
+                let encodeAudio = !audioMatches
                 args += ["-c:a", encodeAudio ? job.audioCodec.ffmpegCodec : "copy"]
                 // 5.1/7.1 sources need more headroom than stereo to avoid audible
                 // compression artifacts — 384k covers 5.1 cleanly, 256k is plenty for stereo/mono.
@@ -1622,12 +1645,15 @@ struct ConvertView: View {
             } else {
                 args += ["-an"] // no audio
             }
-            // Video stream — same copy-vs-encode rule as audio above: stream-copy
-            // when the chosen codec already matches the source, or when the VIDEO
-            // layer's "Same as Source" chip is selected.
+            // Video stream — same copy-vs-encode rule as audio above: only
+            // ever stream-copy when the codec actually matches the source,
+            // regardless of the "Same as Source" toggle (see the audio
+            // branch's comment above for why -- e.g. a ProRes .mov
+            // converted to MP4, which can't hold ProRes at all, needs to
+            // encode even with "Same as Source" left selected).
             if job.mediaMode.isVideo {
                 let videoMatches = job.videoCodecMatchesSource
-                let encodeVideo = job.transcodeVideo && !videoMatches
+                let encodeVideo = !videoMatches
                 args += ["-c:v", encodeVideo ? job.videoCodec.ffmpegCodec : "copy"]
                 // -preset fast: significantly faster encode with minimal quality loss
                 if encodeVideo && (job.videoCodec == .h264 || job.videoCodec == .h265) {
@@ -2161,11 +2187,19 @@ struct ConvertPreviewCard: View {
                             }
                         }
                         HStack(spacing: 8) {
+                            // fixedSize so this chip hugs its own text instead
+                            // of stretching to fill an equal share of the row
+                            // (SelectorChip's default) -- without it, "Same as
+                            // Source" renders at a different width here than
+                            // in the AUDIO CODEC row below whenever the two
+                            // rows have a different number of real codec
+                            // chips, even though it's the exact same label.
                             SelectorChip(label: "Same as Source", isSelected: !job.transcodeVideo) {
                                 withAnimation(.spring(response: 0.25)) {
                                     job.transcodeVideo = false
                                 }
                             }
+                            .fixedSize(horizontal: true, vertical: false)
                             ForEach(job.availableVideoCodecs) { codec in
                                 SelectorChip(
                                     label: codec.rawValue,
@@ -2198,11 +2232,17 @@ struct ConvertPreviewCard: View {
                             }
                         }
                         HStack(spacing: 8) {
+                            // fixedSize -- see the matching comment on the
+                            // VIDEO CODEC row's own "Same as Source" chip
+                            // above; this keeps both rows' chips the same
+                            // width regardless of how many real codec chips
+                            // each row happens to show.
                             SelectorChip(label: "Same as Source", isSelected: !job.transcodeAudio) {
                                 withAnimation(.spring(response: 0.25)) {
                                     job.transcodeAudio = false
                                 }
                             }
+                            .fixedSize(horizontal: true, vertical: false)
                             // Real codec chips hidden when the output format only has
                             // one possible audio codec (e.g. MP3/FLAC are self-contained
                             // — codec == container, so there's no real choice besides

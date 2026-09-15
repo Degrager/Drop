@@ -3381,6 +3381,10 @@ struct HoverIconButton: View {
     /// rather than needing a second string typed out again. false
     /// (default) is icon-only, unchanged from before this existed.
     var expandable: Bool = false
+    /// Defaults to the original rounded-rect chrome every existing call
+    /// site already expects -- pass .circle for a fully round button
+    /// instead, e.g. the queue row's up/down move controls.
+    var shape: GlassInteractiveShape = .roundedRect(DesignTokens.Radius.small)
     let action: () -> Void
 
     @State private var isHovering = false
@@ -3391,7 +3395,7 @@ struct HoverIconButton: View {
 
     var body: some View {
         let resolvedColor = isActive ? (activeColor ?? color) : color
-        GlassInteractive(shape: .roundedRect(DesignTokens.Radius.small), tint: resolvedColor, isActive: isActive, disabled: disabled, action: action) {
+        GlassInteractive(shape: shape, tint: resolvedColor, isActive: isActive, disabled: disabled, action: action) {
             Image(systemName: icon)
                 .font(.appMono(size: size))
                 .padding(6)

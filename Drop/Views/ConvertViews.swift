@@ -1907,45 +1907,90 @@ private struct QueueRowView: View {
         }
     }
 
+    /// Jump-to-top / jump-to-bottom, stacked above and below the drag icon --
+    /// a one-tap alternative to a drag for moving something far up or down a
+    /// long queue. Built as a plain Button rather than HoverIconButton,
+    /// which bakes in 6pt of padding around its icon regardless of `size` --
+    /// stacking two of those above/below the drag icon would have pushed
+    /// this whole column well past queueRowStride's hardcoded 76pt (see its
+    /// own comment on staying in sync with the row's real measured height),
+    /// so these stay deliberately tiny and tight instead. Re-looks-up this
+    /// row's real position via job.id rather than trusting `index` for the
+    /// actual mutation (index is only "as of the last render" -- fine for
+    /// the disabled check, not for a mutation that should always act on
+    /// where the row genuinely is right now).
+    private func queueJumpButton(icon: String, help: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.appMono(size: 7, weight: .bold))
+                .foregroundColor(.white.opacity(disabled ? DesignTokens.Text.disabled * 0.4 : DesignTokens.Text.disabled))
+                .frame(width: 22, height: 9)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .help(help)
+    }
+
     private var dragHandle: AnyView {
         AnyView(
-            Image(systemName: "line.3.horizontal")
-                .font(.appMono(size: 12))
-                .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                .contentShape(Rectangle())
-                .gesture(
-                    // minimumDistance: 0 -- onChanged fires immediately on
-                    // press (translation starts at zero, so nothing
-                    // actually moves yet), which is what sets
-                    // draggingJobID and turns the highlight on. That's the
-                    // fix for "highlight should start on click-and-hold,
-                    // not once real dragging begins" -- the previous
-                    // minimumDistance of 4 meant nothing (including the
-                    // highlight) happened until the cursor had already
-                    // moved a few points.
-                    DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                        .onChanged { value in
-                            draggingJobID = job.id
-                            dragTranslation = value.translation.height
-                        }
-                        .onEnded { _ in
-                            // Commit exactly once, here -- not per row
-                            // crossing. If the proposed slot differs from
-                            // where this row actually started, move it
-                            // there; either way, clearing the drag state in
-                            // the SAME (non-animated) transaction as the
-                            // reorder means this row's natural post-reorder
-                            // position and the offset being removed land at
-                            // the same place at once, so nothing visibly
-                            // jumps.
-                            if let draggedIndex, let proposedIndex, draggedIndex != proposedIndex {
-                                let moved = queue.remove(at: draggedIndex)
-                                queue.insert(moved, at: proposedIndex)
+            VStack(spacing: 1) {
+                queueJumpButton(icon: "chevron.up", help: "Move to top", disabled: index == 0) {
+                    guard let current = queue.firstIndex(where: { $0.id == job.id }), current != 0 else { return }
+                    withAnimation(.spring(response: 0.3)) {
+                        queue.insert(queue.remove(at: current), at: 0)
+                    }
+                }
+                // Hit area enlarged well past the glyph's own tiny bounds
+                // (previously just ~12pt of icon with no padding at all) --
+                // was reported as needing the cursor placed almost pixel-
+                // perfectly to grab it.
+                Image(systemName: "line.3.horizontal")
+                    .font(.appMono(size: 12))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                    .frame(width: 26, height: 20)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        // minimumDistance: 0 -- onChanged fires immediately on
+                        // press (translation starts at zero, so nothing
+                        // actually moves yet), which is what sets
+                        // draggingJobID and turns the highlight on. That's the
+                        // fix for "highlight should start on click-and-hold,
+                        // not once real dragging begins" -- the previous
+                        // minimumDistance of 4 meant nothing (including the
+                        // highlight) happened until the cursor had already
+                        // moved a few points.
+                        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                            .onChanged { value in
+                                draggingJobID = job.id
+                                dragTranslation = value.translation.height
                             }
-                            draggingJobID = nil
-                            dragTranslation = 0
-                        }
-                )
+                            .onEnded { _ in
+                                // Commit exactly once, here -- not per row
+                                // crossing. If the proposed slot differs from
+                                // where this row actually started, move it
+                                // there; either way, clearing the drag state in
+                                // the SAME (non-animated) transaction as the
+                                // reorder means this row's natural post-reorder
+                                // position and the offset being removed land at
+                                // the same place at once, so nothing visibly
+                                // jumps.
+                                if let draggedIndex, let proposedIndex, draggedIndex != proposedIndex {
+                                    let moved = queue.remove(at: draggedIndex)
+                                    queue.insert(moved, at: proposedIndex)
+                                }
+                                draggingJobID = nil
+                                dragTranslation = 0
+                            }
+                    )
+                queueJumpButton(icon: "chevron.down", help: "Move to bottom", disabled: index == queue.count - 1) {
+                    guard let current = queue.firstIndex(where: { $0.id == job.id }), current != queue.count - 1 else { return }
+                    withAnimation(.spring(response: 0.3)) {
+                        let moved = queue.remove(at: current)
+                        queue.append(moved)
+                    }
+                }
+            }
         )
     }
 

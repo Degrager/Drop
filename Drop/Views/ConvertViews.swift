@@ -2022,7 +2022,7 @@ private struct QueueRowView: View {
         )
     }
 
-    private var rowContent: some View {
+    var body: some View {
         HStack(alignment: .center, spacing: 8) {
             Text("\(position)")
                 .font(.appMono(size: 11, weight: .bold))
@@ -2049,31 +2049,22 @@ private struct QueueRowView: View {
             )
             .shadow(color: .black.opacity(isBeingDragged ? 0.35 : 0), radius: 12, y: 6)
         }
-    }
-
-    var body: some View {
-        // Flattened into one bitmap ONLY while actively being dragged --
-        // the card's frosted-glass background is a live NSVisualEffectView
-        // that continuously re-samples what's behind the window, which is
-        // expensive enough that a DragGesture's rapid, every-frame offset
-        // updates outran it: the OS ended up compositing a stale sampled
-        // frame together with the newest one, visible as the card
-        // "doubling"/motion-blurring even though the underlying drag math
-        // itself tracked the cursor correctly the whole time (reproduced
-        // even with only one item in the queue, ruling out anything to do
-        // with neighbor swapping). drawingGroup() bakes the already-
-        // composited glass/shadow/stroke into a single static texture for
-        // the drag's duration, so moving it is just repositioning a plain
-        // bitmap instead of re-running the live blur sample on every
-        // frame. Only applied while dragging -- the rest of the time this
-        // stays a normal live SwiftUI view like every other card.
-        Group {
-            if isBeingDragged {
-                rowContent.drawingGroup()
-            } else {
-                rowContent
-            }
-        }
+        // NOTE: briefly wrapped this in .drawingGroup() while isBeingDragged,
+        // intended to fix a doubling/motion-blur artifact by flattening the
+        // card into one bitmap for the drag's duration. Reverted: confirmed
+        // via screen recording that drawingGroup() actively corrupts this
+        // row's rendering the instant a drag starts -- the drag handle's
+        // up/down icons and a large area of the card render as a red/orange
+        // "prohibited" (no-entry) glyph for the whole drag, not a transient
+        // glitch. Very likely drawingGroup()'s offscreen Core Animation/
+        // Metal compositing failing to correctly snapshot the card's
+        // NSVisualEffectView-backed glass background (an AppKit view, not a
+        // native SwiftUI primitive) or one of the SF Symbol icons inside it.
+        // That's a worse regression than the ghosting it was meant to fix,
+        // so back to a plain live view for now -- the original ghosting-
+        // during-fast-drag issue needs a different fix that doesn't force
+        // offscreen compositing of AppKit-backed content.
+        //
         // Vertical-only: no x offset, so the row can never drift outside its
         // own column the way a freely-draggable "image" would. The dragged
         // row tracks the raw translation directly (continuous, no

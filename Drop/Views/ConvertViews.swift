@@ -2013,6 +2013,16 @@ struct ConvertPreviewCard: View {
     /// this view just places whatever's given next to the checkbox.
     var leadingAccessory: AnyView? = nil
 
+    /// Fixed width for the "Same as Source" chip in both the VIDEO CODEC and
+    /// AUDIO CODEC rows -- comfortably wider than its own text, and shared by
+    /// both rows so the chip renders identically in each regardless of how
+    /// many real codec chips sit beside it. The real codec chips are NOT
+    /// pinned to this width -- they keep SelectorChip's own default
+    /// `.frame(maxWidth: .infinity)`, dynamically sharing whatever space is
+    /// left in the row exactly as they did before "Same as Source" got its
+    /// own fixed width.
+    private static let sameAsSourceChipWidth: CGFloat = 150
+
     var body: some View {
         if isQueueRow {
             // Every status (including queued-but-not-started) renders as the
@@ -2187,27 +2197,29 @@ struct ConvertPreviewCard: View {
                             }
                         }
                         HStack(spacing: 8) {
-                            // fixedSize so this chip hugs its own text instead
-                            // of stretching to fill an equal share of the row
-                            // (SelectorChip's default) -- without it, "Same as
-                            // Source" renders at a different width here than
-                            // in the AUDIO CODEC row below whenever the two
-                            // rows have a different number of real codec
-                            // chips, even though it's the exact same label.
-                            SelectorChip(label: "Same as Source", isSelected: !job.transcodeVideo) {
+                            let sameAsSourceChip = SelectorChip(label: "Same as Source", isSelected: !job.transcodeVideo) {
                                 withAnimation(.spring(response: 0.25)) {
                                     job.transcodeVideo = false
                                 }
                             }
-                            .fixedSize(horizontal: true, vertical: false)
-                            ForEach(job.availableVideoCodecs) { codec in
-                                SelectorChip(
-                                    label: codec.rawValue,
-                                    isSelected: job.transcodeVideo && job.videoCodec == codec
-                                ) {
-                                    withAnimation(.spring(response: 0.25)) {
-                                        job.videoCodec = codec
-                                        job.transcodeVideo = true
+                            // Fixed width only when there's something else in
+                            // the row to sit beside -- with no real codec
+                            // chips at all, "Same as Source" is the only
+                            // control here and goes full width instead of
+                            // sitting narrow with dead space next to it.
+                            if job.availableVideoCodecs.isEmpty {
+                                sameAsSourceChip.frame(maxWidth: .infinity)
+                            } else {
+                                sameAsSourceChip.frame(width: Self.sameAsSourceChipWidth)
+                                ForEach(job.availableVideoCodecs) { codec in
+                                    SelectorChip(
+                                        label: codec.rawValue,
+                                        isSelected: job.transcodeVideo && job.videoCodec == codec
+                                    ) {
+                                        withAnimation(.spring(response: 0.25)) {
+                                            job.videoCodec = codec
+                                            job.transcodeVideo = true
+                                        }
                                     }
                                 }
                             }
@@ -2232,23 +2244,20 @@ struct ConvertPreviewCard: View {
                             }
                         }
                         HStack(spacing: 8) {
-                            // fixedSize -- see the matching comment on the
-                            // VIDEO CODEC row's own "Same as Source" chip
-                            // above; this keeps both rows' chips the same
-                            // width regardless of how many real codec chips
-                            // each row happens to show.
-                            SelectorChip(label: "Same as Source", isSelected: !job.transcodeAudio) {
+                            let sameAsSourceChip = SelectorChip(label: "Same as Source", isSelected: !job.transcodeAudio) {
                                 withAnimation(.spring(response: 0.25)) {
                                     job.transcodeAudio = false
                                 }
                             }
-                            .fixedSize(horizontal: true, vertical: false)
                             // Real codec chips hidden when the output format only has
                             // one possible audio codec (e.g. MP3/FLAC are self-contained
                             // — codec == container, so there's no real choice besides
                             // Same as Source vs. that one codec, and picking the format
-                            // above already implies the latter).
+                            // above already implies the latter). In that case "Same as
+                            // Source" is the only control in the row and goes full width
+                            // -- see the matching comment on the VIDEO CODEC row above.
                             if job.availableAudioCodecs.count > 1 {
+                                sameAsSourceChip.frame(width: Self.sameAsSourceChipWidth)
                                 ForEach(job.availableAudioCodecs) { codec in
                                     SelectorChip(
                                         label: codec.rawValue,
@@ -2260,6 +2269,8 @@ struct ConvertPreviewCard: View {
                                         }
                                     }
                                 }
+                            } else {
+                                sameAsSourceChip.frame(maxWidth: .infinity)
                             }
                         }
                     }

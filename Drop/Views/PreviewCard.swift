@@ -444,6 +444,11 @@ struct CompletedCard<Status: View>: View {
     /// scrollable drawer) -- false (default) keeps Download's cards at
     /// their original size.
     var compact: Bool = false
+    /// Passed straight through to glassCard's own `simplified` -- see its
+    /// comment for why. Only Convert's queue rows ever set this (true while
+    /// that specific row is being dragged); every other caller keeps the
+    /// default false, unchanged.
+    var isDragging: Bool = false
 
     // Status content
     @ViewBuilder var status: () -> Status
@@ -459,7 +464,7 @@ struct CompletedCard<Status: View>: View {
         .padding(compact ? 10 : 16)
         // Same proportional-width fix as PreviewCard.fullCard above.
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard(cornerRadius: DesignTokens.Radius.large)
+        .glassCard(cornerRadius: DesignTokens.Radius.large, simplified: isDragging)
         .opacity((showCheckbox && !isSelected) ? 0.6 : 1.0)
         .animation(.easeOut(duration: 0.15), value: isSelected)
         .animation(.easeOut(duration: 0.15), value: showCheckbox)

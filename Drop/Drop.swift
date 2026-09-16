@@ -5086,6 +5086,17 @@ struct ContentView: View {
                     .multilineTextAlignment(.leading)
                     .foregroundColor(.white)
                     .tint(.white)
+                    // A URL-paste field has no legitimate use for spell-
+                    // check/autocorrect/predictive-text -- disabling it also
+                    // stops AppKit's text-checking machinery from spinning
+                    // up its candidate-suggestion popover at all. That
+                    // popover is what was flashing as an empty grey box
+                    // under the field for a split second the moment this
+                    // field became first responder on launch (confirmed via
+                    // a frame-by-frame screen recording): with nothing
+                    // typed yet, the system momentarily shows the (empty)
+                    // suggestion window before immediately dismissing it.
+                    .autocorrectionDisabled()
                     .focused($urlFieldFocused)
                     .frame(height: fieldHeight, alignment: .center)
                     .padding(.leading, 14)

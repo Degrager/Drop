@@ -2038,7 +2038,8 @@ private struct QueueRowView: View {
                 isQueueRow: true,
                 onSelectionChange: onSelectionChange,
                 onEditRequested: onEditRequested,
-                leadingAccessory: dragHandle
+                leadingAccessory: dragHandle,
+                isDragging: isBeingDragged
             )
             // Highlights the row actually being interacted with, so it's
             // visually obvious which one is under the cursor while
@@ -2108,6 +2109,12 @@ struct ConvertPreviewCard: View {
     /// since the actual drag gesture/reorder state lives there, not here --
     /// this view just places whatever's given next to the checkbox.
     var leadingAccessory: AnyView? = nil
+    /// True while QueueRowView (the caller, which owns the actual drag
+    /// gesture state) has this specific card actively being dragged --
+    /// passed straight through to CompletedCard/glassCard's own
+    /// `simplified`, swapping the live blur background for a cheap solid
+    /// color for the drag's duration. See GlassCard's comment for why.
+    var isDragging: Bool = false
 
     /// Fixed width for the "Same as Source" chip in both the VIDEO CODEC and
     /// AUDIO CODEC rows -- comfortably wider than its own text, and shared by
@@ -2564,7 +2571,8 @@ struct ConvertPreviewCard: View {
             title: job.inputURL.deletingPathExtension().lastPathComponent,
             subtitle: isQueueRow ? queueRowSubtitle : outputLayer,
             hasStatusContent: hasCompletedCardStatusContent,
-            compact: isQueueRow
+            compact: isQueueRow,
+            isDragging: isDragging
         ) {
             // Actions row — buttons stretch to fill the full card width (each
             // GlassButton defaults to maxWidth: .infinity), so this HStack

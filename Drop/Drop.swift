@@ -3820,6 +3820,36 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // Fixes a real, confirmed bug (frame-by-frame screen recording):
+        // the URL paste field auto-focusing on launch briefly showed an
+        // empty grey "predictive text completion" candidate popover right
+        // under it before immediately dismissing itself. That popover is
+        // controlled by isAutomaticTextCompletionEnabled -- a distinct
+        // AppKit property from autocorrection/spell-check, which SwiftUI's
+        // TextField has no modifier for at all (.autocorrectionDisabled()
+        // alone did nothing for this, confirmed by it still happening
+        // after that fix shipped). Every SwiftUI TextField on macOS is
+        // actually edited through one shared "field editor" NSTextView per
+        // window, obtainable only via AppKit -- this listens globally for
+        // ANY field beginning editing anywhere in the app and disables
+        // completion/correction on that editor the instant editing starts,
+        // before AppKit's own candidate-window logic gets a chance to run.
+        // Registered once, here, rather than per-field, so it covers every
+        // text field in the app automatically.
+        NotificationCenter.default.addObserver(
+            forName: NSText.didBeginEditingNotification, object: nil, queue: .main
+        ) { note in
+            guard let editor = note.object as? NSTextView else { return }
+            editor.isAutomaticTextCompletionEnabled = false
+            editor.isAutomaticSpellingCorrectionEnabled = false
+            editor.isContinuousSpellCheckingEnabled = false
+            editor.isGrammarCheckingEnabled = false
+            editor.isAutomaticQuoteSubstitutionEnabled = false
+            editor.isAutomaticDashSubstitutionEnabled = false
+            editor.isAutomaticDataDetectionEnabled = false
+            editor.isAutomaticLinkDetectionEnabled = false
+            editor.isAutomaticTextReplacementEnabled = false
+        }
         // Create status item here — guaranteed AppKit is fully initialized
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {

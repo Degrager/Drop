@@ -3820,22 +3820,16 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        // Fixes a real, confirmed bug (frame-by-frame screen recording):
-        // the URL paste field auto-focusing on launch briefly showed an
-        // empty grey "predictive text completion" candidate popover right
-        // under it before immediately dismissing itself. That popover is
-        // controlled by isAutomaticTextCompletionEnabled -- a distinct
-        // AppKit property from autocorrection/spell-check, which SwiftUI's
-        // TextField has no modifier for at all (.autocorrectionDisabled()
-        // alone did nothing for this, confirmed by it still happening
-        // after that fix shipped). Every SwiftUI TextField on macOS is
-        // actually edited through one shared "field editor" NSTextView per
-        // window, obtainable only via AppKit -- this listens globally for
-        // ANY field beginning editing anywhere in the app and disables
-        // completion/correction on that editor the instant editing starts,
-        // before AppKit's own candidate-window logic gets a chance to run.
-        // Registered once, here, rather than per-field, so it covers every
-        // text field in the app automatically.
+        // Disables AppKit's spelling/completion/substitution machinery
+        // globally rather than per-field -- every SwiftUI TextField on
+        // macOS is actually edited through one shared "field editor"
+        // NSTextView per window, obtainable only via AppKit, so this
+        // listens for ANY field beginning editing anywhere in the app.
+        // Not what was causing the launch-time popup near the paste field
+        // (that turned out to be the system Password AutoFill suggestion
+        // window -- see the .textContentType(.URL) fix on that TextField)
+        // but still worth keeping: a URL-paste field has no legitimate use
+        // for any of this.
         NotificationCenter.default.addObserver(
             forName: NSText.didBeginEditingNotification, object: nil, queue: .main
         ) { note in
@@ -3850,6 +3844,7 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             editor.isAutomaticLinkDetectionEnabled = false
             editor.isAutomaticTextReplacementEnabled = false
         }
+
         // Create status item here — guaranteed AppKit is fully initialized
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
@@ -3907,16 +3902,11 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // caches a bitmap of the window's content on quit and shows
                 // it immediately on the next launch (before the app has
                 // actually finished initializing), swapping in real content
-                // once ready. A plain, undecorated grey box flashing near
-                // the paste field specifically on a SECOND launch (nothing
-                // to restore from on a first) fits this exactly better than
-                // either AppKit text-field theory tried previously -- both
-                // of which this alone didn't fix. isRestorable = false
-                // stops a NEW snapshot from being saved on future quits;
-                // note this can't retroactively un-cache a snapshot the OS
-                // already saved from a build before this fix shipped, so
-                // it may take one full quit-and-relaunch cycle on THIS
-                // build before the effect is visible.
+                // once ready. Not related to the launch-time paste-field
+                // popup (that was the system Password AutoFill suggestion
+                // window -- see .textContentType(.URL) on the URL
+                // TextField) but still worth keeping off since Drop has no
+                // meaningful state worth restoring between launches.
                 window.isRestorable = false
             }
         }
@@ -5133,16 +5123,26 @@ struct ContentView: View {
                     .foregroundColor(.white)
                     .tint(.white)
                     // A URL-paste field has no legitimate use for spell-
-                    // check/autocorrect/predictive-text -- disabling it also
-                    // stops AppKit's text-checking machinery from spinning
-                    // up its candidate-suggestion popover at all. That
-                    // popover is what was flashing as an empty grey box
-                    // under the field for a split second the moment this
-                    // field became first responder on launch (confirmed via
-                    // a frame-by-frame screen recording): with nothing
-                    // typed yet, the system momentarily shows the (empty)
-                    // suggestion window before immediately dismissing it.
+                    // check/autocorrect/predictive-text.
                     .autocorrectionDisabled()
+                    // The actual fix for a real, confirmed bug (root-caused
+                    // via a runtime diagnostic that logged every NSWindow
+                    // AppKit created/showed during launch): this field
+                    // becoming first responder made macOS briefly show its
+                    // system Password AutoFill suggestion window -- an
+                    // empty, undecorated, cross-process (NSRemoteView)
+                    // popover anchored right under the field -- because
+                    // nothing told AppKit this ISN'T a username/password
+                    // field. It appeared for a single frame (~30ms) then
+                    // self-dismissed once AutoFill found no matching saved
+                    // credentials. Two earlier theories (a system text-
+                    // completion candidate popover; a window-restoration
+                    // snapshot) were tried and shipped before this was
+                    // root-caused -- both harmless to also keep, but
+                    // neither was the actual cause. Explicitly hinting
+                    // .URL content type stops AppKit from ever attempting
+                    // the AutoFill suggestion for this field at all.
+                    .textContentType(.URL)
                     .focused($urlFieldFocused)
                     .frame(height: fieldHeight, alignment: .center)
                     .padding(.leading, 14)

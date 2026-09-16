@@ -1965,19 +1965,18 @@ private struct QueueRowView: View {
                 // Hit area enlarged well past the glyph's own tiny bounds
                 // (previously just ~12pt of icon with no padding at all) --
                 // was reported as needing the cursor placed almost pixel-
-                // perfectly to grab it. onDrag starts the actual native
-                // system drag session; QueueDropDelegate above (via the
-                // whole row's onDrop, in body below) does the reordering
-                // as it crosses other rows.
+                // perfectly to grab it. Purely a visual "grab here" affordance
+                // now, though -- the actual onDrag (see body below) lives on
+                // the whole card, not this icon, so the floating drag preview
+                // is a snapshot of the real card instead of just this glyph
+                // (attaching onDrag here made the preview separate visibly
+                // from the card while dragging, since onDrag always
+                // snapshots whatever view it's directly attached to).
                 Image(systemName: "line.3.horizontal")
                     .font(.appMono(size: 12))
                     .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                     .frame(width: 26, height: 20)
                     .contentShape(Rectangle())
-                    .onDrag {
-                        draggingJobID = job.id
-                        return NSItemProvider(object: job.id.uuidString as NSString)
-                    }
                 HoverIconButton(icon: "chevron.down", size: 9, disabled: index == queue.count - 1, help: "Move down", shape: .circle) {
                     moveQueueItem(by: 1)
                 }
@@ -2004,6 +2003,19 @@ private struct QueueRowView: View {
                 leadingAccessory: dragHandle,
                 isDragging: isBeingDragged
             )
+            // onDrag lives on the whole card (not just the drag-handle icon
+            // inside it) specifically so the system's floating drag-preview
+            // image is a snapshot of the actual card being moved -- attached
+            // to just the small icon, the preview was only that icon,
+            // visibly detached from the card it represented. A quick tap on
+            // the checkbox/Remove/Edit/move buttons nested inside still
+            // registers as a plain click rather than a drag (SwiftUI only
+            // promotes to the ancestor's onDrag once the pointer actually
+            // moves), so this doesn't fight those.
+            .onDrag {
+                draggingJobID = job.id
+                return NSItemProvider(object: job.id.uuidString as NSString)
+            }
         }
         // Dims the row left behind in its own layout slot while the OS's
         // own separately-rendered drag-preview snapshot follows the cursor

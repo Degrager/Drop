@@ -3009,35 +3009,15 @@ struct GlassCard: ViewModifier {
     // not a resting decoration. Cards are calm and still until something is
     // actually happening.
     var isActive: Bool = false
-    // When true, swaps the live VisualEffectBlur for a plain solid color
-    // approximating the same tone -- reserved for a card that's being
-    // dragged around the screen right now. NSVisualEffectView with
-    // .behindWindow blending continuously re-samples what's actually behind
-    // the window, which a DragGesture's every-frame offset updates can
-    // outrun, producing visible ghosting/doubling as the OS composites a
-    // stale sampled frame together with the newest one. A `.drawingGroup()`
-    // snapshot was tried first to solve this and made it worse -- it
-    // corrupted the card's rendering into a red "prohibited" glyph for the
-    // whole drag, almost certainly from Core Animation's offscreen
-    // compositing failing on this AppKit-backed view. Swapping the
-    // NSViewRepresentable out for a plain SwiftUI Color while dragging
-    // avoids touching that failure mode entirely, and looks nearly
-    // identical anyway: blackTint is already 0.93, so the live blur's own
-    // visible contribution under that much tint is small to begin with.
-    var simplified: Bool = false
 
     func body(content: Content) -> some View {
         content
             .background(
                 ZStack {
-                    if simplified {
-                        Color(white: 0.1)
-                    } else {
-                        // .underWindowBackground reads dark/neutral by
-                        // default, unlike .hudWindow which leans light --
-                        // the right base for a true black-frosted-glass look.
-                        VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                    }
+                    // .underWindowBackground reads dark/neutral by default,
+                    // unlike .hudWindow which leans light -- the right base
+                    // for a true black-frosted-glass look.
+                    VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
                     // Heavy black tint on top so the material reads as black
                     // smoked glass, not grey.
                     Color.black.opacity(DesignTokens.Glass.blackTint)
@@ -3810,8 +3790,8 @@ struct GlassDivider: View {
 }
 
 extension View {
-    func glassCard(cornerRadius: CGFloat = DesignTokens.Radius.large, opacity: Double = 0.55, isActive: Bool = false, simplified: Bool = false) -> some View {
-        modifier(GlassCard(cornerRadius: cornerRadius, opacity: opacity, isActive: isActive, simplified: simplified))
+    func glassCard(cornerRadius: CGFloat = DesignTokens.Radius.large, opacity: Double = 0.55, isActive: Bool = false) -> some View {
+        modifier(GlassCard(cornerRadius: cornerRadius, opacity: opacity, isActive: isActive))
     }
 }
 

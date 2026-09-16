@@ -820,22 +820,6 @@ struct ConvertView: View {
     /// rather than the popup rows having no hover feedback at all.
     @State private var hoveredStagingID: ConvertJob.ID? = nil
 
-    /// Queue drag-reorder state, shared across every QueueRowView (not
-    /// local to the dragged row) so every OTHER row can react to it too.
-    /// id of the job whose native system drag session (see QueueRowView's
-    /// onDrag) is currently active, nil when nothing is being dragged.
-    /// Reordering itself is driven entirely by QueueDropDelegate/onDrop as
-    /// the drag crosses into another row's real, AppKit-hit-tested bounds
-    /// -- there is deliberately no hand-rolled translation/stride math
-    /// here anymore. Two earlier attempts at that (computing a proposed
-    /// index from raw drag translation divided by a measured/hardcoded row
-    /// height, then trying to fix the resulting render cost with
-    /// drawingGroup()) each produced their own class of bug -- a rounding-
-    /// boundary "magnetized" wobble, then a corrupted red-glyph render --
-    /// that both trace back to reimplementing position tracking AppKit's
-    /// own drag session already does natively.
-    @State private var draggingJobID: ConvertJob.ID? = nil
-
     /// Captured once the queue's ScrollView appears, so runConversion can
     /// scroll a just-started job into view without needing its own
     /// reactive hook into job.status (mutating a class's @Published
@@ -1347,7 +1331,6 @@ struct ConvertView: View {
                             ForEach(Array(queue.enumerated()), id: \.element.id) { index, job in
                                 QueueRowView(
                                     job: job, index: index, position: index + 1, queue: $queue, config: config,
-                                    draggingJobID: $draggingJobID,
                                     onSelectionChange: { selectionVersion += 1 },
                                     onEditRequested: (job.status == .queued || job.status == .failed || job.status == .cancelled)
                                         ? { editFromQueue(job) } : nil
@@ -1369,16 +1352,6 @@ struct ConvertView: View {
                                     }
                                 )
                             }
-                        }
-                        // Catch-all: clears a stuck draggingJobID if the
-                        // native drag session is released somewhere in this
-                        // scroll area that isn't directly over another row
-                        // (e.g. the gap below the last item) -- individual
-                        // rows' own onDrop (see QueueDropDelegate) already
-                        // handles the real reorder when dropped ON a row.
-                        .onDrop(of: ["public.text"], isTargeted: nil) { _ in
-                            draggingJobID = nil
-                            return true
                         }
                         .padding(.vertical, 2)
                     }
@@ -1870,74 +1843,24 @@ struct ConvertView: View {
     }
 }
 
-/// Drives the actual reorder as a native system drag session (started by
-/// QueueRowView's onDrag below) crosses into another row's real, AppKit-
-/// hit-tested bounds. This is the standard onDrag/onDrop/DropDelegate
-/// pattern used throughout the wider SwiftUI ecosystem for reorderable
-/// lists/grids -- adopted here after two attempts at a hand-rolled
-/// DragGesture-based approach each produced their own class of bug (a
-/// rounding-boundary "magnetized" wobble from dividing raw drag
-/// translation by a measured row stride, then a corrupted red-glyph
-/// render from trying to drawingGroup()-snapshot the row to fix that
-/// wobble's rendering cost) that both trace back to reimplementing
-/// position tracking AppKit's own drag session already does natively and
-/// far more cheaply.
-private struct QueueDropDelegate: DropDelegate {
-    let item: ConvertJob
-    @Binding var queue: [ConvertJob]
-    @Binding var draggingJobID: ConvertJob.ID?
-
-    /// Fires the instant the drag crosses into this row's bounds -- not on
-    /// drop -- so reordering reads as live/continuous the same way it does
-    /// in every other app that supports this. The `to > from ? to + 1 :
-    /// to` adjustment is required by move(fromOffsets:toOffset:)'s own
-    /// semantics: removing `from` shifts every later index down by one
-    /// before the insert happens, so moving something downward needs to
-    /// target one past the destination's current position; moving upward
-    /// doesn't, since nothing before it shifts.
-    func dropEntered(info: DropInfo) {
-        guard let draggingJobID, draggingJobID != item.id,
-              let from = queue.firstIndex(where: { $0.id == draggingJobID }),
-              let to = queue.firstIndex(where: { $0.id == item.id }),
-              from != to else { return }
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-            queue.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-        }
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        draggingJobID = nil
-        return true
-    }
-}
-
-/// One Convert Queue row: position badge + the compact card, with its own
-/// drag-to-reorder handle and up/down step buttons.
+/// One Convert Queue row: position badge + the compact card, with up/down
+/// step buttons to reorder it. Drag-to-reorder (three separate attempts --
+/// a hand-rolled DragGesture with a measured-stride proposed-index
+/// calculation, a drawingGroup() snapshot to fix that approach's render
+/// cost, then the standard onDrag/onDrop/DropDelegate pattern used
+/// throughout the wider SwiftUI ecosystem) was removed entirely at the
+/// user's request after the onDrag version's drag-preview image still
+/// visually separated from the card during the drag. Only the up/down
+/// step buttons remain -- no drag gesture, no drop delegate, no per-row
+/// "is this the one moving" state needed at all anymore.
 private struct QueueRowView: View {
     @ObservedObject var job: ConvertJob
-    /// This row's position in `queue` as of the last render -- used only
-    /// to decide whether the up/down step buttons should be disabled
-    /// (already at that end). The actual reorder mutation always
-    /// re-looks-up this row's real position via job.id instead of
-    /// trusting this, since it can be stale by the time a button's own
-    /// action runs.
     let index: Int
     let position: Int
     @Binding var queue: [ConvertJob]
     let config: Config
-    /// Shared across every row in the queue (lives on ConvertView, not
-    /// here) so a row that ISN'T being dragged can still react to one that
-    /// is -- see queueDrawer's comment for why this replaced row-local
-    /// @State entirely.
-    @Binding var draggingJobID: ConvertJob.ID?
     let onSelectionChange: () -> Void
     let onEditRequested: (() -> Void)?
-
-    private var isBeingDragged: Bool { draggingJobID == job.id }
 
     /// Moves this row one step up or down (a swap with its immediate
     /// neighbor), re-looking-up its real position via job.id rather than
@@ -1953,7 +1876,7 @@ private struct QueueRowView: View {
         }
     }
 
-    private var dragHandle: AnyView {
+    private var moveControls: AnyView {
         AnyView(
             VStack(spacing: 2) {
                 // Real circular HoverIconButtons (not a bare glyph) so
@@ -1962,21 +1885,6 @@ private struct QueueRowView: View {
                 HoverIconButton(icon: "chevron.up", size: 9, disabled: index == 0, help: "Move up", shape: .circle) {
                     moveQueueItem(by: -1)
                 }
-                // Hit area enlarged well past the glyph's own tiny bounds
-                // (previously just ~12pt of icon with no padding at all) --
-                // was reported as needing the cursor placed almost pixel-
-                // perfectly to grab it. Purely a visual "grab here" affordance
-                // now, though -- the actual onDrag (see body below) lives on
-                // the whole card, not this icon, so the floating drag preview
-                // is a snapshot of the real card instead of just this glyph
-                // (attaching onDrag here made the preview separate visibly
-                // from the card while dragging, since onDrag always
-                // snapshots whatever view it's directly attached to).
-                Image(systemName: "line.3.horizontal")
-                    .font(.appMono(size: 12))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    .frame(width: 26, height: 20)
-                    .contentShape(Rectangle())
                 HoverIconButton(icon: "chevron.down", size: 9, disabled: index == queue.count - 1, help: "Move down", shape: .circle) {
                     moveQueueItem(by: 1)
                 }
@@ -2000,35 +1908,9 @@ private struct QueueRowView: View {
                 isQueueRow: true,
                 onSelectionChange: onSelectionChange,
                 onEditRequested: onEditRequested,
-                leadingAccessory: dragHandle,
-                isDragging: isBeingDragged
+                leadingAccessory: moveControls
             )
-            // onDrag lives on the whole card (not just the drag-handle icon
-            // inside it) specifically so the system's floating drag-preview
-            // image is a snapshot of the actual card being moved -- attached
-            // to just the small icon, the preview was only that icon,
-            // visibly detached from the card it represented. A quick tap on
-            // the checkbox/Remove/Edit/move buttons nested inside still
-            // registers as a plain click rather than a drag (SwiftUI only
-            // promotes to the ancestor's onDrag once the pointer actually
-            // moves), so this doesn't fight those.
-            .onDrag {
-                draggingJobID = job.id
-                return NSItemProvider(object: job.id.uuidString as NSString)
-            }
         }
-        // Dims the row left behind in its own layout slot while the OS's
-        // own separately-rendered drag-preview snapshot follows the cursor
-        // -- the standard visual for this pattern (see e.g. Daniel Saidi's
-        // ReorderableForEach reference implementation). Critically, this
-        // row's own frosted-glass background is never rapidly repositioned
-        // at all during the drag anymore -- only its opacity changes,
-        // which is cheap -- unlike the two earlier hand-rolled attempts,
-        // which both continuously offset this exact view every frame and
-        // then tried (unsuccessfully) to make THAT cheaper rather than
-        // removing the repositioning itself.
-        .opacity(isBeingDragged ? 0.5 : 1.0)
-        .onDrop(of: ["public.text"], delegate: QueueDropDelegate(item: job, queue: $queue, draggingJobID: $draggingJobID))
     }
 }
 
@@ -2059,16 +1941,10 @@ struct ConvertPreviewCard: View {
     /// panel for editing. Only ever passed (non-nil) for queue rows whose
     /// status allows it (queued/failed/cancelled) — nil hides the Edit button.
     var onEditRequested: (() -> Void)? = nil
-    /// Queue rows' drag handle, built by the caller (ConvertView's queueRow)
-    /// since the actual drag gesture/reorder state lives there, not here --
-    /// this view just places whatever's given next to the checkbox.
+    /// Queue rows' up/down move controls, built by the caller (ConvertView's
+    /// queueRow) since the actual move state lives there, not here -- this
+    /// view just places whatever's given next to the checkbox.
     var leadingAccessory: AnyView? = nil
-    /// True while QueueRowView (the caller, which owns the actual drag
-    /// gesture state) has this specific card actively being dragged --
-    /// passed straight through to CompletedCard/glassCard's own
-    /// `simplified`, swapping the live blur background for a cheap solid
-    /// color for the drag's duration. See GlassCard's comment for why.
-    var isDragging: Bool = false
 
     /// Fixed width for the "Same as Source" chip in both the VIDEO CODEC and
     /// AUDIO CODEC rows -- comfortably wider than its own text, and shared by
@@ -2525,8 +2401,7 @@ struct ConvertPreviewCard: View {
             title: job.inputURL.deletingPathExtension().lastPathComponent,
             subtitle: isQueueRow ? queueRowSubtitle : outputLayer,
             hasStatusContent: hasCompletedCardStatusContent,
-            compact: isQueueRow,
-            isDragging: isDragging
+            compact: isQueueRow
         ) {
             // Actions row — buttons stretch to fill the full card width (each
             // GlassButton defaults to maxWidth: .infinity), so this HStack

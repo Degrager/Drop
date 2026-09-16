@@ -3902,6 +3902,22 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // grab.
                 window.titlebarAppearsTransparent = true
                 window.isMovableByWindowBackground = true
+                // Disables macOS's window-state-restoration snapshot --
+                // SwiftUI's WindowGroup opts into this by default, which
+                // caches a bitmap of the window's content on quit and shows
+                // it immediately on the next launch (before the app has
+                // actually finished initializing), swapping in real content
+                // once ready. A plain, undecorated grey box flashing near
+                // the paste field specifically on a SECOND launch (nothing
+                // to restore from on a first) fits this exactly better than
+                // either AppKit text-field theory tried previously -- both
+                // of which this alone didn't fix. isRestorable = false
+                // stops a NEW snapshot from being saved on future quits;
+                // note this can't retroactively un-cache a snapshot the OS
+                // already saved from a build before this fix shipped, so
+                // it may take one full quit-and-relaunch cycle on THIS
+                // build before the effect is visible.
+                window.isRestorable = false
             }
         }
     }

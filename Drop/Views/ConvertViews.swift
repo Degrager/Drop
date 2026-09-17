@@ -1084,7 +1084,16 @@ struct ConvertView: View {
                 onClearAll: {},
                 onPrimaryAction: {
                     if isConverting {
+                        // Stops the whole run, not just the item in flight --
+                        // also flips every still-queued job to .cancelled so
+                        // advanceQueue (triggered once the in-flight job's
+                        // process actually finishes terminating) has nothing
+                        // left to pick up and start next.
                         for job in queue where job.status == .converting { job.cancel() }
+                        for job in queue where job.status == .queued {
+                            job.status = .cancelled
+                            job.progress = "Cancelled"
+                        }
                         selectionVersion += 1
                     } else {
                         convertSelected()
@@ -1516,11 +1525,24 @@ struct ConvertView: View {
     }
 
     private func convertSelected() {
-        // Convert in the queue's own drag-arranged order (top to bottom),
-        // not insertion order.
-        for job in queue where job.isSelected && job.status == .queued {
-            runConversion(job: job)
-        }
+        // Kicks off just the first eligible job -- advanceQueue (called
+        // again from runConversion's own completion handler) chains
+        // through the rest in queue order, one at a time.
+        advanceQueue()
+    }
+
+    /// Starts the next selected, still-queued job in queue order (top to
+    /// bottom), or does nothing if there isn't one. This is the ONLY thing
+    /// that calls runConversion, and it's only ever called once to kick off
+    /// a run (convertSelected) or again after a job reaches a terminal
+    /// state (done/failed/cancelled) -- so exactly one job converts at a
+    /// time instead of every selected job's ffmpeg process firing at once.
+    /// Concurrent encodes were competing for the same CPU cores, making a
+    /// multi-file batch slower overall than converting them one by one, and
+    /// made per-item progress/ETA meaningless while several ran at once.
+    private func advanceQueue() {
+        guard let next = queue.first(where: { $0.isSelected && $0.status == .queued }) else { return }
+        runConversion(job: next)
     }
 
     /// Compact inline SAVE TO control, rendered in TabBottomBar's top row (to
@@ -1837,7 +1859,10 @@ struct ConvertView: View {
                 try p.run(); p.waitUntilExit()
                 errPipe.fileHandleForReading.readabilityHandler = nil
                 DispatchQueue.main.async {
-                    guard job.status != .cancelled else { return }
+                    // advanceQueue on the way out of every branch below
+                    // (including this early return) so a cancelled job
+                    // still lets the rest of the queue keep moving.
+                    guard job.status != .cancelled else { self.advanceQueue(); return }
                     let success = p.terminationStatus == 0
                     job.status = success ? .done : .failed
                     self.selectionVersion += 1
@@ -1889,10 +1914,11 @@ struct ConvertView: View {
                             }
                         }
                     }
+                    self.advanceQueue()
                 }
             } catch {
                 DispatchQueue.main.async {
-                    guard job.status != .cancelled else { return }
+                    guard job.status != .cancelled else { self.advanceQueue(); return }
                     job.status = .failed
                     self.selectionVersion += 1
                     job.progress = error.localizedDescription
@@ -1909,6 +1935,7 @@ struct ConvertView: View {
                     )
                     e.entryType = "conversion"
                     self.history.add(e)
+                    self.advanceQueue()
                 }
             }
         }

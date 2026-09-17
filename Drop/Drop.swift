@@ -2496,7 +2496,16 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             } catch {
                 DispatchQueue.main.async {
                     let curStatus = self.readDownload(downloadID) { $0.status }
-                    guard curStatus != nil && curStatus != .cancelled else { return }
+                    // Unlike every other terminal path here, this one used to
+                    // return without calling startNextPending for the "row
+                    // gone" / "cancelled" cases -- if p.run() itself threw
+                    // (e.g. yt-dlp missing) at the same moment the row got
+                    // cancelled or removed, the queue would silently stall
+                    // with pending items never picked up.
+                    guard curStatus != nil && curStatus != .cancelled else {
+                        self.startNextPending(after: idx)
+                        return
+                    }
                     self.withDownload(downloadID) {
                         $0.status = .error
                         $0.errorMessage = error.localizedDescription

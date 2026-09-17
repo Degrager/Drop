@@ -342,6 +342,34 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         ensureCodecsValidForFormat()
     }
 
+    /// Tapped from the VIDEO CODEC row's "Same as Source" chip. Must reset
+    /// `videoCodec` back to the source-matching one, not just clear
+    /// `transcodeVideo` -- runConversion's copy-vs-encode decision is driven
+    /// entirely by `videoCodecMatchesSource` (see its own comment), which
+    /// compares `videoCodec` itself, not this toggle. Without this reset,
+    /// picking a real codec chip (e.g. H.265) and then tapping back onto
+    /// "Same as Source" left `videoCodec` stuck on H.265 -- the chip showed
+    /// as selected, but the conversion silently kept re-encoding to H.265
+    /// instead of stream-copying. Confirmed via the actual ffmpeg command
+    /// logged for that exact sequence before this fix.
+    func useSameAsSourceForVideo() {
+        transcodeVideo = false
+        if let raw = mediaInfo?.videoCodec,
+           let match = ConvertVideoCodec.allCases.first(where: { $0.probeNames.contains(raw) }),
+           availableVideoCodecs.contains(match) {
+            videoCodec = match
+        }
+    }
+    /// Same fix as `useSameAsSourceForVideo`, for the AUDIO CODEC row.
+    func useSameAsSourceForAudio() {
+        transcodeAudio = false
+        if let raw = mediaInfo?.audioCodec,
+           let match = ConvertAudioCodec.allCases.first(where: { $0.probeNames.contains(raw) }),
+           availableAudioCodecs.contains(match) {
+            audioCodec = match
+        }
+    }
+
     /// Audio codecs valid inside the currently selected output container.
     var availableAudioCodecs: [ConvertAudioCodec] { outputFormat.compatibleAudioCodecs }
     /// Video codecs valid inside the currently selected output container.
@@ -667,15 +695,14 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
             result.append(ChipData(label: "", value: videoParts.compactMap { $0 }.joined(separator: " · "), color: .blue, icon: "video"))
         }
         if mediaMode != .videoOnly {
-            // Convert never changes the channel layout -- the encoder always
-            // stream-copies or re-tags the SOURCE channel count (5.1 stays
-            // 5.1, stereo stays stereo; see runConversion's -channel_layout
-            // handling), so the output chip should echo the same
+            // Convert never changes the channel layout except when MP3
+            // forces a stereo downmix of a >2-channel source (see
+            // displayAudioChannelLabel) -- otherwise this echoes the same
             // audioChannelLabel the input chip shows instead of omitting
             // it, which previously made the output side look like it might
             // downmix when it never does.
             let codecPart = mediaMode == .audio ? outputFormat.rawValue.uppercased() : displayAudioCodec
-            let audioOutParts = [codecPart, mediaInfo?.audioChannelLabel, displayAudioBitrateLabel].compactMap { $0 }
+            let audioOutParts = [codecPart, displayAudioChannelLabel, displayAudioBitrateLabel].compactMap { $0 }
             result.append(ChipData(label: "", value: audioOutParts.joined(separator: " · "), color: .green, icon: "waveform"))
         }
         return result
@@ -764,6 +791,17 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     var displayAudioBitrateLabel: String? {
         if !audioCodecMatchesSource { return "\(audioCodec.typicalBitrateKbps)kbps" }
         return mediaInfo?.audioBitrateKbps.map { "\($0)kbps" }
+    }
+
+    /// Channel layout that will actually end up in the output -- normally
+    /// just the source's own (Convert never touches channel layout), EXCEPT
+    /// MP3 forces stereo when actually re-encoding a >2-channel source (see
+    /// runConversion's -ac 2), so this is the one place the output chip
+    /// must show something other than the source's real channel count.
+    var displayAudioChannelLabel: String? {
+        let isMultichannel = mediaInfo?.audioChannelLabel.map { $0 == "5.1" || $0 == "7.1" } ?? false
+        if !audioCodecMatchesSource && audioCodec == .mp3 && isMultichannel { return "2.0" }
+        return mediaInfo?.audioChannelLabel
     }
 
 }
@@ -1619,7 +1657,20 @@ struct ConvertView: View {
                 // compression artifacts — 384k covers 5.1 cleanly, 256k is plenty for stereo/mono.
                 let isMultichannel = (job.mediaInfo?.audioChannelLabel).map { $0 == "5.1" || $0 == "7.1" } ?? false
                 if encodeAudio && job.audioCodec == .aac { args += ["-b:a", isMultichannel ? "384k" : "256k"] }
-                if encodeAudio && job.audioCodec == .mp3 { args += ["-b:a", "320k"] }
+                if encodeAudio && job.audioCodec == .mp3 {
+                    args += ["-b:a", "320k"]
+                    // MP3 (libmp3lame) only supports mono/stereo -- a
+                    // >2-channel source (5.1, 7.1) gets silently downmixed
+                    // by the encoder's own default behavior if left
+                    // unspecified. That's not wrong, but relying on an
+                    // implicit encoder default for something this
+                    // consequential is fragile across ffmpeg versions/
+                    // builds; -ac 2 makes the downmix explicit and
+                    // guaranteed. See displayAudioChannelLabel for the
+                    // matching UI-side fix (the output chip must say "2.0"
+                    // here, not the source's real channel count).
+                    if isMultichannel { args += ["-ac", "2"] }
+                }
                 // Explicitly re-tag the channel layout when re-encoding multichannel audio
                 // to AAC. Root cause of "audio imports but is silent / gets split into
                 // separate mono tracks in Resolve": many sources (esp. Dolby/E-AC-3 rips)
@@ -1663,6 +1714,27 @@ struct ConvertView: View {
                 // -preset fast: significantly faster encode with minimal quality loss
                 if encodeVideo && (job.videoCodec == .h264 || job.videoCodec == .h265) {
                     args += ["-preset", "fast"]
+                }
+                // HEVC needs an explicit "hvc1" container tag for QuickTime
+                // Player, Preview, Final Cut, and DaVinci Resolve's MOV/MP4
+                // import path to recognize it at all -- libx265 (and many
+                // non-Apple sources) instead tag it "hev1", the ISO generic
+                // tag. A "hev1"-tagged file is valid HEVC (plays fine in
+                // VLC/ffplay) but shows as no video / won't open in any of
+                // those Apple-ecosystem tools. Confirmed on-device: ffprobe
+                // reports "hevc (Rext) (hev1 / 0x31766568)" for a fresh
+                // libx265 encode without this. -tag:v is a container-level
+                // fourcc rewrite, not a re-encode, so it's applied whenever
+                // the OUTPUT is H.265 into MP4/MOV regardless of whether
+                // this track is being encoded or stream-copied -- a
+                // hev1-tagged HEVC source that's simply being remixed
+                // through (e.g. re-encoding only the audio, video left
+                // "Same as Source") would otherwise carry the same
+                // incompatible tag straight through untouched. Only
+                // meaningful for the two Apple-lineage containers -- MKV
+                // doesn't have this requirement at all.
+                if job.videoCodec == .h265 && (job.outputFormat == .mp4 || job.outputFormat == .mov) {
+                    args += ["-tag:v", "hvc1"]
                 }
                 // libsvtav1 uses its own preset scale (0-13, lower = slower/better) — 8 is a
                 // reasonable speed/quality balance, verified to encode successfully on-device.
@@ -2132,7 +2204,7 @@ struct ConvertPreviewCard: View {
                         HStack(spacing: 8) {
                             let sameAsSourceChip = SelectorChip(label: "Same as Source", isSelected: !job.transcodeVideo) {
                                 withAnimation(.spring(response: 0.25)) {
-                                    job.transcodeVideo = false
+                                    job.useSameAsSourceForVideo()
                                 }
                             }
                             // Fixed width only when there's something else in
@@ -2179,7 +2251,7 @@ struct ConvertPreviewCard: View {
                         HStack(spacing: 8) {
                             let sameAsSourceChip = SelectorChip(label: "Same as Source", isSelected: !job.transcodeAudio) {
                                 withAnimation(.spring(response: 0.25)) {
-                                    job.transcodeAudio = false
+                                    job.useSameAsSourceForAudio()
                                 }
                             }
                             // Real codec chips hidden when the output format only has

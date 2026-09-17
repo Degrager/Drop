@@ -78,15 +78,30 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         return false
     }
 
-    /// True while the overlay has something actionable on screen for an
-    /// update (found/downloading/extracting/ready/installing) -- the Drop
-    /// row's equivalent of yt-dlp/ffmpeg's "update available" orange state.
-    var hasActionableUpdate: Bool {
-        switch stage {
-        case .updateFound, .downloading, .extracting, .readyToInstall, .installing: return true
-        default: return false
-        }
-    }
+    /// True from the moment Sparkle reports a real update through
+    /// confirmed installation (or a later check confirming up to date) --
+    /// the Drop row's equivalent of yt-dlp/ffmpeg's "update available"
+    /// orange state, and what the shared Check for Updates button reads to
+    /// show "Update Available".
+    ///
+    /// Deliberately NOT derived from `stage`: Skip/Later on the
+    /// updateFound card calls back into Sparkle, which then calls
+    /// dismissUpdateInstallation() to close the card -- that reset `stage`
+    /// to .idle, which used to make hasActionableUpdate (and everything
+    /// reading it) act as if the update no longer existed the instant the
+    /// card closed, even though the app is still just as out of date as it
+    /// was a second earlier. pendingUpdateVersion tracks the actual fact
+    /// ("is there a known update we haven't installed yet") independently
+    /// of which transient overlay happens to be on screen right now.
+    var hasActionableUpdate: Bool { pendingUpdateVersion != nil }
+
+    /// Version string of the last update Sparkle reported, kept until it's
+    /// actually installed (which relaunches the app as that version,
+    /// naturally resetting this to nil in the new process) or a fresh
+    /// check confirms up to date (showUpdateNotFoundWithError clears it
+    /// explicitly). Survives Skip/Later/dismissing the card/error cards on
+    /// a later check -- none of those mean the update stopped existing.
+    @Published private(set) var pendingUpdateVersion: String? = nil
 
     /// True whenever any card is actually drawn on screen (.idle and
     /// .checking both render EmptyView -- see DropUpdateOverlayView.body).
@@ -136,6 +151,7 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         // itemDescription; a releaseNotesURL-linked file instead arrives
         // later through showUpdateReleaseNotes(with:), if present at all.
         justConfirmedUpToDate = false
+        pendingUpdateVersion = appcastItem.displayVersionString
         withAnimation { stage = .updateFound(versionString: appcastItem.displayVersionString, notesHTML: appcastItem.itemDescription, reply: reply) }
     }
 
@@ -152,6 +168,7 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
 
     func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
         justConfirmedUpToDate = true
+        pendingUpdateVersion = nil
         withAnimation { stage = .idle }
         acknowledgement()
     }
@@ -224,8 +241,13 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     /// with no actual Sparkle update behind it -- Install/Skip/Later all
     /// just dismiss, since there's nothing real to act on. Exists purely so
     /// the overlay's design can be checked without needing a real published
-    /// version newer than the one currently running.
+    /// version newer than the one currently running. Also sets
+    /// pendingUpdateVersion (left uncleared by the reply below, exactly
+    /// like the real Skip/Later path) so this doubles as a way to verify
+    /// the Check for Updates button/chip stay in "Update Available" after
+    /// dismissing the card, without needing a real published release.
     func previewUpdateFound() {
+        pendingUpdateVersion = "9.9.9"
         withAnimation {
             stage = .updateFound(
                 versionString: "9.9.9",

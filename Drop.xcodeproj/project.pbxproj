@@ -379,8 +379,8 @@
 				EXCLUDED_SOURCE_FILE_NAMES = "$(inherited) $(DEV_TOOLS_EXCLUDE)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) $(DEV_BUILD_FLAG)";
 				ICON_FILE = drop_icon_v4.icns;
-				CODE_SIGN_IDENTITY = "-";
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Drop Local Dev";
+				CODE_SIGN_STYLE = Manual;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGNING_ALLOWED = YES;
 				DEVELOPMENT_TEAM = "";
@@ -415,8 +415,8 @@
 				EXCLUDED_SOURCE_FILE_NAMES = "$(inherited) $(DEV_TOOLS_EXCLUDE)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) $(DEV_BUILD_FLAG)";
 				ICON_FILE = drop_icon_v4.icns;
-				CODE_SIGN_IDENTITY = "-";
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Drop Local Dev";
+				CODE_SIGN_STYLE = Manual;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGNING_ALLOWED = YES;
 				DEVELOPMENT_TEAM = "";

@@ -4492,17 +4492,27 @@ struct ContentView: View {
             .keyboardShortcut("v", modifiers: [.command, .shift])
             .hidden()
         )
-        // Escape: clear URL field -- disabled while the update overlay has a
-        // card on screen, since a disabled button's keyboard shortcut is
-        // inert; without this, this one and the overlay's own Escape-to-
-        // dismiss (DropUpdateOverlayView) competed for the same keypress and
-        // this one silently won every time.
-        .background(
-            Button("") { urlText = "" }
-                .keyboardShortcut(.escape, modifiers: [])
-                .disabled(dropDriver.isPresentingCard)
-                .hidden()
-        )
+        // Escape: clear URL field -- removed from the view hierarchy
+        // entirely (not merely .disabled) while the update overlay has a
+        // card on screen. .disabled(_:) does NOT make a keyboard shortcut
+        // inert the way it sounds like it should -- confirmed on-device
+        // (via the Dev tab's overlay previews, using Escape specifically):
+        // a disabled button can still consume an ambiguous shortcut before
+        // an enabled one gets a chance, so with just .disabled() here,
+        // this button and the overlay's own Escape-to-dismiss
+        // (DropUpdateOverlayView.escapeCatcher) competed for the same
+        // keypress and this one silently won every time, leaving every
+        // overlay preview un-Escape-dismissable. An `if` inside the
+        // ViewBuilder background block actually excludes this button from
+        // the hierarchy while a card is up, so there's only ever one
+        // Escape-bound button to route to.
+        .background {
+            if !dropDriver.isPresentingCard {
+                Button("") { urlText = "" }
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .hidden()
+            }
+        }
         // Drop's own update UI -- attached at the root so it can appear
         // over any tab, not just while Dev happens to be open, since an
         // update can be found at any time.

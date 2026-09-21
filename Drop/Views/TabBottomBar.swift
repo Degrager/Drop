@@ -122,6 +122,30 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
     /// the other per-run settings instead of inside its own card.
     @ViewBuilder var batchDirectoryControl: () -> BatchDirectoryControl
 
+    private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.barStackBreakpoint }
+
+    private var autoOpenToggle: some View {
+        HStack(spacing: DropGrid.labelSpacing) {
+                            Image(systemName: "folder")
+                                .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
+                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                                .frame(width: 14, alignment: .center)
+                            Text(columnWidth > 0 && columnWidth < 720 ? "AUTO-OPEN" : "AUTO-OPEN FOLDER")
+                                .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
+                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                            Text(config.autoOpenFolder ? "On" : "Off")
+                                .font(.appMono(size: DropGrid.fieldFontSize))
+                                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                            Toggle("", isOn: $config.autoOpenFolder)
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .tint(DesignTokens.Accent.primary)
+                                .labelsHidden()
+                        }
+                        .fixedSize()
+                        .frame(height: DropGrid.controlHeight)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Settings area — only when there are items. Floats as its own
@@ -144,51 +168,49 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                         GlassDivider()
                     }
 
-                    // Top row — Cookies picker (leftControls) + Auto-Open Folder toggle, aligned with Clear All.
-                    // All controls in this row share DropGrid.controlHeight so nothing sits a pixel off from its neighbor.
-                    HStack(alignment: .center, spacing: DropGrid.sectionSpacing) {
-                        leftControls()
-                            .frame(height: DropGrid.controlHeight)
-
-                        HStack(spacing: DropGrid.labelSpacing) {
-                            Image(systemName: "folder")
-                                .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                                .frame(width: 14, alignment: .center)
-                            Text("AUTO-OPEN FOLDER")
-                                .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                            Text(config.autoOpenFolder ? "On" : "Off")
-                                .font(.appMono(size: DropGrid.fieldFontSize))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                            Toggle("", isOn: $config.autoOpenFolder)
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(DesignTokens.Accent.primary)
-                                .labelsHidden()
+                    // In a narrow column the toggle and the folder field can't share
+                    // one row without the field collapsing, so they stack.
+                    if narrow {
+                        VStack(alignment: .leading, spacing: 8) {
+                            leftControls()
+                                .frame(height: DropGrid.controlHeight)
+                            autoOpenToggle
+                            batchDirectoryControl()
+                            if showClearAll {
+                                GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                                    .frame(height: DropGrid.controlHeight)
+                            }
                         }
-                        .fixedSize()
-                        .frame(height: DropGrid.controlHeight)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        // Top row — Cookies picker (leftControls) + Auto-Open Folder toggle, aligned with Clear All.
+                        // All controls in this row share DropGrid.controlHeight so nothing sits a pixel off from its neighbor.
+                        HStack(alignment: .center, spacing: DropGrid.sectionSpacing) {
+                            leftControls()
+                                .frame(height: DropGrid.controlHeight)
 
-                        batchDirectoryControl()
-                            .layoutPriority(1)
+                            autoOpenToggle
 
-                        // Only add a trailing Spacer when there's nothing else
-                        // to fill the row (batchDirectoryControl is empty and
-                        // Clear All is hidden) — otherwise leading controls
-                        // (leftControls / Auto-Open Folder toggle) would get
-                        // centered instead of staying pinned left. When
-                        // batchDirectoryControl IS present, it already expands
-                        // to fill all remaining width itself, so no Spacer is
-                        // needed and none is added — avoids the dead gap on
-                        // the right that a competing Spacer would create.
-                        if !hasBatchDirectoryControl && !showClearAll {
-                            Spacer(minLength: 0)
-                        }
-                        if showClearAll {
-                            Spacer(minLength: 0)
-                            GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
-                                .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
+                            batchDirectoryControl()
+                                .layoutPriority(1)
+
+                            // Only add a trailing Spacer when there's nothing else
+                            // to fill the row (batchDirectoryControl is empty and
+                            // Clear All is hidden) — otherwise leading controls
+                            // (leftControls / Auto-Open Folder toggle) would get
+                            // centered instead of staying pinned left. When
+                            // batchDirectoryControl IS present, it already expands
+                            // to fill all remaining width itself, so no Spacer is
+                            // needed and none is added — avoids the dead gap on
+                            // the right that a competing Spacer would create.
+                            if !hasBatchDirectoryControl && !showClearAll {
+                                Spacer(minLength: 0)
+                            }
+                            if showClearAll {
+                                Spacer(minLength: 0)
+                                GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                                    .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
+                            }
                         }
                     }
 
@@ -274,7 +296,6 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                 .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
                 .contentColumn(columnWidth)
-                .padding(.horizontal, 16)
                 .padding(.bottom, compactHeight ? 8 : 14)
             }
         }

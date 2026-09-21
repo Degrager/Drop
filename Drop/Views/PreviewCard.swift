@@ -158,8 +158,25 @@ struct PreviewCard<Settings: View>: View {
         !isAnalyzing || (title.isEmpty == false && revealTimerElapsed)
     }
 
+    @Environment(\.contentColumnWidth) private var columnWidth
+    /// In a narrow column the thumbnail + title row keeps its place, but the
+    /// URL and input -> output chips (which need real width) move BELOW it at
+    /// the card's full width instead of being squeezed into the space beside
+    /// the thumbnail, where they wrapped and truncated.
+    private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint }
+
     @ViewBuilder
     private var cardHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            cardHeaderRow
+            if narrow, !isAnalyzing, let sub = subtitle {
+                sub.transition(.fadeInOnly)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var cardHeaderRow: some View {
         // Center-aligned against just the title + subtitle group (URL +
         // input->output chips) -- the mode toggle now lives in its own
         // belowHeader slot outside this HStack entirely, so it never
@@ -284,7 +301,7 @@ struct PreviewCard<Settings: View>: View {
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                         .transition(.fadeInOnly)
-                } else if let sub = subtitle {
+                } else if let sub = subtitle, !narrow {
                     sub
                         .transition(.fadeInOnly)
                 }
@@ -464,8 +481,20 @@ struct CompletedCard<Status: View>: View {
         .transition(.fadeInOnly)
     }
 
+    @Environment(\.contentColumnWidth) private var columnWidth
+    /// See PreviewCard.narrow.
+    private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint }
+
     @ViewBuilder
     private var cardHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            cardHeaderRow
+            if narrow, let sub = subtitle { sub }
+        }
+    }
+
+    @ViewBuilder
+    private var cardHeaderRow: some View {
         HStack(spacing: compact ? 8 : 10) {
             if showCheckbox {
                 HoverIconButton(
@@ -496,7 +525,7 @@ struct CompletedCard<Status: View>: View {
                     .font(.system(size: compact ? 12 : 13, weight: .semibold))
                     .foregroundColor(.white.opacity((showCheckbox && !isSelected) ? DesignTokens.Text.disabled : DesignTokens.Text.primary))
                     .lineLimit(2)
-                if let sub = subtitle { sub }
+                if let sub = subtitle, !narrow { sub }
             }
 
             Spacer()

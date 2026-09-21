@@ -4099,7 +4099,10 @@ struct DropApp: App {
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
-        .defaultSize(width: 620, height: 520)
+        // First-launch size only (AppKit restores the user's own size after
+        // that). 620x520 opened cramped -- the bottom bar sat on top of the
+        // first preview card -- and was below the window's own minimum size.
+        .defaultSize(width: 1000, height: 720)
     }
 }
 
@@ -4467,13 +4470,23 @@ struct ContentView: View {
                                 // Treat Reconvert exactly like freshly dropping/importing the original
                                 // input file into the Convert tab — no stored snapshot reused, the file
                                 // is re-probed from scratch just like a first-time add.
-                                guard !convertStagingJobs.contains(where: { $0.inputURL == fileURL }),
-                                      !convertQueue.contains(where: { $0.inputURL == fileURL }) else {
+                                // Selecting the job matters: ConvertView's Analyze panel only
+                                // renders the SELECTED staged file, so appending without
+                                // selecting left Reconvert landing on an empty Convert tab.
+                                if let existing = convertStagingJobs.first(where: { $0.inputURL == fileURL }) {
+                                    convertSelectedStagingID = existing.id
+                                    activeTab = .convert
+                                    return
+                                }
+                                guard !convertQueue.contains(where: { $0.inputURL == fileURL }) else {
                                     activeTab = .convert
                                     return
                                 }
                                 let job = ConvertJob(inputURL: fileURL)
-                                withAnimation(.spring(response: 0.35)) { convertStagingJobs.append(job) }
+                                withAnimation(.spring(response: 0.35)) {
+                                    convertStagingJobs.append(job)
+                                    convertSelectedStagingID = job.id
+                                }
                                 activeTab = .convert
                             })
                             // History is one continuous panel rather than a stack of

@@ -1071,7 +1071,13 @@ struct ConvertView: View {
 
                 Spacer(minLength: 0)
 
+                // With no Analyze card to compete with, the bar (queue drawer,
+                // SAVE TO, Convert) takes priority for space -- but only down to
+                // its siblings' minimums, so a short window compresses the drawer
+                // instead of overflowing. With a staged file the panel and the bar
+                // share space as before.
                 convertBottomBar
+                    .layoutPriority(hasStaging ? 0 : 1)
             }
         }
     }
@@ -1308,7 +1314,7 @@ struct ConvertView: View {
                 ViewThatFits(in: .vertical) {
                     settingsCard
                     ScrollView(.vertical, showsIndicators: true) { settingsCard }
-                        .frame(minHeight: 160)
+                        .frame(minHeight: compactHeight ? 110 : 130)
                 }
                 // Add to Queue / Add All to Queue -- moved to the bottom of
                 // the Analyze card (below the full settings card) rather
@@ -1344,7 +1350,9 @@ struct ConvertView: View {
                 title: "Drop files to convert",
                 subtitle: "Supports any format ffmpeg can read"
             )
-            .frame(maxWidth: .infinity, minHeight: 220)
+            // Hard minimum kept low: it counts toward the window's minimum
+            // height, and this state also holds the whole bottom bar.
+            .frame(maxWidth: .infinity, minHeight: compactHeight ? 80 : 120)
             .transition(.blurInOnly)
         }
     }
@@ -1437,8 +1445,15 @@ struct ConvertView: View {
                 // .frame(height:), not just a cap) rather than letting it
                 // sit smaller than its stated max just because the current
                 // queue is short.
-                .frame(height: hasStaging ? nil : queueDrawerHeight)
-                .frame(maxHeight: queueDrawerHeight)
+                //
+                // Flexible between one row and queueDrawerHeight, NOT a fixed
+                // height: SwiftUI treats a fixed frame as a hard minimum and grows
+                // the window to fit it (adding the first file used to grow the
+                // window ~150pt and it never shrank back). The ScrollView is
+                // greedy, so with room to spare it still fills to the max; the bar
+                // is given layoutPriority in the queue-only state (see body) so it
+                // claims that room ahead of the empty state.
+                .frame(minHeight: hasStaging ? nil : queueRowStride, maxHeight: queueDrawerHeight)
                 GlassDivider()
             }
             HStack(spacing: 8) {

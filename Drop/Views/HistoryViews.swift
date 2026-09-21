@@ -13,6 +13,7 @@ struct HistoryView: View {
     @ObservedObject var config: Config
     let onAnalyze: ([String], [UUID]) -> Void
     let onReconvert: (URL) -> Void
+    @Environment(\.isCompactHeight) private var compactHeight
     @State private var searchText = ""
     @State private var isSearchHovering = false
     @FocusState private var searchFieldFocused: Bool
@@ -131,11 +132,9 @@ struct HistoryView: View {
             HoverGlowRim(isActive: isSearchHovering || searchFieldFocused)
         }
         .onHover { isSearchHovering = $0 }
-        // Capped at the same 864pt width as urlCard/dropZoneView (Download/
-        // Convert's reference bar) and centered, instead of stretching to
-        // fill the page -- otherwise this capsule reads as a different,
-        // wider size than every other tab's header bar.
-        .frame(maxWidth: 864)
+        // Fills the tab's content column exactly (the whole History panel is
+        // pinned to it -- see ContentView), so this capsule is the same
+        // width as Download's paste bar and Convert's drop zone.
         .frame(maxWidth: .infinity)
         .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
     }
@@ -143,9 +142,8 @@ struct HistoryView: View {
     var body: some View {
         VStack(spacing: 12) {
             searchHeader
-                .padding(.horizontal, 16)
-                .padding(.top, 40)
-                .padding(.bottom, 20)
+                .padding(.top, compactHeight ? 26 : 40)
+                .padding(.bottom, compactHeight ? 12 : 20)
 
             if filtered.isEmpty {
                 EmptyStateView(
@@ -206,7 +204,7 @@ struct HistoryView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 20).padding(.vertical, 16)
+                    .padding(.vertical, 16)
                 }
             }
         }
@@ -402,7 +400,9 @@ struct HistoryChip: View {
                     .lineLimit(1)
             }
         }
-        .fixedSize()
+        // Natural width when there's room; text truncates (rather than the
+        // chip overflowing its row) when the container is narrower.
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 8).padding(.vertical, 5)
         .background(color.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))

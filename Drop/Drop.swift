@@ -525,6 +525,39 @@ struct HistoryEntry: Codable, Identifiable {
     var snapshotQualityByFormat: [String: String] = [:]  // AudioQuality rawValues
     var snapshotFileSizeByQuality: [String: Int] = [:]   // heightCap as String keys (Codable)
 
+    /// Tolerant decoding: every key is optional on disk. Synthesized Codable
+    /// requires every non-optional key to be present, so adding any new field
+    /// to this struct made the WHOLE saved history fail to decode -- and the
+    /// next save then overwrote it with an empty list. Missing keys now fall
+    /// back to the same defaults the properties declare.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id                        = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title                     = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        url                       = try c.decodeIfPresent(String.self, forKey: .url) ?? ""
+        format                    = try c.decodeIfPresent(String.self, forKey: .format) ?? ""
+        quality                   = try c.decodeIfPresent(String.self, forKey: .quality) ?? ""
+        outputDir                 = try c.decodeIfPresent(String.self, forKey: .outputDir) ?? ""
+        fileSize                  = try c.decodeIfPresent(String.self, forKey: .fileSize)
+        date                      = try c.decodeIfPresent(Date.self, forKey: .date) ?? Date()
+        failed                    = try c.decodeIfPresent(Bool.self, forKey: .failed) ?? false
+        errorMessage              = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        mediaModeRaw              = try c.decodeIfPresent(String.self, forKey: .mediaModeRaw) ?? "audio"
+        hasVideo                  = try c.decodeIfPresent(Bool.self, forKey: .hasVideo) ?? false
+        thumbnailURL              = try c.decodeIfPresent(String.self, forKey: .thumbnailURL) ?? ""
+        entryType                 = try c.decodeIfPresent(String.self, forKey: .entryType) ?? "download"
+        outputFilePath            = try c.decodeIfPresent(String.self, forKey: .outputFilePath) ?? ""
+        audioCodecLabel           = try c.decodeIfPresent(String.self, forKey: .audioCodecLabel) ?? ""
+        snapshotDuration          = try c.decodeIfPresent(String.self, forKey: .snapshotDuration) ?? ""
+        snapshotDurationSeconds   = try c.decodeIfPresent(Int.self, forKey: .snapshotDurationSeconds) ?? 0
+        snapshotFileSizeBytes     = try c.decodeIfPresent(Int.self, forKey: .snapshotFileSizeBytes)
+        snapshotSourceMaxHeight   = try c.decodeIfPresent(Int.self, forKey: .snapshotSourceMaxHeight) ?? 0
+        snapshotSourceASR         = try c.decodeIfPresent(Int.self, forKey: .snapshotSourceASR) ?? 0
+        snapshotSourceABR         = try c.decodeIfPresent(Int.self, forKey: .snapshotSourceABR) ?? 0
+        snapshotQualityByFormat   = try c.decodeIfPresent([String: String].self, forKey: .snapshotQualityByFormat) ?? [:]
+        snapshotFileSizeByQuality = try c.decodeIfPresent([String: Int].self, forKey: .snapshotFileSizeByQuality) ?? [:]
+    }
+
     init(title: String, url: String, format: String, quality: String,
          outputDir: String, fileSize: String?,
          failed: Bool = false, errorMessage: String? = nil,
@@ -663,10 +696,27 @@ class HistoryStore: ObservableObject {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5, execute: item)
     }
 
+    /// Decodes an array one element at a time so a single unreadable entry is
+    /// skipped instead of failing the whole list.
+    private struct Lossy: Decodable {
+        let entry: HistoryEntry?
+        init(from decoder: Decoder) throws { entry = try? HistoryEntry(from: decoder) }
+    }
+
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let saved = try? JSONDecoder().decode([HistoryEntry].self, from: data)
-        else { return }
+        guard let data = UserDefaults.standard.data(forKey: key) else { return }
+        guard let lossy = try? JSONDecoder().decode([Lossy].self, from: data) else {
+            // Not even a list. Keep the raw bytes around before the next save
+            // overwrites them, rather than silently discarding a whole history.
+            UserDefaults.standard.set(data, forKey: key + ".unreadable")
+            DropLogger.shared.write("History: saved data was unreadable; kept a copy under \(key).unreadable")
+            return
+        }
+        let saved = lossy.compactMap(\.entry)
+        if saved.count != lossy.count {
+            UserDefaults.standard.set(data, forKey: key + ".unreadable")
+            DropLogger.shared.write("History: \(lossy.count - saved.count) unreadable entries skipped; raw copy kept under \(key).unreadable")
+        }
         entries = saved
         // Thumbnails written before entries were cleaned up on eviction/clear
         // are orphaned in the cache forever -- sweep them once per launch.
@@ -3763,8 +3813,54 @@ struct ToolsDropdownContent: View {
     // now a section within the rail's own card, not a floating popover
     // with its own card.
     var embedded: Bool = false
+    @Environment(\.isCompactSidebar) private var compact
+
+    /// Collapsed-sidebar version of a tool row: just the status glyph and
+    /// name; the version moves into the tooltip.
+    private func compactRow(_ name: String, installed: Bool, updateAvailable: Bool, version: String) -> some View {
+        let icon = !installed ? "exclamationmark.circle.fill" : (updateAvailable ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+        let color: Color = !installed ? .orange.opacity(0.85) : (updateAvailable ? .yellow.opacity(0.9) : .green.opacity(0.85))
+        return VStack(spacing: 2) {
+            Image(systemName: icon).font(.appMono(size: 12)).foregroundColor(color)
+            Text(name).font(.appMono(size: 8.5, weight: .medium))
+                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .help(version.isEmpty ? name : "\(name) \(version)")
+    }
 
     var body: some View {
+        if compact {
+            VStack(spacing: 10) {
+                compactRow("yt-dlp", installed: manager.toolsReady, updateAvailable: manager.updateAvailable, version: manager.ytdlpVersion)
+                compactRow("ffmpeg", installed: manager.toolsReady, updateAvailable: manager.ffmpegUpdateAvailable, version: manager.ffmpegVersion)
+                compactRow("Drop", installed: true, updateAvailable: dropDriver.hasActionableUpdate, version: manager.currentAppVersion)
+                checkForUpdatesButton
+            }
+            .padding(.top, 4)
+        } else {
+            expandedBody
+        }
+    }
+
+    private var checkForUpdatesButton: some View {
+        CheckForUpdatesButton(
+            isChecking: manager.checkingUpdates || dropDriver.isActivelyChecking,
+            hasUpdate: manager.updateAvailable || manager.ffmpegUpdateAvailable || dropDriver.hasActionableUpdate,
+            isUpToDate: manager.justCheckedUpToDate && dropDriver.justConfirmedUpToDate,
+            disabledUntilSetup: !manager.toolsReady,
+            action: {
+                // The one place all three checks actually run now --
+                // yt-dlp/ffmpeg's nightly fetch plus Drop's own Sparkle
+                // check, previously reachable individually per-row.
+                manager.ensureLatestTools()
+                manager.dropUpdater.checkForUpdates()
+            }
+        )
+    }
+
+    private var expandedBody: some View {
         VStack(alignment: .leading, spacing: 2) {
             // Each row is a static status readout now -- no per-tool click
             // target. Checking/updating happens in exactly one place, the
@@ -3830,19 +3926,7 @@ struct ToolsDropdownContent: View {
                 isUpdating: false
             )
             GlassDivider()
-            CheckForUpdatesButton(
-                isChecking: manager.checkingUpdates || dropDriver.isActivelyChecking,
-                hasUpdate: manager.updateAvailable || manager.ffmpegUpdateAvailable || dropDriver.hasActionableUpdate,
-                isUpToDate: manager.justCheckedUpToDate && dropDriver.justConfirmedUpToDate,
-                disabledUntilSetup: !manager.toolsReady,
-                action: {
-                    // The one place all three checks actually run now --
-                    // yt-dlp/ffmpeg's nightly fetch plus Drop's own Sparkle
-                    // check, previously reachable individually per-row.
-                    manager.ensureLatestTools()
-                    manager.dropUpdater.checkForUpdates()
-                }
-            )
+            checkForUpdatesButton
             .padding(.horizontal, embedded ? 0 : 12)
             .padding(.top, 4)
             .padding(.bottom, embedded ? 0 : 10)
@@ -3879,6 +3963,7 @@ struct CheckForUpdatesButton: View {
     var disabledUntilSetup: Bool = false
     let action: () -> Void
     @State private var hovering = false
+    @Environment(\.isCompactSidebar) private var compact
 
     private var accentColor: Color {
         if hasUpdate { return .orange }
@@ -3886,19 +3971,34 @@ struct CheckForUpdatesButton: View {
         return .white
     }
     private var isDisabled: Bool { isChecking || disabledUntilSetup }
+    private var labelText: String {
+        isChecking ? "Checking…" : (disabledUntilSetup ? "Tools Missing" : (hasUpdate ? "Update Available" : (isUpToDate ? "Up to Date" : "Check for Updates")))
+    }
+    private var iconName: String {
+        disabledUntilSetup ? "exclamationmark.triangle.fill" : (isUpToDate && !hasUpdate ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
+    }
 
     var body: some View {
-        GlassButton(
-            label: isChecking ? "Checking…" : (disabledUntilSetup ? "Tools Missing" : (hasUpdate ? "Update Available" : (isUpToDate ? "Up to Date" : "Check for Updates"))),
-            icon: disabledUntilSetup ? "exclamationmark.triangle.fill" : (isUpToDate && !hasUpdate ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath"),
-            tint: disabledUntilSetup ? Color.white.opacity(DesignTokens.Text.secondary) : accentColor,
-            verticalPadding: 8,
-            isLoading: isChecking,
-            disabled: isDisabled,
-            showRimBeam: isChecking,
-            action: action
-        )
-        .help(disabledUntilSetup ? "Bundled yt-dlp/ffmpeg missing — reinstall Drop" : "")
+        if compact {
+            // Icon-only in the collapsed sidebar; the label lives in the tooltip.
+            HoverIconButton(icon: iconName, size: 15,
+                            color: disabledUntilSetup ? Color.white.opacity(DesignTokens.Text.secondary) : accentColor,
+                            disabled: isDisabled, help: labelText, action: action)
+                .accessibilityLabel(labelText)
+                .frame(maxWidth: .infinity)
+        } else {
+            GlassButton(
+                label: labelText,
+                icon: iconName,
+                tint: disabledUntilSetup ? Color.white.opacity(DesignTokens.Text.secondary) : accentColor,
+                verticalPadding: 8,
+                isLoading: isChecking,
+                disabled: isDisabled,
+                showRimBeam: isChecking,
+                action: action
+            )
+            .help(disabledUntilSetup ? "Bundled yt-dlp/ffmpeg missing — reinstall Drop" : "")
+        }
     }
 }
 
@@ -3923,15 +4023,10 @@ extension Notification.Name {
     static let menuBarDownload = Notification.Name("dropMenuBarDownload")
 }
 
-// MARK: - App Delegate (enforces min size via windowWillResize)
+// MARK: - App Delegate (enforces WindowLayout.minimumSize)
 
 class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared: DropAppDelegate!
-    var minHeight: CGFloat = 640
-    // Input section caps at 864pt + 16pt horizontal padding on each side
-    // (32pt total), so the window can never shrink narrower than the
-    // paste field itself.
-    var minWidth: CGFloat = 896
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
 
@@ -3990,7 +4085,19 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             if let window = NSApplication.shared.windows.first(where: { !($0 is NSPanel) }) {
                 window.delegate = self
-                window.minSize = NSSize(width: self.minWidth, height: self.minHeight)
+                window.minSize = WindowLayout.minimumSize
+                // minSize only constrains drags: a first-launch or restored
+                // frame smaller than it (the old 620x520 default; a size saved
+                // by an older build) would otherwise sit below the minimum
+                // until something forced a re-layout.
+                var frame = window.frame
+                let clamped = NSSize(width: max(frame.width, WindowLayout.minimumSize.width),
+                                     height: max(frame.height, WindowLayout.minimumSize.height))
+                if clamped != frame.size {
+                    frame.origin.y -= clamped.height - frame.height
+                    frame.size = clamped
+                    window.setFrame(frame, display: true)
+                }
                 window.collectionBehavior = [.managed, .fullScreenPrimary]
                 // Standard AppKit window -- no NonFullscreenWindow subclass
                 // override anymore, so both double-click-title-bar-to-zoom
@@ -4080,12 +4187,8 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        // Log is now an in-app tab, not a floating side panel, so there's no
-        // extra panel width to reserve room for anymore -- just the plain
-        // min-size clamp.
-        let w = max(frameSize.width, minWidth)
-        let h = max(frameSize.height, minHeight)
-        return NSSize(width: w, height: h)
+        NSSize(width: max(frameSize.width, WindowLayout.minimumSize.width),
+               height: max(frameSize.height, WindowLayout.minimumSize.height))
     }
 
 }
@@ -4102,7 +4205,7 @@ struct DropApp: App {
         // First-launch size only (AppKit restores the user's own size after
         // that). 620x520 opened cramped -- the bottom bar sat on top of the
         // first preview card -- and was below the window's own minimum size.
-        .defaultSize(width: 1000, height: 720)
+        .defaultSize(width: WindowLayout.firstLaunchSize.width, height: WindowLayout.firstLaunchSize.height)
     }
 }
 
@@ -4303,17 +4406,17 @@ struct ContentView: View {
     // "cancel this one." Checked the instant a queued slot opens up for this
     // id so a cancelled-while-waiting card never spawns yt-dlp at all.
     @State private var cancelledAnalyzeIDs: Set<UUID> = []
-    // Single source of truth for the 60%-of-window proportional width used
-    // by the toolbar row, the card queue, and the bottom bar. Previously
-    // each row computed its own 60% via `containerRelativeFrame`, but that
-    // resolves against the NEAREST container -- and ScrollView establishes
-    // its own container geometry, separate from the plain VStack the
-    // toolbar/bottom-bar rows sit in directly. That mismatch is why the
-    // card queue (inside the ScrollView) rendered a different width than
-    // the toolbar/bottom bar (outside it) despite identical-looking
-    // modifiers. Measuring once via GeometryReader on the shared parent and
-    // handing every row the exact same number removes the ambiguity.
-    @State private var mainPanelWidth: CGFloat = 0
+    // Measured once here and shared with every tab (see WindowLayout and the
+    // .environment(...) values injected at the end of body). Previously each
+    // tab measured -- or worse, guessed via containerRelativeFrame, which
+    // resolves against whatever container happens to be nearest -- its own
+    // "60% of something", so Download, Convert and History/Log/Dev never
+    // agreed on a width.
+    @State private var windowSize: CGSize = .zero
+    @State private var mainAreaWidth: CGFloat = 0
+    private var isCompactSidebar: Bool { windowSize.width > 0 && windowSize.width < WindowLayout.compactSidebarBreakpoint }
+    private var isCompactHeight: Bool { windowSize.height > 0 && windowSize.height < WindowLayout.compactHeightBreakpoint }
+    private var columnWidth: CGFloat { WindowLayout.columnWidth(mainWidth: mainAreaWidth) }
     @State private var convertStagingJobs: [ConvertJob] = []
     @State private var convertQueue: [ConvertJob] = []
     /// Lives here (not as local @State in ConvertView) because activeTab
@@ -4491,10 +4594,9 @@ struct ContentView: View {
                             })
                             // History is one continuous panel rather than a stack of
                             // floating cards, so the equivalent of "cap the cards at
-                            // 60%" here is capping the whole panel -- same proportional
-                            // width and centering as the Download/Convert card queues.
-                            .containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
-                            .frame(maxWidth: .infinity)
+                            // the content column" here is capping the whole panel -- the
+                            // same shared column width and centering as every other tab.
+                            .contentColumn(columnWidth)
                             .transition(.identity)
                         } else if activeTab == .convert {
                             ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
@@ -4510,8 +4612,7 @@ struct ContentView: View {
                             // against-the-window-glass structure and 60%-width
                             // convention as History, not a card floating on a page.
                             LogView(logs: manager.globalLogs)
-                                .containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
-                                .frame(maxWidth: .infinity)
+                                .contentColumn(columnWidth)
                                 .transition(.identity)
                         }
                     }
@@ -4547,8 +4648,7 @@ struct ContentView: View {
                     #if DEV_BUILD
                     if DevKeychain.isDevMachine {
                         DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
-                            .containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
-                            .frame(maxWidth: .infinity)
+                            .contentColumn(columnWidth)
                             .opacity(activeTab == .devRelease ? 1 : 0)
                             .allowsHitTesting(activeTab == .devRelease)
                             .animation(nil, value: activeTab)
@@ -4558,23 +4658,35 @@ struct ContentView: View {
 
                 }
                 .frame(maxWidth: .infinity)
+                // The main column's own width (everything right of the
+                // sidebar) -- the one number WindowLayout.columnWidth derives
+                // every tab's content width from.
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { mainAreaWidth = geo.size.width }
+                            .onChange(of: geo.size.width) { _, newWidth in mainAreaWidth = newWidth }
+                    }
+                )
             }
-            .frame(minWidth: 720)
         }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { windowSize = geo.size }
+                    .onChange(of: geo.size) { _, newSize in windowSize = newSize }
+            }
+        )
+        .environment(\.contentColumnWidth, columnWidth)
+        .environment(\.isCompactSidebar, isCompactSidebar)
+        .environment(\.isCompactHeight, isCompactHeight)
         // Window-level drop target — drag a URL anywhere onto Drop
         .onDrop(of: ["public.url", "public.plain-text"], isTargeted: nil) { providers in
             handleDrop(providers: providers)
             return true
         }
         .preferredColorScheme(.dark)
-        .onChange(of: linkPreviews.count) {
-            updateWindowMinHeight()
-        }
         .onAppear {
-            // Enforce minimum window size: top bar + URL paste field, cards scroll freely below
-            DispatchQueue.main.async {
-                updateWindowMinHeight()
-            }
             // Mirrors the Download tab's own Paste & Analyze button exactly:
             // validate every line is a URL, insert pending placeholder cards
             // immediately for visual feedback, then kick off analysis — so
@@ -4672,12 +4784,15 @@ struct ContentView: View {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.appMono(size: 14, weight: .semibold))
                     .foregroundColor(DesignTokens.Accent.primary)
-                Text("Drop")
-                    .font(.appMono(size: 14, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                Spacer()
+                if !isCompactSidebar {
+                    Text("Drop")
+                        .font(.appMono(size: 14, weight: .semibold))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                    Spacer()
+                }
             }
-            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, alignment: isCompactSidebar ? .center : .leading)
+            .padding(.horizontal, isCompactSidebar ? 0 : 14)
             .padding(.top, 16)
             .padding(.bottom, 18)
 
@@ -4744,10 +4859,10 @@ struct ContentView: View {
             // sidebar tab (see nav items above) instead of a floating
             // side panel triggered from this row.
             ToolsStatusPill(manager: manager)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, isCompactSidebar ? 6 : 16)
                 .padding(.bottom, 16)
         }
-        .frame(width: 240)
+        .frame(width: isCompactSidebar ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth)
         // Real floating card -- identical material/radius/rim-stroke
         // recipe as every other GlassCard in the app (VisualEffectBlur +
         // black tint + grain + gradient rim stroke), not a bespoke
@@ -4762,12 +4877,7 @@ struct ContentView: View {
 
     var mainPanel: some View {
         VStack(spacing: 12) {
-            // Input area — the paste field and Paste & Analyze button now
-            // (mainPanelWidth measurement -- see below -- captures this
-            // VStack's true resolved width once per layout pass so every
-            // 60%-proportional row underneath computes against the exact
-            // same number, regardless of whether that row sits inside a
-            // ScrollView or not.)
+            // Input area — the paste field and Paste & Analyze button
             // share one seamless pill bar (built inside urlCard itself), so
             // no outer card wrapper is needed here.
             urlCard
@@ -4779,9 +4889,10 @@ struct ContentView: View {
                 // window scale, so these are large, deliberate increases --
                 // the extra bottom padding stacks with the VStack's own
                 // 12pt spacing so this gap grows without also widening the
-                // toolbar-to-scroll-area gap beneath it.
-                .padding(.top, 40)
-                .padding(.bottom, 20)
+                // toolbar-to-scroll-area gap beneath it. Tighter in a short
+                // window, where the card list needs every point.
+                .padding(.top, isCompactHeight ? 26 : 40)
+                .padding(.bottom, isCompactHeight ? 12 : 20)
 
             // ── List header — Select/Done + Select All/Deselect All on the
             // left, Clear All on the right. Mirrors Convert's header exactly.
@@ -4898,22 +5009,10 @@ struct ContentView: View {
                 .padding(.vertical, 12)
                 .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
-                // Proportional width -- 60% of the window, not the paste
-                // field's fixed 864 cap. The paste field stays a fixed
-                // width on purpose (its own comment: caps at half a 16"
-                // MacBook Pro screen once maximized), but this row and the
-                // bottom bar should breathe more and scale with the window
-                // per the user's explicit request, while still centering
-                // rather than going edge-to-edge.
-                // Pinned to mainPanelWidth (measured once via GeometryReader
-                // on the outer VStack) instead of containerRelativeFrame --
-                // that modifier resolves against the NEAREST container, and
-                // the card queue below lives inside a ScrollView, which
-                // establishes its own separate container geometry. Using one
-                // shared measured number guarantees this row, the card
-                // queue, and the bottom bar are always pixel-identical.
-                .frame(width: mainPanelWidth > 0 ? mainPanelWidth * 0.60 : nil)
-                .frame(maxWidth: .infinity)
+                // Same shared content column as the paste bar, the card queue
+                // below and the bottom bar (see WindowLayout.columnWidth), so
+                // every row in this tab is pixel-identical in width.
+                .contentColumn(columnWidth)
                 .padding(.horizontal, 16)
             }
 
@@ -4955,22 +5054,13 @@ struct ContentView: View {
 
                         Color.clear.frame(height: 4).id("scrollBottom")
                     }
-                    // Same 60%-of-window proportional cap as the list header
-                    // row and bottom bar, so every card in the queue lines up
-                    // with them instead of stretching edge-to-edge across the
-                    // full window while the chrome above/below it is capped.
-                    // Pinned to mainPanelWidth instead of
-                    // containerRelativeFrame -- this VStack lives inside a
-                    // ScrollView, which is its own containerRelativeFrame
-                    // reference frame, separate from the plain VStack the
-                    // header row and bottom bar sit in directly. That's why
-                    // matching padding alone (16pt vs 16pt) never fully
-                    // closed the gap: the 60% itself was being computed
-                    // against two different container widths. Using the one
-                    // shared GeometryReader measurement from mainPanel fixes
-                    // this at the root instead of chasing padding deltas.
-                    .frame(width: mainPanelWidth > 0 ? mainPanelWidth * 0.60 : nil)
-                    .frame(maxWidth: .infinity)
+                    // Same content column as the paste bar, list header and
+                    // bottom bar, so every card in the queue lines up with them.
+                    // One measured number (see WindowLayout) rather than a
+                    // containerRelativeFrame, which resolves against the
+                    // NEAREST container -- and this VStack sits inside a
+                    // ScrollView, which has its own.
+                    .contentColumn(columnWidth)
                     .padding(.horizontal, 16)
                     .padding(.top, 20)
                     .padding(.bottom, 8)
@@ -5030,7 +5120,6 @@ struct ContentView: View {
                     onClearAll: {},
                     onPrimaryAction: { download() },
                     showClearAll: false,
-                    pinnedWidth: mainPanelWidth * 0.60,
                     hasBatchDirectoryControl: true
                 ) {
                     // leftControls: none — cookie source is now resolved automatically on failure
@@ -5043,6 +5132,11 @@ struct ContentView: View {
                 // layout, but permanent here since Download has only one
                 // destination). Fills the remaining bar width.
                 VStack(alignment: .leading, spacing: DropGrid.labelSpacing) {
+                    // In a short window the label row (and the total-size chip
+                    // on it) is dropped to give the card list the room -- the
+                    // folder field below says the same thing, and the total
+                    // moves into its tooltip.
+                    if !isCompactHeight {
                     HStack(spacing: DropGrid.labelSpacing) {
                         Image(systemName: "folder")
                             .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
@@ -5066,6 +5160,7 @@ struct ContentView: View {
                             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
                         }
                     }
+                    }
                     HStack(spacing: DropGrid.rowSpacing) {
                         HStack(spacing: DropGrid.rowSpacing) {
                             Image(systemName: "folder.fill")
@@ -5083,6 +5178,7 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: DropGrid.fieldCorner, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: DropGrid.fieldCorner, style: .continuous)
                             .stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth))
+                        .help(isCompactHeight ? "Save to this folder" + (totalEstimatedSizeLabel.map { " · est. \($0)" } ?? "") : "")
 
                         GlassButton(label: "Browse", icon: "folder", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
                             let panel = NSOpenPanel()
@@ -5114,21 +5210,6 @@ struct ContentView: View {
                 .glassCard(cornerRadius: DesignTokens.Radius.medium, opacity: 0.35)
             }
         }
-        // Measures this VStack's real resolved width once per layout pass
-        // (background never affects the VStack's own size) and stores it so
-        // the toolbar row, card queue, and bottom bar all derive their 60%
-        // proportional width from the exact same number -- see
-        // mainPanelWidth's declaration for why containerRelativeFrame alone
-        // wasn't reliable across a ScrollView boundary.
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { mainPanelWidth = geo.size.width }
-                    .onChange(of: geo.size.width) { _, newWidth in
-                        mainPanelWidth = newWidth
-                    }
-            }
-        )
     }
 
     // MARK: - URL Card
@@ -5258,9 +5339,6 @@ struct ContentView: View {
         // actually makes the capsule's own background stretch to this
         // height instead of just hugging its label/icon content size.
         let innerPillHeight: CGFloat = fieldHeight - 10
-        // On a 16" MacBook Pro (1728pt-wide display), this caps the input
-        // section at half the screen width once the window is maximized.
-        let inputMaxWidth: CGFloat = 864
 
         // spacing: 0 -- the field and the embedded pill must sit flush
         // against each other with zero gap so this reads as one
@@ -5420,8 +5498,10 @@ struct ContentView: View {
             HoverGlowRim(isActive: isUrlCardHovering || urlFieldFocused)
         }
         .onHover { isUrlCardHovering = $0 }
-        .frame(maxWidth: inputMaxWidth)
-        .frame(maxWidth: .infinity)
+        // Same content column as everything beneath it (it used to be a
+        // separate fixed 864pt cap, which left it narrower than the cards on
+        // big windows and wider than them on small ones).
+        .contentColumn(columnWidth)
         .onChange(of: urlText) {
             analyzeResult = nil
             duplicateURLDetected = false
@@ -5521,19 +5601,11 @@ struct ContentView: View {
                 Text(p.url)
                     .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                     .lineLimit(1).truncationMode(.middle)
-                // Center alignment (not .top) so the arrow lines up against
-                // the chip row's own real height, including when chips wrap
-                // onto a second line -- a fixed .padding(.top, ...) offset
-                // only ever looked right for exactly one line of chips and
-                // read too high otherwise.
-                HStack(alignment: .center, spacing: 10) {
-                    ChipRow(chips: p.inputChips)
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    ChipRow(chips: p.outputChips)
-                }
-                .animation(nil, value: p.mediaMode)
+                // Side by side (arrow centered against the chips' real height,
+                // including when they wrap) in a wide column; stacked in a
+                // narrow one -- see InputOutputChips.
+                InputOutputChips(input: p.inputChips, output: p.outputChips)
+                    .animation(nil, value: p.mediaMode)
             }
         )
         // Below the header, full-width -- a thin divider first so the mode
@@ -6942,11 +7014,6 @@ struct ContentView: View {
         }
     }
 
-    func updateWindowMinHeight() {
-        let minH: CGFloat = 520  // fixed floor — cards scroll, window never auto-expands
-        DropAppDelegate.shared.minHeight = minH
-    }
-
     func handleDrop(providers: [NSItemProvider]) {
         for provider in providers {
             // Try public.url first (dragging from browser address bar)
@@ -7072,7 +7139,12 @@ struct FlowLayout: Layout {
         var totalHeight: CGFloat = 0
         var rowHeight: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            // Clamped to the row: a chip wider than the whole row (a long
+            // "MP4 · H264 · 24fps · 1920×1080" in a narrow column) is
+            // truncated by its own text rather than overflowing the row and
+            // overlapping whatever sits beside it.
+            let ideal = subview.sizeThatFits(.unspecified)
+            let size = CGSize(width: min(ideal.width, maxWidth), height: ideal.height)
             if rowWidth > 0 && rowWidth + spacing + size.width > maxWidth {
                 totalHeight += rowHeight + spacing
                 totalWidth = max(totalWidth, rowWidth)
@@ -7093,13 +7165,14 @@ struct FlowLayout: Layout {
         var y: CGFloat = bounds.minY
         var rowHeight: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let ideal = subview.sizeThatFits(.unspecified)
+            let size = CGSize(width: min(ideal.width, maxWidth), height: ideal.height)
             if x > bounds.minX && x + size.width > bounds.minX + maxWidth {
                 x = bounds.minX
                 y += rowHeight + spacing
                 rowHeight = 0
             }
-            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .unspecified)
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(width: size.width, height: size.height))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
         }

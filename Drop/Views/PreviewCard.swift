@@ -545,39 +545,91 @@ struct InputOutputRow: View {
     }
     private var chipRowCenter: VerticalAlignment { VerticalAlignment(ChipRowCenter.self) }
 
+    @Environment(\.contentColumnWidth) private var columnWidth
+    /// Side by side needs room for two chip rows plus the arrow; below the
+    /// breakpoint they stack (input on top, output beneath) instead of
+    /// squeezing each other into truncated or overlapping chips.
+    private var stacked: Bool { columnWidth > 0 && columnWidth < WindowLayout.stackedChipsBreakpoint }
+
+    private func column(path: String, chips: [ChipData], alignChips: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(path)
+                .font(.system(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                .lineLimit(1).truncationMode(.middle)
+            if !chips.isEmpty {
+                if alignChips {
+                    ChipRow(chips: chips)
+                        .alignmentGuide(chipRowCenter) { $0.height / 2 }
+                } else {
+                    ChipRow(chips: chips)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     var body: some View {
-        HStack(alignment: chipRowCenter, spacing: 14) {
-            // Input (source) column
-            VStack(alignment: .leading, spacing: 4) {
-                Text(inputPath)
-                    .font(.system(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    .lineLimit(1).truncationMode(.middle)
-                if !inputChips.isEmpty {
-                    ChipRow(chips: inputChips)
-                        .alignmentGuide(chipRowCenter) { $0.height / 2 }
+        if stacked {
+            VStack(alignment: .leading, spacing: 8) {
+                column(path: inputPath, chips: inputChips, alignChips: false)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                        .padding(.top, 2)
+                    column(path: outputPath, chips: outputChips, alignChips: false)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            HStack(alignment: chipRowCenter, spacing: 14) {
+                // Input (source) column
+                column(path: inputPath, chips: inputChips, alignChips: true)
 
-            // Big arrow — input flows into output, level with both chip
-            // rows regardless of how many lines either one wraps to.
-            Image(systemName: "arrow.right")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                .alignmentGuide(chipRowCenter) { $0.height / 2 }
+                // Big arrow — input flows into output, level with both chip
+                // rows regardless of how many lines either one wraps to.
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                    .alignmentGuide(chipRowCenter) { $0.height / 2 }
 
-            // Output (destination) column — same layout as input so the two
-            // sides align at the same level.
-            VStack(alignment: .leading, spacing: 4) {
-                Text(outputPath)
-                    .font(.system(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    .lineLimit(1).truncationMode(.middle)
-                if !outputChips.isEmpty {
-                    ChipRow(chips: outputChips)
-                        .alignmentGuide(chipRowCenter) { $0.height / 2 }
+                // Output (destination) column — same layout as input so the two
+                // sides align at the same level.
+                column(path: outputPath, chips: outputChips, alignChips: true)
+            }
+        }
+    }
+}
+
+/// The "what you have -> what you'll get" chip pair under a card's title
+/// (Download's queued cards and Convert's Analyze/queue cards). Side by side
+/// when the content column is wide enough; stacked below
+/// WindowLayout.stackedChipsBreakpoint, where the side-by-side layout used to
+/// overlap (Convert) or wrap to three rows per side (Download).
+struct InputOutputChips: View {
+    let input: [ChipData]
+    let output: [ChipData]
+    @Environment(\.contentColumnWidth) private var columnWidth
+
+    var body: some View {
+        if columnWidth > 0 && columnWidth < WindowLayout.stackedChipsBreakpoint {
+            VStack(alignment: .leading, spacing: 6) {
+                ChipRow(chips: input)
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                        .padding(.top, 6)
+                    ChipRow(chips: output)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            HStack(alignment: .center, spacing: 10) {
+                ChipRow(chips: input)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                ChipRow(chips: output)
+            }
         }
     }
 }

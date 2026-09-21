@@ -89,13 +89,14 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
     /// header row above the card list, so it hides both here to avoid a
     /// duplicate control.
     var showClearAll: Bool = true
-    /// When nonzero, pins this bar's proportional width to exactly this
-    /// value (matching the toolbar row and card queue above, which now all
-    /// derive from one GeometryReader measurement in mainPanel). Falls back
-    /// to a local containerRelativeFrame estimate only if never set --
-    /// containerRelativeFrame alone doesn't guarantee agreement across a
-    /// ScrollView boundary elsewhere in the layout.
-    var pinnedWidth: CGFloat = 0
+    /// The bar's width and vertical density come from the shared window
+    /// layout (see WindowLayout), so it always matches the rows above it.
+    @Environment(\.contentColumnWidth) private var columnWidth
+    @Environment(\.isCompactHeight) private var compactHeight
+    /// False lets a tab skip the extra-controls slot (and its divider) when it
+    /// has nothing worth showing -- Convert's queue drawer, when the queue is
+    /// empty. The `is EmptyView` check below can't detect that on its own.
+    var showExtraControls: Bool = true
     /// Whether `batchDirectoryControl` is actually rendering visible content
     /// right now (vs. an EmptyView placeholder). Passed explicitly by the
     /// caller because `@ViewBuilder`'s `if/else` produces a
@@ -129,7 +130,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
             // window's edges with no margin -- previously this was the one
             // section that broke the app's card-based language.
             if hasItems {
-                VStack(spacing: 12) {
+                VStack(spacing: compactHeight ? 8 : 12) {
 
                     // Extra controls (e.g. Convert's Queue drawer) — rendered
                     // ABOVE the directory/toggle row and the rest of this
@@ -138,7 +139,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                     // as "queue, then destination" top to bottom. Download
                     // never populates this slot, so this reorder is a no-op there.
                     let extra = extraControls()
-                    if !(extra is EmptyView) {
+                    if showExtraControls && !(extra is EmptyView) {
                         extra
                         GlassDivider()
                     }
@@ -221,7 +222,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                                     .font(.appMono(size: 15, weight: .semibold))
                             }
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
+                            .padding(.vertical, compactHeight ? 9 : 14)
                             .background(
                                 RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
                                     .fill(enabled ?
@@ -269,33 +270,13 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
 
                 }
                 .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                .padding(.vertical, compactHeight ? 10 : 16)
                 .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
-                // Proportional width -- 60% of the window, matching the
-                // list header row and card queue exactly. Pinned to the
-                // shared mainPanelWidth measurement when available so this
-                // bar can never drift from the other two rows again.
-                .frame(width: pinnedWidth > 0 ? pinnedWidth : nil)
-                .modifier(FallbackProportionalWidth(active: pinnedWidth <= 0))
-                .frame(maxWidth: .infinity)
+                .contentColumn(columnWidth)
                 .padding(.horizontal, 16)
-                .padding(.bottom, 14)
+                .padding(.bottom, compactHeight ? 8 : 14)
             }
-        }
-    }
-}
-
-/// Only used when a caller never supplies pinnedWidth -- keeps this row
-/// working standalone (e.g. in isolated previews) without requiring the
-/// GeometryReader measurement from mainPanel.
-private struct FallbackProportionalWidth: ViewModifier {
-    var active: Bool
-    func body(content: Content) -> some View {
-        if active {
-            content.containerRelativeFrame(.horizontal) { length, _ in length * 0.60 }
-        } else {
-            content
         }
     }
 }

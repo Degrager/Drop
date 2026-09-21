@@ -832,11 +832,11 @@ struct ConvertView: View {
 
     @State private var isDragging = false
     @State private var isDropZoneHovering = false
-    /// Measured once via GeometryReader on the outer VStack (see body's
-    /// .background below) and shared by the Analyze panel and bottom bar so
-    /// both are pinned to the exact same pixel width -- matching Download's
-    /// mainPanelWidth pattern.
-    @State private var mainPanelWidth: CGFloat = 0
+    /// Shared content column and vertical density (see WindowLayout) -- the
+    /// Analyze panel, drop zone and bottom bar all use the same width as
+    /// Download's rows.
+    @Environment(\.contentColumnWidth) private var columnWidth
+    @Environment(\.isCompactHeight) private var compactHeight
 
     /// Convert Queue drawer collapse state -- the item-count subtext stays
     /// visible either way; collapsing only hides the row list beneath it.
@@ -939,7 +939,6 @@ struct ConvertView: View {
     var dropZoneView: some View {
         let fieldHeight: CGFloat = 52
         let innerPillHeight: CGFloat = fieldHeight - 10
-        let inputMaxWidth: CGFloat = 864
 
         return HStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -1005,8 +1004,7 @@ struct ConvertView: View {
         .overlay {
             HoverGlowRim(isActive: isDropZoneHovering || isDragging)
         }
-        .frame(maxWidth: inputMaxWidth)
-        .frame(maxWidth: .infinity)
+        .contentColumn(columnWidth)
         // No blanket .onTapGesture here -- tap-to-browse is scoped to the
         // leading label area above; the embedded Browse button handles
         // its own hit area. Hover/drag feedback still applies to the
@@ -1044,8 +1042,8 @@ struct ConvertView: View {
             dropZoneView
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
                 .padding(.horizontal, 16)
-                .padding(.top, 40)
-                .padding(.bottom, 20)
+                .padding(.top, compactHeight ? 26 : 40)
+                .padding(.bottom, compactHeight ? 12 : 20)
 
             // ── Analyze panel — fixed in place (never scrolls): exactly one
             // staged file at a time, switchable via the dropdown, so every
@@ -1099,26 +1097,15 @@ struct ConvertView: View {
                     }
                 },
                 showClearAll: false,
-                pinnedWidth: mainPanelWidth * 0.60,
+                // The drawer's only content with an empty queue is "No items in
+                // queue", which the disabled primary button already says.
+                showExtraControls: !queue.isEmpty,
                 hasBatchDirectoryControl: true,
                 leftControls: { EmptyView() },
                 extraControls: { queueDrawer },
                 batchDirectoryControl: { batchDirectoryField }
             )
         }
-        // Measures this VStack's real resolved width once per layout pass
-        // and stores it so the Analyze panel and bottom bar both derive
-        // their 60% proportional width from the exact same number --
-        // matching Download's mainPanelWidth pattern exactly.
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { mainPanelWidth = geo.size.width }
-                    .onChange(of: geo.size.width) { _, newWidth in
-                        mainPanelWidth = newWidth
-                    }
-            }
-        )
     }
 
     // MARK: - Analyze panel
@@ -1183,13 +1170,13 @@ struct ConvertView: View {
             }
         }
         .padding(4)
-        // Capped at ~65% of the Analyze card's own width (mainPanelWidth *
-        // 0.60 is the card's width -- see analyzePanel's own frame) rather
+        // Capped at ~65% of the Analyze card's own width (the shared content
+        // column is the card's width -- see analyzePanel's own frame) rather
         // than pinned to fileSwitcherTriggerWidth like before -- full
         // filenames need room to grow past the trigger pill's width, but
         // still shouldn't be free to blow out to an arbitrary width for a
         // very long name.
-        .frame(maxWidth: mainPanelWidth > 0 ? mainPanelWidth * 0.60 * 0.65 : nil, alignment: .leading)
+        .frame(maxWidth: columnWidth > 0 ? columnWidth * 0.65 : nil, alignment: .leading)
         .background(
             ZStack {
                 VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
@@ -1213,9 +1200,11 @@ struct ConvertView: View {
     private var analyzePanel: some View {
         if let job = selectedStagingJob {
             VStack(alignment: .leading, spacing: 12) {
+                if !compactHeight {
                 Label("ANALYZE", systemImage: "slider.horizontal.3")
                     .font(.appMono(size: 10, weight: .semibold))
                     .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                }
                 // zIndex(99) here, not just on the popup's own local ZStack
                 // below -- this HStack is the EARLIER of two siblings in
                 // analyzePanel's VStack (ConvertPreviewCard, the full
@@ -1283,12 +1272,23 @@ struct ConvertView: View {
                     Spacer()
                 }
                 .zIndex(99)
-                ConvertPreviewCard(
+                // The settings card hugs its content when the window is tall
+                // enough for all of it, and scrolls inside the panel when it
+                // isn't -- this panel used to be "fixed in place (never
+                // scrolls)", which forced the whole window to be ~960pt tall
+                // on this tab (the window silently grew when you switched
+                // here). Add to Queue below stays pinned either way.
+                let settingsCard = ConvertPreviewCard(
                     job: job,
                     config: config,
                     onRemove: { removeFromStaging(job) },
                     isQueueRow: false
                 )
+                ViewThatFits(in: .vertical) {
+                    settingsCard
+                    ScrollView(.vertical, showsIndicators: true) { settingsCard }
+                        .frame(minHeight: 160)
+                }
                 // Add to Queue / Add All to Queue -- moved to the bottom of
                 // the Analyze card (below the full settings card) rather
                 // than sitting up in the header row beside the file
@@ -1313,8 +1313,7 @@ struct ConvertView: View {
             // glassCard, and two stacked full-strength layers read as muddy.
             .glassCard(cornerRadius: DesignTokens.Radius.xlarge, opacity: 0.35)
             .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
-            .frame(width: mainPanelWidth > 0 ? mainPanelWidth * 0.60 : nil)
-            .frame(maxWidth: .infinity)
+            .contentColumn(columnWidth)
             .padding(.horizontal, 16)
         } else {
             EmptyStateView(
@@ -1554,6 +1553,9 @@ struct ConvertView: View {
     /// and remembers the last folder picked (persisted in config.convertOutputDir).
     private var batchDirectoryField: some View {
         VStack(alignment: .leading, spacing: DropGrid.labelSpacing) {
+            // Dropped in a short window (see WindowLayout.compactHeightBreakpoint)
+            // to give the queue and Analyze panel the room.
+            if !compactHeight {
             HStack(spacing: DropGrid.labelSpacing) {
                 Image(systemName: "folder")
                     .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
@@ -1581,6 +1583,7 @@ struct ConvertView: View {
                 .padding(.vertical, 4)
                 .background(Color.white.opacity(totalEstimatedSizeLabel == nil ? 0.0 : DesignTokens.Interactive.fillRest))
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
+            }
             }
             HStack(spacing: DropGrid.rowSpacing) {
                 HStack(spacing: DropGrid.rowSpacing) {
@@ -2133,14 +2136,8 @@ struct ConvertPreviewCard: View {
                 Text(job.inputURL.path)
                     .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                     .lineLimit(1).truncationMode(.middle)
-                HStack(alignment: .center, spacing: 10) {
-                    ChipRow(chips: job.inputChips)
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    ChipRow(chips: job.outputChips)
-                }
-                .animation(nil, value: job.mediaMode)
+                InputOutputChips(input: job.inputChips, output: job.outputChips)
+                    .animation(nil, value: job.mediaMode)
             }
         )
     }

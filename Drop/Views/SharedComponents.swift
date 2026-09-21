@@ -2,6 +2,79 @@ import SwiftUI
 import AppKit
 import QuickLookThumbnailing
 
+// MARK: - Window Layout
+
+/// The window's size rules in one place. Every tab used to compute its own
+/// content width (60% of "something", where the something differed between
+/// Download, Convert and History/Log/Dev), and the window minimum was
+/// declared in four places with three different numbers.
+enum WindowLayout {
+    /// Enforced by AppKit (window.minSize) and applied to restored/first-launch
+    /// frames too. 640 is tall enough for the bottom bar plus a usable card
+    /// viewport on every tab; 896 leaves the compact sidebar a comfortable
+    /// main area (see minColumnWidth).
+    static let minimumSize = NSSize(width: 896, height: 640)
+    static let firstLaunchSize = NSSize(width: 1000, height: 720)
+
+    static let sidebarWidth: CGFloat = 240
+    static let compactSidebarWidth: CGFloat = 72
+    /// The sidebar's margin from the window (leading 12 + trailing 8).
+    static let sidebarMargins: CGFloat = 20
+    /// Window width below which the sidebar collapses to icons.
+    static let compactSidebarBreakpoint: CGFloat = 1000
+    /// Window height below which the bottom bar drops its secondary chrome.
+    /// Measured against the content area (window height minus the title bar),
+    /// so the 720pt first-launch window (692pt of content) keeps the full bar.
+    static let compactHeightBreakpoint: CGFloat = 680
+
+    /// The centered content column every tab lays out against.
+    static let minColumnWidth: CGFloat = 600
+    static let maxColumnWidth: CGFloat = 1100
+    static let columnPadding: CGFloat = 16
+    /// Below this, side-by-side input -> output chip rows no longer fit
+    /// without truncating, so they stack instead.
+    static let stackedChipsBreakpoint: CGFloat = 700
+
+    /// Width of the content column for a given main-area width: 60% of it,
+    /// but never narrower than minColumnWidth (unless the area itself is), and
+    /// never wider than maxColumnWidth. 0 means "not measured yet".
+    static func columnWidth(mainWidth: CGFloat) -> CGFloat {
+        guard mainWidth > 0 else { return 0 }
+        let available = max(mainWidth - 2 * columnPadding, 0)
+        return min(max(mainWidth * 0.60, minColumnWidth), available, maxColumnWidth)
+    }
+}
+
+private struct ContentColumnWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+private struct CompactSidebarKey: EnvironmentKey { static let defaultValue = false }
+private struct CompactHeightKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    /// Width of the centered content column (see WindowLayout.columnWidth);
+    /// 0 until ContentView has measured the main area.
+    var contentColumnWidth: CGFloat {
+        get { self[ContentColumnWidthKey.self] }
+        set { self[ContentColumnWidthKey.self] = newValue }
+    }
+    var isCompactSidebar: Bool {
+        get { self[CompactSidebarKey.self] }
+        set { self[CompactSidebarKey.self] = newValue }
+    }
+    var isCompactHeight: Bool {
+        get { self[CompactHeightKey.self] }
+        set { self[CompactHeightKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Fixes a view to the shared content column (falls back to unconstrained
+    /// until the width is measured), centered in its container.
+    func contentColumn(_ width: CGFloat) -> some View {
+        self.frame(width: width > 0 ? width : nil)
+            .frame(maxWidth: .infinity)
+    }
+}
+
 // MARK: - Status Badge
 
 struct StatusBadge: View {
@@ -33,6 +106,7 @@ struct StatusPill: View {
 
 struct LogView: View {
     let logs: [String]
+    @Environment(\.isCompactHeight) private var compactHeight
     @State private var autoScroll = true
 
     private func exportLog() {
@@ -91,11 +165,9 @@ struct LogView: View {
                     .stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth)
             )
         )
-        // Capped at the same 864pt width as urlCard/dropZoneView (Download/
-        // Convert's reference bar) and centered, instead of stretching to
-        // fill the page -- otherwise this capsule reads as a different,
-        // wider size than every other tab's header bar.
-        .frame(maxWidth: 864)
+        // Fills the tab's content column exactly (the whole Log panel is
+        // pinned to it -- see ContentView), matching every other tab's
+        // header bar.
         .frame(maxWidth: .infinity)
         .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
     }
@@ -103,9 +175,8 @@ struct LogView: View {
     var body: some View {
         VStack(spacing: 12) {
             logHeader
-                .padding(.horizontal, 16)
-                .padding(.top, 40)
-                .padding(.bottom, 20)
+                .padding(.top, compactHeight ? 26 : 40)
+                .padding(.bottom, compactHeight ? 12 : 20)
 
             if logs.isEmpty {
                 EmptyStateView(icon: "terminal", title: "No log output yet")
@@ -144,7 +215,7 @@ struct LogView: View {
 
 // MARK: - Sidebar Tab Item
 
-/// Vertical nav-rail row for the sidebar (Download / Convert / History).
+/// Vertical nav-rail row for the sidebar (Download / Convert / History). Icon-only when the sidebar is compact.
 ///
 /// Built directly on the shared GlassInteractive base (same primitive as
 /// every other clickable control in the app) using a roundedRect shape,
@@ -162,6 +233,7 @@ struct SidebarTabItem: View {
     let isSelected: Bool
     var badge: String? = nil
     let action: () -> Void
+    @Environment(\.isCompactSidebar) private var compact
 
     private static let accent = DesignTokens.Accent.primary
     // Neutral rim/fill tint for unselected tabs -- GlassInteractive tints
@@ -189,10 +261,12 @@ struct SidebarTabItem: View {
         ) {
             HStack(spacing: 7) {
                 Image(systemName: icon)
-                    .font(.appMono(size: 13))
+                    .font(.appMono(size: compact ? 15 : 13))
+                if !compact {
                 Text(label)
                     .font(.appMono(size: 13, weight: isSelected ? .semibold : .medium))
-                if let badge = badge {
+                }
+                if let badge = badge, !compact {
                     // Same accent-tinted glass badge language as TabChip and
                     // every other badge/chip in the app.
                     Text(badge)
@@ -207,7 +281,7 @@ struct SidebarTabItem: View {
             // sidebar width -- all tabs now the same size regardless of
             // label length. Sidebar is 240pt wide, so 216 = 90% of that.
             .foregroundColor(isSelected ? Self.accent : .white.opacity(DesignTokens.Text.secondary))
-            .frame(width: 216, alignment: .center)
+            .frame(width: compact ? WindowLayout.compactSidebarWidth - 24 : 216, alignment: .center)
             .padding(.vertical, 11)
             // Scoped to isSelected specifically -- without this, the label/
             // icon color change riding along with GlassInteractive's own
@@ -220,6 +294,10 @@ struct SidebarTabItem: View {
         // grow still has a little breathing space before the sidebar's
         // own edge -- kept tight since the pill itself is now 90% wide.
         .padding(.horizontal, 4)
+        // Icon-only mode has no visible label, so the name (and count) move
+        // into the tooltip and the accessibility label.
+        .help(compact ? (badge.map { "\(label) (\($0))" } ?? label) : "")
+        .accessibilityLabel(label)
     }
 }
 

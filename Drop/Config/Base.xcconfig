@@ -12,7 +12,7 @@
 // and for the Release build the Dev pipeline itself produces for
 // distribution (DevReleasePipeline.build() runs -configuration Release,
 // so this applies there too, not just Debug).
-DEV_TOOLS_EXCLUDE = DevKeychain.swift DevReleasePipeline.swift DevReleaseView.swift MarkdownEditor.swift
+DEV_TOOLS_EXCLUDE = DevKeychain.swift DevReleasePipeline.swift DevReleaseView.swift GitHubMarkdown.swift
 DEV_BUILD_FLAG =
 
 #include? "Local.xcconfig"

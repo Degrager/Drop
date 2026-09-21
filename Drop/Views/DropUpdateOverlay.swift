@@ -51,10 +51,11 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
         case whatsNew(versionString: String, notesHTML: String?)
     }
 
-    // Real update stages can't be Escape-dismissed -- a real download/
-    // install genuinely can't be cancelled mid-flight this way, and states
-    // that can (updateFound, readyToInstall, error) already have proper
-    // buttons that call back into Sparkle correctly. Preview stages are
+    // Real update stages can't be Escape-dismissed -- a stray keypress
+    // shouldn't abort a real download/install, and every state that can be
+    // dismissed (updateFound, readyToInstall, error, and the downloading
+    // card's Cancel) already has a proper button that calls back into
+    // Sparkle correctly. Preview stages are
     // just static sample data with no Sparkle session behind them at all,
     // so Escape can safely reset straight to .idle. `didSet` resets this to
     // false on every stage change so it's never accidentally left true by a
@@ -126,6 +127,9 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     /// independently-notified Sparkle extension points did.
     @Published var justConfirmedUpToDate = false
 
+    /// Sparkle's own handle for aborting an in-flight update download, handed
+    /// to showDownloadInitiated. Cleared whenever the installation is dismissed.
+    private var cancelDownloadBlock: (() -> Void)?
     private var expectedContentLength: UInt64 = 0
     private var receivedContentLength: UInt64 = 0
 
@@ -192,6 +196,7 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     }
 
     func showDownloadInitiated(cancellation: @escaping () -> Void) {
+        cancelDownloadBlock = cancellation
         expectedContentLength = 0
         receivedContentLength = 0
         withAnimation { stage = .downloading(progress: nil) }
@@ -228,7 +233,14 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     }
 
     func dismissUpdateInstallation() {
+        cancelDownloadBlock = nil
         withAnimation { stage = .idle }
+    }
+
+    /// Cancel button on the Downloading card. Sparkle answers the cancellation
+    /// by calling dismissUpdateInstallation, which returns the stage to idle.
+    func cancelDownload() {
+        if isPreview { dismissPreview() } else { cancelDownloadBlock?() }
     }
 
     /// Dev-tab-only: shows the real update-found overlay with sample data,
@@ -336,6 +348,7 @@ struct DropUpdateOverlayView: View {
                     } else {
                         ProgressView().controlSize(.small)
                     }
+                    GlassButton(label: "Cancel", icon: "xmark", tint: .white, fitContent: true) { driver.cancelDownload() }
                 }
             case .extracting(let progress):
                 card {

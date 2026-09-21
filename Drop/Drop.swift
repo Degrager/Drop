@@ -49,18 +49,21 @@ class Config: ObservableObject {
     private let filenameTemplateKey = "filenameTemplate"
     private let autoOpenFolderKey   = "autoOpenFolder"
     private let convertOutputDirKey = "convertOutputDir"
+    /// False only for detached(...) copies, whose property writes must never
+    /// reach UserDefaults.
+    private var persists = true
 
     @Published var outputDir: String {
-        didSet { UserDefaults.standard.set(outputDir, forKey: outputDirKey) }
+        didSet { if persists { UserDefaults.standard.set(outputDir, forKey: outputDirKey) } }
     }
     @Published var format: AudioFormat {
         didSet { /* intentionally not persisted — format chip always resets to first-in-list on launch */ }
     }
     @Published var quality: AudioQuality {
-        didSet { UserDefaults.standard.set(quality.rawValue, forKey: qualityKey) }
+        didSet { if persists { UserDefaults.standard.set(quality.rawValue, forKey: qualityKey) } }
     }
     @Published var browser: BrowserSource {
-        didSet { UserDefaults.standard.set(browser.rawValue, forKey: browserKey) }
+        didSet { if persists { UserDefaults.standard.set(browser.rawValue, forKey: browserKey) } }
     }
     @Published var mediaMode: MediaMode {
         didSet { /* intentionally not persisted — resets to first-in-list (Video + Audio) on launch */ }
@@ -72,17 +75,17 @@ class Config: ObservableObject {
         didSet { /* intentionally not persisted — resets to highest-available on launch/per source */ }
     }
     @Published var filenameTemplate: String {
-        didSet { UserDefaults.standard.set(filenameTemplate, forKey: filenameTemplateKey) }
+        didSet { if persists { UserDefaults.standard.set(filenameTemplate, forKey: filenameTemplateKey) } }
     }
     @Published var autoOpenFolder: Bool {
-        didSet { UserDefaults.standard.set(autoOpenFolder, forKey: autoOpenFolderKey) }
+        didSet { if persists { UserDefaults.standard.set(autoOpenFolder, forKey: autoOpenFolderKey) } }
     }
     /// Convert tab's batch output directory. Unlike Download's outputDir, this
     /// IS persisted across launches — remembers the last folder picked so
     /// repeat batch conversions don't need re-selecting it every time. Falls
     /// back to Downloads on first run (no saved value yet).
     @Published var convertOutputDir: String {
-        didSet { UserDefaults.standard.set(convertOutputDir, forKey: convertOutputDirKey) }
+        didSet { if persists { UserDefaults.standard.set(convertOutputDir, forKey: convertOutputDirKey) } }
     }
 
     init() {
@@ -106,6 +109,22 @@ class Config: ObservableObject {
         convertOutputDir = UserDefaults.standard.string(forKey: convertOutputDirKey) ?? defaultDownloads
     }
 
+    /// A throwaway copy carrying one queued item's own options, for handing to
+    /// DownloadManager.add. Batch downloads used to write each item's options
+    /// straight into the shared Config instead -- which persisted the last
+    /// item's audio quality as the user's default and published a change (and
+    /// a re-render of everything observing Config) once per batch item.
+    func detached(mediaMode: MediaMode, videoQuality: VideoQuality, videoFormat: VideoFormat,
+                  format: AudioFormat, quality: AudioQuality) -> Config {
+        let copy = Config()
+        copy.persists = false
+        copy.mediaMode = mediaMode
+        copy.videoQuality = videoQuality
+        copy.videoFormat = videoFormat
+        copy.format = format
+        copy.quality = quality
+        return copy
+    }
 }
 enum AudioFormat: String, CaseIterable, Identifiable {
     // WAV first — uncompressed PCM, decodes identically everywhere, best for DaVinci Resolve; other formats follow.
@@ -577,32 +596,17 @@ struct HistoryEntry: Codable, Identifiable {
         // matching the mediaMode-driven color rule used on the live download card.
         let isVideo = mediaModeRaw == "video" || mediaModeRaw == "both"
         if isVideo {
-            let candidates: [String] = [format.uppercased(), quality]
-            let parts = candidates.filter { !$0.isEmpty }
-            if !parts.isEmpty {
-                result.append(ChipData(label: "", value: parts.joined(separator: " · "), color: .blue, icon: "video"))
-            }
+            if let video = ChipData.video([format.uppercased(), quality]) { result.append(video) }
             // Video conversions/downloads still carry an audio track — show its
             // codec in its own chip since `quality` above only covers video.
-            if !audioCodecLabel.isEmpty {
-                result.append(ChipData(label: "", value: audioCodecLabel, color: .green, icon: "waveform"))
-            }
+            if let audio = ChipData.audio([audioCodecLabel]) { result.append(audio) }
         } else {
-            let candidates: [String] = format.lowercased() != "m4a"
-                ? [format.uppercased(), resolvedQualityLabel]
-                : [format.uppercased()]
-            let parts = candidates.filter { !$0.isEmpty }
-            if !parts.isEmpty {
-                result.append(ChipData(label: "", value: parts.joined(separator: " · "), color: .green, icon: "waveform"))
-            }
+            let showQuality = format.lowercased() != "m4a"
+            if let audio = ChipData.audio([format.uppercased(), showQuality ? resolvedQualityLabel : nil]) { result.append(audio) }
         }
-        // Final size — white/gray, general file info
-        if let size = fileSize {
-            result.append(ChipData(label: "", value: size, color: .white, icon: "internaldrive"))
-        }
-        // Folder chip removed — the full path is already shown as plain
-        // subtext above this chip row (see HistoryRow), so a folder-name
-        // chip here would just duplicate the same information.
+        // Final size — white/gray, general file info. (No folder chip: the
+        // full path is already shown as plain subtext above this row.)
+        if let size = ChipData.lengthAndSize(length: nil, size: fileSize) { result.append(size) }
         return result
     }
 }
@@ -616,11 +620,25 @@ class HistoryStore: ObservableObject {
 
     func add(_ entry: HistoryEntry) {
         entries.insert(entry, at: 0)
-        if entries.count > 200 { entries = Array(entries.prefix(200)) }
+        if entries.count > 200 {
+            entries.suffix(from: 200).forEach { HistoryThumbnailer.deleteCachedThumbnail($0.thumbnailURL) }
+            entries = Array(entries.prefix(200))
+        }
         scheduleSave()
     }
 
-    func clear() { entries.removeAll(); scheduleSave() }
+    func remove(id: UUID) {
+        guard let idx = entries.firstIndex(where: { $0.id == id }) else { return }
+        HistoryThumbnailer.deleteCachedThumbnail(entries[idx].thumbnailURL)
+        entries.remove(at: idx)
+        scheduleSave()
+    }
+
+    func clear() {
+        entries.forEach { HistoryThumbnailer.deleteCachedThumbnail($0.thumbnailURL) }
+        entries.removeAll()
+        scheduleSave()
+    }
 
     /// Patches a single entry's thumbnailURL after the fact (used once a
     /// conversion's async QuickLook thumbnail finishes generating, since the
@@ -650,6 +668,10 @@ class HistoryStore: ObservableObject {
               let saved = try? JSONDecoder().decode([HistoryEntry].self, from: data)
         else { return }
         entries = saved
+        // Thumbnails written before entries were cleaned up on eviction/clear
+        // are orphaned in the cache forever -- sweep them once per launch.
+        let referenced = Set(saved.map(\.thumbnailURL))
+        DispatchQueue.global(qos: .background).async { HistoryThumbnailer.pruneCache(keeping: referenced) }
         // Runs ffprobe/disk I/O per legacy entry — kept off the main thread so it
         // never delays app launch, even with a large history list.
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -829,29 +851,16 @@ struct Download: Identifiable {
     /// detection didn't resolve anything, so the row never silently disappears.
     var inputChips: [ChipData] {
         var result: [ChipData] = []
-        // Unit-suffixed ("45s"/"12m"/"2h") instead of yt-dlp's raw colon
-        // duration_string -- falls back to the raw string only if seconds
-        // never resolved (e.g. "NA") but a string is still present.
-        let lengthValue = formatDurationChip(seconds: snapshot.durationSeconds)
-            ?? ((!snapshot.duration.isEmpty && snapshot.duration != "NA") ? snapshot.duration : nil)
-        if let lengthValue {
-            result.append(ChipData(label: "", value: lengthValue, color: .white, icon: "clock"))
+        if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: snapshot.durationSeconds, raw: snapshot.duration), size: nil) {
+            result.append(length)
         }
         if mediaMode == .videoAndAudio {
-            let resLabel = sourceResolutionLabel(snapshot.sourceMaxHeight)
-            let videoParts = [snapshot.sourceVideoCodec, resLabel].compactMap { $0 }
-            if !videoParts.isEmpty {
-                result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: "video"))
-            } else {
-                result.append(ChipData(label: "", value: "VIDEO + AUDIO", color: .blue, icon: "video.badge.waveform"))
-            }
+            result.append(.video([snapshot.sourceVideoCodec, sourceResolutionLabel(snapshot.sourceMaxHeight)]) ?? .videoPlaceholder)
         }
-        let inputBitrate = snapshot.sourceABR > 0 ? "\(snapshot.sourceABR)kbps" : nil
-        let audioParts = [snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, inputBitrate].compactMap { $0 }
-        if !audioParts.isEmpty {
-            result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
+        if let audio = ChipData.audio([snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, bitrateLabel(kbps: snapshot.sourceABR)]) {
+            result.append(audio)
         } else if mediaMode == .audioOnly {
-            result.append(ChipData(label: "", value: "AUDIO", color: .green, icon: "waveform"))
+            result.append(.audioPlaceholder)
         }
         return result
     }
@@ -864,8 +873,6 @@ struct Download: Identifiable {
     /// yt-dlp's own reported estimate (set once, not a live disk re-read).
     var outputChips: [ChipData] {
         var result: [ChipData] = []
-        let lengthValue = formatDurationChip(seconds: snapshot.durationSeconds)
-            ?? ((!snapshot.duration.isEmpty && snapshot.duration != "NA") ? snapshot.duration : nil)
         let sizeValue: String? = {
             if let sz = fileSize { return sz }
             switch mediaMode {
@@ -881,38 +888,24 @@ struct Download: Identifiable {
             }
             return nil
         }()
-        if let lengthValue, let sizeValue {
-            result.append(ChipData(label: "", value: lengthValue, color: .white, icon: "clock",
-                                    icon2: "internaldrive", value2: sizeValue))
-        } else if let lengthValue {
-            result.append(ChipData(label: "", value: lengthValue, color: .white, icon: "clock"))
-        } else if let sizeValue {
-            result.append(ChipData(label: "", value: sizeValue, color: .white, icon: "internaldrive"))
+        if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: snapshot.durationSeconds, raw: snapshot.duration), size: sizeValue) {
+            result.append(length)
         }
         switch mediaMode {
         case .audioOnly:
             // M4A is native passthrough (no re-encode), so its real bitrate
             // is the source's own rather than one of the quality presets,
             // which only apply when actually re-encoding to MP3/WAV/FLAC.
-            let bitrateLabel = format == .m4a ? (snapshot.sourceABR > 0 ? "\(snapshot.sourceABR)kbps" : nil) : audioQuality.label
-            let parts = [format.rawValue.uppercased(), snapshot.sourceChannelLabel, bitrateLabel].compactMap { $0 }
-            result.append(ChipData(label: "", value: parts.joined(separator: " · "), color: .green, icon: "waveform"))
+            let bitrate = format == .m4a ? bitrateLabel(kbps: snapshot.sourceABR) : audioQuality.label
+            result.append(.audio([format.rawValue.uppercased(), snapshot.sourceChannelLabel, bitrate]) ?? .audioPlaceholder)
         case .videoAndAudio:
             // Video is never re-encoded when merging video+audio, so the
-            // output codec matches the source's own selected stream.
-            let videoParts = [videoFormat.rawValue.uppercased(), snapshot.sourceVideoCodec, effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: snapshot.sourceMaxHeight)].compactMap { $0 }
-            result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: "video"))
-            // Audio track is stream-copied (not re-encoded) when merging
-            // video+audio, so the output codec/channels/bitrate match the
-            // source exactly — reuse the detected source audio info here
-            // instead of leaving the output row without a green audio chip.
-            let outputBitrate = snapshot.sourceABR > 0 ? "\(snapshot.sourceABR)kbps" : nil
-            let audioParts = [snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, outputBitrate].compactMap { $0 }
-            if !audioParts.isEmpty {
-                result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
-            } else {
-                result.append(ChipData(label: "", value: "AUDIO", color: .green, icon: "waveform"))
-            }
+            // output codec matches the source's own selected stream. The
+            // audio track is stream-copied too, so it reuses the detected
+            // source audio info.
+            result.append(.video([videoFormat.rawValue.uppercased(), snapshot.sourceVideoCodec,
+                                  effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: snapshot.sourceMaxHeight)]) ?? .videoPlaceholder)
+            result.append(.audio([snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, bitrateLabel(kbps: snapshot.sourceABR)]) ?? .audioPlaceholder)
         }
         return result
     }
@@ -926,6 +919,45 @@ struct ChipData: Hashable {
     var icon2: String? = nil
     var value2: String? = nil
 }
+
+extension ChipData {
+    /// The white "length (+ size)" chip every chip row leads with. Nil when
+    /// neither is known. Shared by Download, LinkPreview and Convert so the
+    /// three tabs' rows can't drift apart.
+    static func lengthAndSize(length: String?, size: String?) -> ChipData? {
+        if let length, let size {
+            return ChipData(label: "", value: length, color: .white, icon: "clock", icon2: "internaldrive", value2: size)
+        } else if let length {
+            return ChipData(label: "", value: length, color: .white, icon: "clock")
+        } else if let size {
+            return ChipData(label: "", value: size, color: .white, icon: "internaldrive")
+        }
+        return nil
+    }
+
+    /// Blue video chip from whichever parts are known; nil if none are.
+    static func video(_ parts: [String?], icon: String = "video") -> ChipData? {
+        let value = parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        return value.isEmpty ? nil : ChipData(label: "", value: value, color: .blue, icon: icon)
+    }
+
+    /// Green audio chip from whichever parts are known; nil if none are.
+    static func audio(_ parts: [String?]) -> ChipData? {
+        let value = parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        return value.isEmpty ? nil : ChipData(label: "", value: value, color: .green, icon: "waveform")
+    }
+
+    static let videoPlaceholder = ChipData(label: "", value: "VIDEO + AUDIO", color: .blue, icon: "video.badge.waveform")
+    static let audioPlaceholder = ChipData(label: "", value: "AUDIO", color: .green, icon: "waveform")
+}
+
+/// "45s"/"12m"/"2h" from seconds, falling back to yt-dlp's raw duration
+/// string only if seconds never resolved (e.g. "NA") but a string is present.
+func lengthChipValue(seconds: Int, raw: String) -> String? {
+    formatDurationChip(seconds: seconds) ?? ((!raw.isEmpty && raw != "NA") ? raw : nil)
+}
+
+func bitrateLabel(kbps: Int) -> String? { kbps > 0 ? "\(kbps)kbps" : nil }
 
 enum DownloadStatus {
     case pending, downloading, done, error, cancelled
@@ -991,7 +1023,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     // SUFeedURL in Info.plist, verified against SUPublicEDKey before
     // anything is installed. See DropUpdater below.
     let dropUpdater = DropUpdater()
-    // Set once forceUpdateBothOnLaunch's check cycle finishes, cleared the
+    // Set once ensureLatestTools's check cycle finishes, cleared the
     // moment a new one starts -- drives the shared Check for Updates
     // button's "Up to Date" state alongside dropUpdater's own equivalent
     // flag for the Sparkle-based check.
@@ -1150,11 +1182,11 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     init() {
         checkDeps()
         requestNotificationPermission()
-        // Both tools track nightly builds now, so every launch force-updates
-        // rather than just checking -- no "update available" step, just
-        // always grab the latest nightly before the tools are considered
-        // ready to use.
-        forceUpdateBothOnLaunch()
+        // Both tools track nightly builds, so every launch makes sure the
+        // latest nightly is installed (a cheap redirect check first, a full
+        // download only when a newer build exists) before the tools are
+        // considered ready to use.
+        ensureLatestTools()
         showGatekeeperAlertIfNeeded()
         // Reclaim disk space from any analyze-cache info-json files left
         // over from previous sessions -- the 30-minute TTL already stops
@@ -1162,18 +1194,17 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         pruneAnalyzeCache()
     }
 
-    /// Runs at every launch: force-downloads the latest nightly yt-dlp and
-    /// ffmpeg builds unconditionally (no version comparison, no "skip if
-    /// current" check -- nightly channels don't have a stable tag to diff
-    /// against in the same way release channels do). Runs both in parallel,
+    /// Runs at every launch: installs the latest nightly yt-dlp and ffmpeg
+    /// builds, skipping each download when the build already on disk is the
+    /// current one (see resolveVersionedAssetURL). Runs both in parallel,
     /// then re-runs checkDeps() (see its own comment for why that's
     /// necessary, not just silentUpdateCheck()) once both finish.
-    func forceUpdateBothOnLaunch() {
+    func ensureLatestTools() {
         justCheckedUpToDate = false
         appendLog("Updating yt-dlp and ffmpeg to latest nightly builds…")
         let group = DispatchGroup()
-        group.enter(); updateYtdlp { group.leave() }
-        group.enter(); updateFFmpeg { group.leave() }
+        group.enter(); updateYtdlp(onlyIfNewer: true) { group.leave() }
+        group.enter(); updateFFmpeg(onlyIfNewer: true) { group.leave() }
         group.notify(queue: .main) {
             // Re-evaluate readiness now that both downloads have actually
             // landed on disk. On a genuinely first launch (nothing in
@@ -1198,7 +1229,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// app itself) and logs the outcome. Called once immediately at
     /// launch (before the automatic downloads below have had time to
     /// finish -- a "not ready yet" result here is completely normal on a
-    /// first launch, not a real error) and again once forceUpdateBothOnLaunch's
+    /// first launch, not a real error) and again once ensureLatestTools's
     /// downloads actually complete.
     func checkDeps() {
         checkingDeps = true
@@ -1270,14 +1301,11 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
 
     /// Reads the currently-active yt-dlp/ffmpeg version (bundled or
     /// user-updated, whichever ytdlpPath/ffmpegPath resolve to) purely for
-    /// display in the Tools dropdown. Both tools are force-updated to their
-    /// latest nightly build unconditionally on every launch (see
-    /// forceUpdateBothOnLaunch), so there's no separate "is an update
-    /// available" check anymore -- by the time this runs, whatever's on
-    /// disk already IS the latest nightly. updateAvailable/
-    /// ffmpegUpdateAvailable stay false; the Tools UI now offers a manual
-    /// "Update" action for re-running the same nightly fetch on demand
-    /// rather than reacting to a detected staleness.
+    /// display in the Tools dropdown. Both tools are brought to their latest
+    /// nightly build on every launch (see ensureLatestTools), so there's no
+    /// separate "is an update available" check anymore -- by the time this
+    /// runs, whatever's on disk already IS the latest nightly.
+    /// updateAvailable/ffmpegUpdateAvailable stay false.
     func silentUpdateCheck(completion: (() -> Void)? = nil) {
         DispatchQueue.main.async { self.checkingUpdates = true }
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 0.2) {
@@ -1344,6 +1372,45 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         }
     }
 
+    private static let ytdlpAssetKey = "installedYtdlpAssetURL"
+    private static let ffmpegAssetKey = "installedFfmpegAssetURL"
+
+    /// Both nightly endpoints are "latest" redirects whose FIRST hop points at
+    /// a versioned URL (a tag for yt-dlp, a build number for ffmpeg). A GET
+    /// that refuses to follow the redirect reads that URL from a tiny
+    /// response, which is enough to tell whether the build already installed
+    /// is the current one without re-downloading tens of megabytes every
+    /// launch. (GET, not HEAD: ffmpeg.martin-riedl.de answers HEAD with an
+    /// intermittent 404, but has never failed a GET.) One retry covers a
+    /// transient blip. Calls back with nil if the endpoint still can't be
+    /// resolved (offline, etc.), in which case callers just fall through to a
+    /// normal download attempt.
+    private func resolveVersionedAssetURL(_ latestURL: URL, attemptsLeft: Int = 2, completion: @escaping (URL?) -> Void) {
+        final class NoRedirect: NSObject, URLSessionTaskDelegate {
+            func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                            newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+                completionHandler(nil)
+            }
+        }
+        var request = URLRequest(url: latestURL)
+        request.timeoutInterval = 15
+        let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
+        session.dataTask(with: request) { _, response, _ in
+            session.finishTasksAndInvalidate()
+            guard let http = response as? HTTPURLResponse, (300..<400).contains(http.statusCode),
+                  let location = http.value(forHTTPHeaderField: "Location"),
+                  let resolved = URL(string: location, relativeTo: latestURL)?.absoluteURL else {
+                if attemptsLeft > 1 {
+                    self.resolveVersionedAssetURL(latestURL, attemptsLeft: attemptsLeft - 1, completion: completion)
+                } else {
+                    completion(nil)
+                }
+                return
+            }
+            completion(resolved)
+        }.resume()
+    }
+
     /// Downloads the latest yt-dlp NIGHTLY build (yt-dlp-nightly-builds repo,
     /// not the stable yt-dlp repo) into Application Support, replacing
     /// whatever ytdlpPath currently resolves to. The bundled copy inside the
@@ -1358,11 +1425,27 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// it; both are extracted into a dedicated yt-dlp_bin/ directory rather
     /// than flattened into supportDir directly, so this can't collide with
     /// or partially overwrite anything else Drop stores there.
-    func updateYtdlp(completion: (() -> Void)? = nil) {
+    func updateYtdlp(onlyIfNewer: Bool = false, completion: (() -> Void)? = nil) {
         guard !updatingYtdlp else { completion?(); return }
         updatingYtdlp = true
+        let latestURL = URL(string: "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_macos.zip")!
+        let installedBinary = supportDir.appendingPathComponent("yt-dlp_bin/yt-dlp_macos")
+        resolveVersionedAssetURL(latestURL) { assetURL in
+            DispatchQueue.main.async {
+                if onlyIfNewer, let assetURL, FileManager.default.fileExists(atPath: installedBinary.path),
+                   UserDefaults.standard.string(forKey: Self.ytdlpAssetKey) == assetURL.absoluteString {
+                    self.updatingYtdlp = false
+                    self.appendLog("✓ yt-dlp is already on the latest nightly.")
+                    completion?()
+                    return
+                }
+                self.downloadYtdlp(from: assetURL ?? latestURL, completion: completion)
+            }
+        }
+    }
+
+    private func downloadYtdlp(from releaseURL: URL, completion: (() -> Void)?) {
         appendLog("Fetching latest yt-dlp nightly build…")
-        let releaseURL = URL(string: "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_macos.zip")!
         let finalDir = supportDir.appendingPathComponent("yt-dlp_bin")
         let tempZip = supportDir.appendingPathComponent("yt-dlp_macos.zip.download")
         let task = URLSession.shared.downloadTask(with: releaseURL) { location, response, error in
@@ -1408,6 +1491,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 try? FileManager.default.removeItem(at: tempZip)
                 DispatchQueue.main.async {
                     self.updatingYtdlp = false
+                    UserDefaults.standard.set(releaseURL.absoluteString, forKey: Self.ytdlpAssetKey)
                     self.appendLog("✓ yt-dlp updated to latest nightly.")
                     completion?()
                 }
@@ -1529,11 +1613,27 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// a real nightly channel here. Zip contains the ffmpeg binary at its
     /// root (no nested folder), same completion-callback shape as
     /// updateYtdlp above.
-    func updateFFmpeg(completion: (() -> Void)? = nil) {
+    func updateFFmpeg(onlyIfNewer: Bool = false, completion: (() -> Void)? = nil) {
         guard !updatingFFmpeg else { completion?(); return }
         updatingFFmpeg = true
+        let latestURL = URL(string: "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/snapshot/ffmpeg.zip")!
+        let installedBinary = supportDir.appendingPathComponent("ffmpeg")
+        resolveVersionedAssetURL(latestURL) { assetURL in
+            DispatchQueue.main.async {
+                if onlyIfNewer, let assetURL, FileManager.default.fileExists(atPath: installedBinary.path),
+                   UserDefaults.standard.string(forKey: Self.ffmpegAssetKey) == assetURL.absoluteString {
+                    self.updatingFFmpeg = false
+                    self.appendLog("✓ ffmpeg is already on the latest nightly.")
+                    completion?()
+                    return
+                }
+                self.downloadFFmpeg(from: assetURL ?? latestURL, completion: completion)
+            }
+        }
+    }
+
+    private func downloadFFmpeg(from releaseURL: URL, completion: (() -> Void)?) {
         appendLog("Fetching latest ffmpeg nightly build…")
-        let releaseURL = URL(string: "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/snapshot/ffmpeg.zip")!
         let destURL = supportDir.appendingPathComponent("ffmpeg")
         let tempZip = supportDir.appendingPathComponent("ffmpeg.zip")
         let task = URLSession.shared.downloadTask(with: releaseURL) { location, response, error in
@@ -1570,6 +1670,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 try? FileManager.default.removeItem(at: unzipDir)
                 DispatchQueue.main.async {
                     self.updatingFFmpeg = false
+                    UserDefaults.standard.set(releaseURL.absoluteString, forKey: Self.ffmpegAssetKey)
                     self.appendLog("✓ ffmpeg updated to latest nightly.")
                     completion?()
                 }
@@ -1790,6 +1891,11 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         let mediaMode    = downloads[idx].mediaMode
         let videoFormat  = downloads[idx].videoFormat
         let videoQuality = downloads[idx].videoQuality
+        // Per-item, not config.quality: items started later via startNextPending
+        // get a fresh Config() whose quality is just the last persisted value,
+        // which used to make every queued item after the first download at
+        // whatever quality the most recently added item happened to use.
+        let audioQuality = downloads[idx].audioQuality
         let isPlaylist   = downloads[idx].isPlaylist
         // Real analyzed title when available (set from the Analyze
         // snapshot in add()); falls back to being literally equal to the
@@ -1909,7 +2015,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             case .audioOnly:
                 if format == .flac {
                     // FLAC: inject format selector for sample rate control, then extract+encode
-                    ytArgs += ["-f", config.quality.flacFormatSelector]
+                    ytArgs += ["-f", audioQuality.flacFormatSelector]
                     ytArgs += format.ytdlpArgs  // -x --audio-format flac
                     // No --audio-quality needed: FLAC is lossless, quality = source selection only
                 } else if format == .m4a {
@@ -1918,7 +2024,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 } else {
                     // MP3 / WAV: -x re-encodes via ffmpeg, --audio-quality controls bitrate
                     ytArgs += format.ytdlpArgs  // -f bestaudio/best -x --audio-format mp3/wav
-                    ytArgs += ["--audio-quality", config.quality.ytdlpAudioQuality]
+                    ytArgs += ["--audio-quality", audioQuality.ytdlpAudioQuality]
                 }
             case .videoAndAudio:
                 // Best video + best audio merged. bestaudio always picks highest bitrate available.
@@ -2383,7 +2489,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                         // otherwise keep the clean requested-tier label (e.g. "4K")
                         // instead of a raw pixel number for the common case where the
                         // request was honored exactly.
-                        let qualStr = mediaMode == .audioOnly ? config.quality.rawValue :
+                        let qualStr = mediaMode == .audioOnly ? audioQuality.rawValue :
                                       (actualHeight.map { $0 < videoQuality.maxHeight ? "\($0)p (requested \(videoQuality.label))" : videoQuality.label } ?? videoQuality.label)
                         let entry = HistoryEntry(
                             title: title, url: url,
@@ -3733,7 +3839,7 @@ struct ToolsDropdownContent: View {
                     // The one place all three checks actually run now --
                     // yt-dlp/ffmpeg's nightly fetch plus Drop's own Sparkle
                     // check, previously reachable individually per-row.
-                    manager.forceUpdateBothOnLaunch()
+                    manager.ensureLatestTools()
                     manager.dropUpdater.checkForUpdates()
                 }
             )
@@ -4238,13 +4344,13 @@ struct ContentView: View {
         return base.filter { $0.analyzeError == nil }
     }
     private var allEligibleLinksSelected: Bool {
-        let eligible = linkPreviews.filter { !$0.isPending && $0.downloadID == nil }
+        let eligible = linkPreviews.filter { !$0.isPending && $0.downloadID == nil && $0.analyzeError == nil }
         guard !eligible.isEmpty else { return false }
         return eligible.allSatisfy { $0.isSelected }
     }
     private func toggleSelectAllLinks() {
         let shouldSelect = !allEligibleLinksSelected
-        for i in linkPreviews.indices where !linkPreviews[i].isPending && linkPreviews[i].downloadID == nil {
+        for i in linkPreviews.indices where !linkPreviews[i].isPending && linkPreviews[i].downloadID == nil && linkPreviews[i].analyzeError == nil {
             linkPreviews[i].isSelected = shouldSelect
         }
     }
@@ -4254,7 +4360,7 @@ struct ContentView: View {
     /// Shared by allLinksCollapsed/hasExpandableLinks so the two can't drift
     /// out of sync on what counts as "collapsible."
     private var collapsibleLinks: [LinkPreview] {
-        linkPreviews.filter { !$0.isPending && $0.downloadID == nil }
+        linkPreviews.filter { !$0.isPending && $0.downloadID == nil && $0.analyzeError == nil }
     }
 
     /// True once every collapsible card is collapsed — flips the header
@@ -4282,7 +4388,7 @@ struct ContentView: View {
     /// once they're all already collapsed.
     private func toggleCollapseAllLinks() {
         let shouldCollapse = !allLinksCollapsed
-        for i in linkPreviews.indices where !linkPreviews[i].isPending && linkPreviews[i].downloadID == nil {
+        for i in linkPreviews.indices where !linkPreviews[i].isPending && linkPreviews[i].downloadID == nil && linkPreviews[i].analyzeError == nil {
             linkPreviews[i].isExpanded = !shouldCollapse
         }
     }
@@ -4599,6 +4705,19 @@ struct ContentView: View {
                     }
                     .accessibilityIdentifier("tab_dev")
                 }
+                // DEBUG only (never in the Release build that ships to users,
+                // where the Dev tab's absence is the access control): a Debug
+                // build that can't reach the keychain items -- the prompt was
+                // denied, or a new build's signature was never approved --
+                // otherwise just silently has no Dev tab for the whole session.
+                #if DEBUG
+                if !DevKeychain.isDevMachine {
+                    SidebarTabItem(label: "Dev (locked)", icon: "lock", isSelected: false) {}
+                        .opacity(0.4)
+                        .help("Keychain access to the Sparkle signing key / GitHub token was denied or is missing. Relaunch and choose Always Allow.")
+                        .accessibilityIdentifier("tab_dev_locked")
+                }
+                #endif
                 #endif
             }
             .padding(.horizontal, 8)
@@ -5553,11 +5672,15 @@ struct ContentView: View {
                         }
                     }
                     HStack(spacing: 8) {
+                        // Tiers above what the source actually has are hidden
+                        // (unknown height keeps the old up-to-1080p default).
+                        // A sub-480p source still shows the 480p floor tier --
+                        // the output chip reports the real resolution.
                         ForEach(VideoQuality.allCases.filter { q in
                             let h = p.sourceMaxHeight
-                            return h == 0 ? q.maxHeight <= 1080 : q.maxHeight <= max(h, 1080)
+                            return h == 0 ? q.maxHeight <= 1080 : q.maxHeight <= VideoQuality.highest(for: h).maxHeight
                         }) { q in
-                            SelectorChip(label: q.label, isSelected: p.videoQuality == q) {
+                            SelectorChip(label: effectiveVideoResolutionLabel(q, sourceMaxHeight: p.sourceMaxHeight), isSelected: p.videoQuality == q) {
                                 preview.videoQuality.wrappedValue = q
                             }
                         }
@@ -5940,37 +6063,21 @@ struct ContentView: View {
         // same source-of-truth split.
         var inputChips: [ChipData] {
             var result: [ChipData] = []
-            let lengthValue = formatDurationChip(seconds: durationSeconds)
-                ?? ((!duration.isEmpty && duration != "NA") ? duration : nil)
-            let sizeParts = [isPlaylist ? "\(playlistCount) tracks" : nil].compactMap { $0 }
-            let sizeValue = sizeParts.isEmpty ? nil : sizeParts.joined(separator: " · ")
-            if let lengthValue, let sizeValue {
-                result.append(ChipData(label: "", value: lengthValue, color: .white, icon: "clock",
-                                        icon2: "internaldrive", value2: sizeValue))
-            } else if let lengthValue {
-                result.append(ChipData(label: "", value: lengthValue, color: .white, icon: "clock"))
-            } else if let sizeValue {
-                result.append(ChipData(label: "", value: sizeValue, color: .white, icon: "internaldrive"))
+            let playlistSize = isPlaylist ? "\(playlistCount) tracks" : nil
+            if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: durationSeconds, raw: duration), size: playlistSize) {
+                result.append(length)
             }
             // Blue: source video info (codec + resolution) — gated on hasVideo
             // (the source's actual capability), NOT mediaMode (the user's
             // current output choice).
             if hasVideo {
-                let resLabel = sourceResolutionLabel(sourceMaxHeight)
-                let videoParts = [sourceVideoCodec, resLabel].compactMap { $0 }
-                if !videoParts.isEmpty {
-                    result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: "video"))
-                } else {
-                    result.append(ChipData(label: "", value: "VIDEO + AUDIO", color: .blue, icon: "video.badge.waveform"))
-                }
+                result.append(.video([sourceVideoCodec, sourceResolutionLabel(sourceMaxHeight)]) ?? .videoPlaceholder)
             }
-            // Green: source audio info (codec + channels + bitrate) — always present
-            let audioBitrate = sourceABR > 0 ? "\(sourceABR)kbps" : nil
-            let audioParts = [sourceAudioCodec, sourceChannelLabel, audioBitrate].compactMap { $0 }
-            if !audioParts.isEmpty {
-                result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
+            // Green: source audio info (codec + channels + bitrate)
+            if let audio = ChipData.audio([sourceAudioCodec, sourceChannelLabel, bitrateLabel(kbps: sourceABR)]) {
+                result.append(audio)
             } else if !hasVideo {
-                result.append(ChipData(label: "", value: "AUDIO", color: .green, icon: "waveform"))
+                result.append(.audioPlaceholder)
             }
             return result
         }
@@ -5982,16 +6089,8 @@ struct ContentView: View {
         // download card and the active/completed card read identically.
         var outputChips: [ChipData] {
             var result: [ChipData] = []
-            let lengthValue = formatDurationChip(seconds: durationSeconds)
-                ?? ((!duration.isEmpty && duration != "NA") ? duration : nil)
-            let sizeValue = estimatedSizeString()
-            if let lengthValue, let sizeValue {
-                result.append(ChipData(label: "", value: lengthValue, color: .white, icon: "clock",
-                                        icon2: "internaldrive", value2: sizeValue))
-            } else if let lengthValue {
-                result.append(ChipData(label: "", value: lengthValue, color: .white, icon: "clock"))
-            } else if let sizeValue {
-                result.append(ChipData(label: "", value: sizeValue, color: .white, icon: "internaldrive"))
+            if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: durationSeconds, raw: duration), size: estimatedSizeString()) {
+                result.append(length)
             }
             switch mediaMode {
             case .audioOnly:
@@ -5999,23 +6098,14 @@ struct ContentView: View {
                 // own doc comment), so its real bitrate is the source's own
                 // rather than one of the quality presets, which only apply
                 // when actually re-encoding to MP3/WAV/FLAC.
-                let bitrateLabel = audioFormat == .m4a ? (sourceABR > 0 ? "\(sourceABR)kbps" : nil) : audioQuality.label
-                let parts = [audioFormat.rawValue.uppercased(), sourceChannelLabel, bitrateLabel].compactMap { $0 }
-                result.append(ChipData(label: "", value: parts.joined(separator: " · "), color: .green, icon: "waveform"))
+                let bitrate = audioFormat == .m4a ? bitrateLabel(kbps: sourceABR) : audioQuality.label
+                result.append(.audio([audioFormat.rawValue.uppercased(), sourceChannelLabel, bitrate]) ?? .audioPlaceholder)
             case .videoAndAudio:
-                // Video is never re-encoded when merging video+audio, so the
-                // output codec matches the source's own selected stream.
-                let videoParts = [videoFormat.rawValue.uppercased(), sourceVideoCodec, effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: sourceMaxHeight)].compactMap { $0 }
-                result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: "video"))
-                // Audio track is stream-copied (not re-encoded) when merging
-                // video+audio, so the output codec/channels/bitrate match the source.
-                let audioBitrate = sourceABR > 0 ? "\(sourceABR)kbps" : nil
-                let audioParts = [sourceAudioCodec, sourceChannelLabel, audioBitrate].compactMap { $0 }
-                if !audioParts.isEmpty {
-                    result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
-                } else {
-                    result.append(ChipData(label: "", value: "AUDIO", color: .green, icon: "waveform"))
-                }
+                // Video and audio are both stream-copied when merging, so the
+                // output codec/channels/bitrate match the source's own.
+                result.append(.video([videoFormat.rawValue.uppercased(), sourceVideoCodec,
+                                      effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: sourceMaxHeight)]) ?? .videoPlaceholder)
+                result.append(.audio([sourceAudioCodec, sourceChannelLabel, bitrateLabel(kbps: sourceABR)]) ?? .audioPlaceholder)
             }
             return result
         }
@@ -6084,6 +6174,22 @@ struct ContentView: View {
     // analyze already in flight and only ever patches a card that's still
     // `isPending` and doesn't have a title yet, so it can never clobber a
     // faster-arriving real result and never fights the eventual PreviewCard.
+    /// Called from the analyze background thread right after a Process starts.
+    /// Returns false (after killing it) if the card was cancelled while the
+    /// process was still launching.
+    private func registerAnalyzeProcess(_ proc: Process, cardID: UUID) -> Bool {
+        var cancelled = false
+        DispatchQueue.main.sync {
+            if self.cancelledAnalyzeIDs.contains(cardID) { cancelled = true }
+            else { self.analyzeProcesses[cardID] = proc }
+        }
+        if cancelled {
+            DownloadManager.terminateProcessTree(proc)
+            proc.waitUntilExit()
+        }
+        return !cancelled
+    }
+
     private func fetchInstantPreview(for url: String, cardID: UUID) {
         guard let videoID = Self.youTubeVideoID(from: url) else { return }
         let thumbnailURL = "https://i.ytimg.com/vi/\(videoID)/hqdefault.jpg"
@@ -6276,7 +6382,13 @@ struct ContentView: View {
                 proc.standardOutput = outPipe
                 proc.standardError  = errPipe
                 try? proc.run()
-                DispatchQueue.main.async { self.analyzeProcesses[cardID] = proc }
+                // Registered synchronously (not via main.async) so a Cancel that
+                // lands between run() and registration can't slip through:
+                // onCancelAnalyze finds no process to kill in that window, only
+                // records the id, and the old async registration then re-added
+                // the entry afterward -- letting this yt-dlp run to completion
+                // for a card that was already gone.
+                if !registerAnalyzeProcess(proc, cardID: cardID) { group.leave(); return }
                 // Read stderr concurrently to prevent pipe buffer deadlock.
                 // Captured (not discarded) so a persistent-block signal like
                 // HTTP 403 at analyze time can be detected and surfaced --
@@ -6323,7 +6435,7 @@ struct ContentView: View {
                     proc2.standardOutput = outPipe2
                     proc2.standardError  = errPipe2
                     try? proc2.run()
-                    DispatchQueue.main.async { self.analyzeProcesses[cardID] = proc2 }
+                    if !registerAnalyzeProcess(proc2, cardID: cardID) { group.leave(); return }
                     var errData2 = Data()
                     let errSem2 = DispatchSemaphore(value: 0)
                     DispatchQueue.global().async {
@@ -6735,11 +6847,9 @@ struct ContentView: View {
             let selectedIDs = Set(selected.map { $0.id })
             for i in linkPreviews.indices where selectedIDs.contains(linkPreviews[i].id) && linkPreviews[i].downloadID == nil {
                 let preview = linkPreviews[i]
-                config.mediaMode    = preview.mediaMode
-                config.videoQuality = preview.videoQuality
-                config.videoFormat  = preview.videoFormat
-                config.format       = preview.audioFormat
-                config.quality      = preview.audioQuality
+                let itemConfig = config.detached(mediaMode: preview.mediaMode, videoQuality: preview.videoQuality,
+                                                 videoFormat: preview.videoFormat, format: preview.audioFormat,
+                                                 quality: preview.audioQuality)
                 // add() returns the UUID of the newly created Download
                 let snap = DownloadSnapshot(
                     title:            preview.title,
@@ -6757,7 +6867,7 @@ struct ContentView: View {
                     qualityByFormat:  preview.qualityByFormat,
                     fileSizeByQuality: preview.fileSizeByQuality
                 )
-                if let newID = manager.add(urls: [preview.url], config: config, thumbnailURL: preview.thumbnailURL, isPlaylist: preview.isPlaylist, snapshot: snap) {
+                if let newID = manager.add(urls: [preview.url], config: itemConfig, thumbnailURL: preview.thumbnailURL, isPlaylist: preview.isPlaylist, snapshot: snap) {
                     linkPreviews[i].downloadID = newID
                 }
             }

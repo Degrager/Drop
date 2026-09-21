@@ -369,21 +369,29 @@ struct CompactModeChip: View {
                     .font(.appMono(size: 10, weight: .semibold))
             }
             .foregroundColor(isSelected ? .black : .white.opacity(hovering ? DesignTokens.Text.secondary : DesignTokens.Text.tertiary))
+            // Keep the label readable while the fill grows/shrinks (chipFill):
+            // easing black<->grey in step with the fill left the text black on
+            // black for a few frames. Selecting holds the grey until the fill has
+            // mostly covered it; deselecting snaps to grey at once.
+            .animation(isSelected ? .easeInOut(duration: 0.12).delay(0.1) : nil, value: isSelected)
             .fixedSize()
             .padding(.horizontal, 9).padding(.vertical, 5)
             .background(
                 ZStack {
+                    // Glass base is always present; only the solid accent fill
+                    // comes and goes. Swapping the two with an if/else made
+                    // SwiftUI cross-fade a VisualEffectBlur layer, which flashed
+                    // the chip flat grey mid-change (see FocusEffect).
+                    VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                    Color.black.opacity(DesignTokens.Glass.blackTint)
+                    Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Interactive.fillRest)
                     if isSelected {
                         // Solid tint fill (not a translucent wash) -- a
                         // capsule shape alone next to rounded-rect format
                         // chips wasn't enough distinction once selected;
                         // this makes the active mode unmistakable at a
                         // glance instead of reading as just another chip.
-                        tint
-                    } else {
-                        VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                        Color.black.opacity(DesignTokens.Glass.blackTint)
-                        Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Interactive.fillRest)
+                        tint.transition(.chipFill())
                     }
                 }
             )
@@ -396,6 +404,7 @@ struct CompactModeChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: isSelected)
     }
 }
 

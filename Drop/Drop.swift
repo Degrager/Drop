@@ -2842,6 +2842,20 @@ extension AnyTransition {
         removal: .identity
     )
 
+    /// The selected-state fill of a chip. The chip's glass base stays put and
+    /// the accent fill grows out of its centre (blurred, scale only) on select
+    /// and shrinks back on deselect. The old code swapped two whole fills with
+    /// the default opacity cross-fade, which faded a VisualEffectBlur-backed
+    /// layer and flashed the chip flat grey mid-change (see FocusEffect).
+    static func chipFill(scale: CGFloat = 0.4) -> AnyTransition {
+        .asymmetric(
+            insertion: focus(blur: 4, scale: scale)
+                .animation(.spring(response: 0.3, dampingFraction: 0.8)),
+            removal: focus(blur: 4, scale: scale)
+                .animation(.easeIn(duration: 0.14))
+        )
+    }
+
     /// Wide glass strips and rows (Download toolbar, bottom bar, History
     /// rows). A gentler cousin of `glassPop` -- a 90% scale on something 600pt
     /// wide swings its edges by 30pt, which reads as a lurch, so this only
@@ -3153,7 +3167,13 @@ struct GlassInteractive<Content: View>: View {
                             Color.black.opacity(disabled ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint)
                             DitherNoise(opacity: 0.035)
                         }
+                        // Keyed on isActive so selecting/deselecting swaps the fill
+                        // layer (chipFill) instead of lerping tint AND alpha together,
+                        // which passed through a washed-out blue-grey. Hover/press only
+                        // change alpha on the same layer, so they still animate in place.
                         tint.opacity(fillOpacity)
+                            .id(isActive)
+                            .transition(.chipFill(scale: 0.9))
                     }
                     .clipShape(clipShape)
                 )
@@ -7478,11 +7498,18 @@ struct SelectorChip: View {
                     // look -- previously icon-chips used a flat opacity fill
                     // while plain chips used a gradient wash, two different
                     // "selected" languages for the same chip concept.
+                    //
+                    // The two states are separate layers with explicit
+                    // transitions: the rest wash swaps instantly and the tint
+                    // gradient grows/shrinks (chipFill). Left implicit, SwiftUI
+                    // cross-faded them, passing through a washed-out grey.
                     if isSelected {
                         LinearGradient(colors: [tint.opacity(0.22), tint.opacity(0.12)],
                                        startPoint: .topLeading, endPoint: .bottomTrailing)
+                            .transition(.chipFill())
                     } else {
                         Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Interactive.fillRest)
+                            .transition(.identity)
                     }
                     DitherNoise(opacity: 0.035)
                 }

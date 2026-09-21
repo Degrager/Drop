@@ -240,8 +240,18 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                             HStack(spacing: 8) {
                                 Image(systemName: primaryActionDangerMode ? "stop.fill" : (!toolsReady ? "lock.fill" : (enabled ? primaryActionIcon : (primaryActionDisabledIcon ?? primaryActionIcon))))
                                     .font(.appMono(size: 15, weight: .semibold))
-                                Text(primaryActionDangerMode ? "Cancel All" : (!toolsReady ? "Setup Needed" : (enabled ? primaryActionLabel : (primaryActionDisabledLabel ?? primaryActionLabel))))
-                                    .font(.appMono(size: 15, weight: .semibold))
+                                // Keyed on the string so a label change (mode switch,
+                                // Download -> Cancel All) blurs one label out and the next
+                                // in, in place, rather than SwiftUI cross-fading two
+                                // overlapping strings.
+                                let label = primaryActionDangerMode ? "Cancel All" : (!toolsReady ? "Setup Needed" : (enabled ? primaryActionLabel : (primaryActionDisabledLabel ?? primaryActionLabel)))
+                                ZStack {
+                                    Text(label)
+                                        .font(.appMono(size: 15, weight: .semibold))
+                                        .id(label)
+                                        .transition(.blurIn)
+                                }
+                                .animation(.spring(response: 0.4, dampingFraction: 0.86), value: label)
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, compactHeight ? 9 : 14)
@@ -297,6 +307,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
                 .contentColumn(columnWidth)
                 .padding(.bottom, compactHeight ? 8 : 14)
+                .transition(.glassBar(anchor: .bottom))
             }
         }
     }

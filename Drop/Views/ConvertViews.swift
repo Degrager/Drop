@@ -1279,6 +1279,10 @@ struct ConvertView: View {
                                     .offset(y: 40)
                             }
                             .zIndex(20)
+                            // Unfolds out of the trigger pill (top-leading corner)
+                            // with blur + scale only -- the popup is a glass
+                            // surface, so no opacity (see FocusEffect).
+                            .transition(.focus(blur: 10, scale: 0.9, anchor: .topLeading))
                         }
                     }
                     if let stagingProgressLabel {
@@ -1331,6 +1335,9 @@ struct ConvertView: View {
             .glassCard(cornerRadius: DesignTokens.Radius.xlarge, opacity: 0.35)
             .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
             .contentColumn(columnWidth)
+            // Both branches of this if/else take layout space, so the outgoing
+            // one must leave instantly -- see AnyTransition.glassPopInOnly.
+            .transition(.glassPopInOnly)
         } else {
             EmptyStateView(
                 icon: "arrow.triangle.2.circlepath",
@@ -1338,7 +1345,7 @@ struct ConvertView: View {
                 subtitle: "Supports any format ffmpeg can read"
             )
             .frame(maxWidth: .infinity, minHeight: 220)
-            .transition(.fadeInOnly)
+            .transition(.blurInOnly)
         }
     }
 
@@ -2120,7 +2127,7 @@ struct ConvertPreviewCard: View {
                     Image(nsImage: img)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
-                        .transition(.fadeInOnly)
+                        .transition(.blurIn)
                 } else if !job.isVideoFile {
                     Image(systemName: "waveform")
                         .font(.appMono(size: 18))
@@ -2544,14 +2551,14 @@ struct ConvertPreviewCard: View {
                                 .font(.appMono(size: 10, design: .monospaced))
                                 .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)
-                                .transition(.fadeInOnly)
+                                .transition(.blurIn)
                         }
                         if !job.progress.isEmpty {
                             Text(job.progress)
                                 .font(.appMono(size: 10, design: .monospaced))
                                 .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                                 .lineLimit(1).truncationMode(.tail)
-                                .transition(.fadeInOnly)
+                                .transition(.blurIn)
                         }
                         Spacer(minLength: 4)
                     }

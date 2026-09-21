@@ -314,6 +314,8 @@ struct SidebarTabItem: View {
                 if !compact {
                 Text(label)
                     .font(.appMono(size: 13, weight: isSelected ? .semibold : .medium))
+                    .lineLimit(1)
+                    .transition(.blurInLeading)
                 }
                 if let badge = badge, !compact {
                     // Same accent-tinted glass badge language as TabChip and
@@ -324,6 +326,7 @@ struct SidebarTabItem: View {
                         .padding(.horizontal, 6).padding(.vertical, 3)
                         .background(Self.accent.opacity(isSelected ? 0.18 : 0.12))
                         .clipShape(Capsule())
+                        .transition(.blurInLeading)
                 }
             }
             // Centered, fixed consistent width instead of stretching full

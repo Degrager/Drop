@@ -157,7 +157,9 @@ struct HistoryView: View {
                             Section {
                                 ForEach(group.entries) { entry in
                                     HistoryRow(entry: entry, config: config, onRemove: {
-                                        withAnimation(.easeOut(duration: 0.2)) { history.remove(id: entry.id) }
+                                        // The delay lets the row finish blurring out (glassBar removal, 0.18s)
+                                        // before the rows below slide up, so they don't pass over it.
+                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.88).delay(0.1)) { history.remove(id: entry.id) }
                                     }) {
                                         if entry.entryType == "conversion" {
                                             // Reconvert: re-import the ORIGINAL input file (stored
@@ -192,6 +194,7 @@ struct HistoryView: View {
                                             onAnalyze([entry.url], [placeholder.id])
                                         }
                                     }
+                                    .transition(.glassBar(anchor: .center))
                                 }
                             } header: {
                                 Text(group.label)

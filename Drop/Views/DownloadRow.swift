@@ -142,51 +142,6 @@ struct LogView: View {
     }
 }
 
-// MARK: - Tab Chip
-
-/// Top-level tab selector (Download / Convert / History). Rebuilt on
-/// GlassInteractive -- same capsule shape, glow, and accent blue as every
-/// other selected/active control in the app, instead of its own bespoke
-/// hover+glow state machine.
-struct TabChip: View {
-    let label: String
-    let icon: String
-    let isSelected: Bool
-    var badge: String? = nil
-    let action: () -> Void
-
-    private static let accent = DesignTokens.Accent.primary
-
-    var body: some View {
-        GlassInteractive(shape: .capsule, tint: Self.accent, isActive: isSelected, action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon).font(.appMono(size: 11))
-                Text(label).font(.appMono(size: 12, weight: .medium))
-                if let badge = badge {
-                    // Accent-tinted glass, matching every other badge/chip in
-                    // the app (AV1, AAC, native/re-encode dots) -- previously
-                    // this used a plain white fill which, at this small a
-                    // size, read as a solid white circle instead of the same
-                    // translucent glass language everything else uses.
-                    Text(badge)
-                        .font(.appMono(size: 9, weight: .semibold))
-                        .foregroundColor(isSelected ? Self.accent : .white.opacity(DesignTokens.Text.secondary))
-                        .padding(.horizontal, 6).padding(.vertical, 3)
-                        .background(Self.accent.opacity(isSelected ? 0.22 : 0.14))
-                        .clipShape(Capsule())
-                }
-            }
-            // Fixed height keeps Download/Convert/History the same size
-            // regardless of History's badge — without this, the badge's extra
-            // vertical padding made that one chip visibly taller than its
-            // siblings. 16 matches the natural height of the badge-less
-            // content. Width is left natural (not fixed) per design intent.
-            .frame(height: 16)
-            .padding(.horizontal, 12).padding(.vertical, 6)
-        }
-    }
-}
-
 // MARK: - Sidebar Tab Item
 
 /// Vertical nav-rail row for the sidebar (Download / Convert / History).

@@ -126,8 +126,6 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     /// independently-notified Sparkle extension points did.
     @Published var justConfirmedUpToDate = false
 
-    private var cancelCheckBlock: (() -> Void)?
-    private var cancelDownloadBlock: (() -> Void)?
     private var expectedContentLength: UInt64 = 0
     private var receivedContentLength: UInt64 = 0
 
@@ -141,7 +139,6 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     }
 
     func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
-        cancelCheckBlock = cancellation
         justConfirmedUpToDate = false
         withAnimation { stage = .checking }
     }
@@ -195,7 +192,6 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     }
 
     func showDownloadInitiated(cancellation: @escaping () -> Void) {
-        cancelDownloadBlock = cancellation
         expectedContentLength = 0
         receivedContentLength = 0
         withAnimation { stage = .downloading(progress: nil) }
@@ -232,8 +228,6 @@ final class DropCustomUserDriver: NSObject, SPUUserDriver, ObservableObject {
     }
 
     func dismissUpdateInstallation() {
-        cancelCheckBlock = nil
-        cancelDownloadBlock = nil
         withAnimation { stage = .idle }
     }
 

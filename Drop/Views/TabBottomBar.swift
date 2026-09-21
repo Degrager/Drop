@@ -137,9 +137,9 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                     // this slot for something substantial (a whole card) reads
                     // as "queue, then destination" top to bottom. Download
                     // never populates this slot, so this reorder is a no-op there.
-                    let hasExtra = !(extraControls() is EmptyView)
-                    if hasExtra {
-                        extraControls()
+                    let extra = extraControls()
+                    if !(extra is EmptyView) {
+                        extra
                         GlassDivider()
                     }
 

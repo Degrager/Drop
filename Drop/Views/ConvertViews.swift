@@ -237,7 +237,6 @@ struct ConvertMediaInfo {
     var resolution: String?    // e.g. "1920x1080"
     var duration: String?      // e.g. "3:42"
     var fileSize: String?      // e.g. "142 MB"
-    var directory: String?     // parent folder name
     var durationSeconds: Double? = nil  // raw seconds, for output size estimation
     var pixelWidth: Int? = nil
     var pixelHeight: Int? = nil
@@ -448,9 +447,6 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
                     info.fileSize = String(format: "%.0f KB", mb * 1024)
                 }
             }
-
-            // Directory
-            info.directory = url.deletingLastPathComponent().lastPathComponent
 
             // ffprobe for codec/resolution/duration
             let ffprobe = locateFFprobe()
@@ -1631,7 +1627,17 @@ struct ConvertView: View {
     }
 
     private func runConversion(job: ConvertJob) {
-        guard let ffmpeg = ffmpegPath else { return }
+        guard let ffmpeg = ffmpegPath else {
+            // Same stall this class of guard already caused in Download's queue
+            // (fixed in d9f9ebe): silently returning here leaves this job stuck
+            // in .queued forever AND stops the rest of the batch, since nothing
+            // else will ever call advanceQueue() again.
+            job.status = .failed
+            job.progress = "ffmpeg not found"
+            manager.appendLog("Convert: ERROR — \(job.inputURL.lastPathComponent): ffmpeg not found")
+            advanceQueue()
+            return
+        }
         // Destination folder is the single shared SAVE TO field in the bottom
         // bar (same folder for every job, mirrors Download's tab).
         let dir = URL(fileURLWithPath: config.convertOutputDir)
@@ -1917,6 +1923,11 @@ struct ConvertView: View {
                     self.advanceQueue()
                 }
             } catch {
+                // p.run() never succeeded, so the success path's own
+                // readabilityHandler = nil (which closes out this GCD dispatch
+                // source) never runs -- clear it here too, or the handler
+                // closure (and everything it captures) leaks.
+                errPipe.fileHandleForReading.readabilityHandler = nil
                 DispatchQueue.main.async {
                     guard job.status != .cancelled else { self.advanceQueue(); return }
                     job.status = .failed

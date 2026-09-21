@@ -237,6 +237,34 @@ func sourceResolutionLabel(_ height: Int) -> String? {
     return height >= 2160 ? "4K" : "\(height)p"
 }
 
+/// The resolution that will actually land in the downloaded file for a given
+/// quality selection, clamped to the source's real max height. yt-dlp's
+/// format selector (`bestvideo[height<=N]`) can never manufacture pixels the
+/// source doesn't have, so whenever the source is shorter than the selected
+/// tier -- either because VideoQuality has no tier below 480p (a sub-480p
+/// source floors out at .q480) or because the user manually picked a tier
+/// above the source (the quality chips deliberately go up to at least 1080p
+/// regardless of source height) -- the output preview should show what will
+/// really be delivered, not the requested tier's label.
+func effectiveVideoResolutionLabel(_ quality: VideoQuality, sourceMaxHeight: Int) -> String {
+    if sourceMaxHeight > 0 && sourceMaxHeight < quality.maxHeight {
+        return sourceResolutionLabel(sourceMaxHeight) ?? quality.label
+    }
+    return quality.label
+}
+
+/// Shared GB/MB/KB/B formatter -- previously duplicated between LinkPreview's
+/// own formatBytes and ContentView's totalEstimatedSizeLabel with a visible
+/// inconsistency (one used "%.1f MB", the other "%.0f MB"), so the same byte
+/// count could read as two different sizes depending on which chip showed it.
+func formatByteSize(_ bytes: Int) -> String {
+    let d = Double(bytes)
+    if d >= 1_073_741_824 { return String(format: "%.1f GB", d / 1_073_741_824) }
+    if d >= 1_048_576     { return String(format: "%.1f MB", d / 1_048_576) }
+    if d >= 1_024         { return String(format: "%.0f KB", d / 1_024) }
+    return "\(bytes) B"
+}
+
 enum VideoQuality: String, CaseIterable, Identifiable {
     case q4k = "2160", q1440 = "1440", q1080 = "1080", q720 = "720", q480 = "480"
     var id: String { rawValue }
@@ -872,7 +900,7 @@ struct Download: Identifiable {
         case .videoAndAudio:
             // Video is never re-encoded when merging video+audio, so the
             // output codec matches the source's own selected stream.
-            let videoParts = [videoFormat.rawValue.uppercased(), snapshot.sourceVideoCodec, videoQuality.label].compactMap { $0 }
+            let videoParts = [videoFormat.rawValue.uppercased(), snapshot.sourceVideoCodec, effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: snapshot.sourceMaxHeight)].compactMap { $0 }
             result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: "video"))
             // Audio track is stream-copied (not re-encoded) when merging
             // video+audio, so the output codec/channels/bitrate match the
@@ -1731,21 +1759,9 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     }
 
     private func startDownload(index idx: Int, config: Config) {
-        // Phase timing instrumentation -- temporary, added to pinpoint where
-        // the real-world ~10s "nothing seems to be happening" delay the user
-        // reported actually goes, since command-line yt-dlp itself starts a
-        // download in ~1.7-3.4s (measured directly in Terminal on this same
-        // link/impersonation config). Every phase boundary below logs a
-        // millisecond-precision timestamp + elapsed-since-start to both the
-        // in-app log and ~/Library/Logs/Drop/drop.log via appendLog, so this
-        // can be read back after a real download without attaching a debugger.
+        // Wall-clock start, used below to show "[Ns elapsed]" alongside the
+        // progress bar.
         let t0 = Date()
-        func phaseLog(_ label: String) {
-            let elapsedMs = Int(Date().timeIntervalSince(t0) * 1000)
-            appendLog("⏱ [\(elapsedMs)ms] \(label)")
-        }
-        phaseLog("startDownload called")
-
         // yt-dlp's raw per-line percentage is a whole-file estimate that
         // gets recomputed at every HLS/DASH fragment boundary as
         // (bytes-so-far + newly-known-fragment-size) / (fragment-index+1) *
@@ -1803,11 +1819,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 $0.lastKnownETA = nil
             }
         }
-        phaseLog("marked as preparing, dispatching to background queue")
-
         DispatchQueue.global(qos: .userInitiated).async {
-            phaseLog("background queue entered")
-
             // Check output directory exists and is writable before launching
             // yt-dlp. Runs on the background queue (not the caller's thread)
             // so it never blocks the main/UI thread -- the chmod fallback in
@@ -1851,8 +1863,6 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 }
                 self.appendLog("✓ Fixed folder permissions, continuing download.")
             }
-            phaseLog("folder check passed")
-
             DispatchQueue.main.async {
                 self.withDownload(downloadID) {
                     // Leave progress at 0 (not 0.02) so the progress bar
@@ -1890,7 +1900,6 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             // --playlist-items 1), which would silently truncate a real
             // playlist download to one file.
             if !isPlaylist, let cachedInfoJSON = self.cachedInfoJSONPath(for: url) {
-                phaseLog("using cached analyze info-json, skipping re-extraction")
                 ytArgs += ["--load-info-json", cachedInfoJSON]
             }
 
@@ -1950,7 +1959,6 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             // URLs, skip analyze" flow, knownTitle is literally just the URL --
             // there is no title to sanitize client-side, so fall back to asking
             // yt-dlp directly, exactly as before.
-            phaseLog("about to resolve filename (fast path: \(!knownTitle.isEmpty && knownTitle != url))")
             var resolvedName = config.filenameTemplate
             if !isPlaylist && config.filenameTemplate == "%(title)s" {
                 if !knownTitle.isEmpty && knownTitle != url {
@@ -1978,7 +1986,6 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                     }
                 }
             }
-            phaseLog("filename resolved: \(resolvedName)")
             DispatchQueue.main.async { self.withDownload(downloadID) { $0.resolvedBaseName = resolvedName } }
 
             ytArgs += [
@@ -2238,12 +2245,9 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             }
             outputThread.start()
 
-            phaseLog("launching real download process")
             do {
                 try proc.run()
-                phaseLog("process launched (proc.run() returned)")
                 proc.waitUntilExit()
-                phaseLog("process exited")
                 outputThread.cancel()
 
                 // File was written directly to outputDir by yt-dlp.
@@ -2432,7 +2436,6 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                             self.appendLog("⚠ Got HTTP 403 — retrying automatically (attempt \(retryCount + 1)/4)\u{2026}")
                             let backoff = Double(retryCount + 1) * 1.5
                             DispatchQueue.main.asyncAfter(deadline: .now() + backoff) {
-                                guard self.downloads.contains(where: { $0.id == downloadID }) else { return }
                                 guard let freshIdx = self.downloads.firstIndex(where: { $0.id == downloadID }) else { return }
                                 self.startDownload(index: freshIdx, config: config)
                             }
@@ -2474,7 +2477,11 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                         } else if isPrivate {
                             self.withDownload(downloadID) {
                                 $0.fixHint = "Video is private. You may need to be signed in via a browser."
-                                $0.fixAction = .openPrivacySecurity
+                                // .openPrivacySecurity opens macOS System Settings > Privacy &
+                                // Security, which has nothing to do with being signed into
+                                // YouTube in a browser -- looked like a copy/paste mismatch from
+                                // the isCookie branch above. No automated fix exists for this one.
+                                $0.fixAction = .none
                             }
                         } else if isUnavail {
                             self.withDownload(downloadID) {
@@ -3979,7 +3986,6 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 struct DropApp: App {
     @NSApplicationDelegateAdaptor(DropAppDelegate.self) var appDelegate
-    @State private var menuBarURL = ""
 
     var body: some Scene {
         WindowGroup {
@@ -4220,8 +4226,17 @@ struct ContentView: View {
     private var hasAnyLinkItems: Bool { !linkPreviews.isEmpty }
     /// Outside Select mode every queued item is treated as selected (checkboxes
     /// are hidden, so nothing is excluded). Inside Select mode, only what's
-    /// actually checked counts.
-    private var selectedPreviews: [LinkPreview] { isBatchMode ? linkPreviews.filter { $0.isSelected } : linkPreviews }
+    /// actually checked counts. Either way, a card that already failed to
+    /// analyze (shown on screen as its own error banner) is never a real
+    /// download target -- excluding it here fixes it everywhere this is used:
+    /// the "Download N Items" count/button label, whether the primary action
+    /// shows at all, the total-size estimate, and (most importantly) download()
+    /// itself, which used to happily queue a doomed-to-fail download for a
+    /// link the user already saw fail to analyze.
+    private var selectedPreviews: [LinkPreview] {
+        let base = isBatchMode ? linkPreviews.filter { $0.isSelected } : linkPreviews
+        return base.filter { $0.analyzeError == nil }
+    }
     private var allEligibleLinksSelected: Bool {
         let eligible = linkPreviews.filter { !$0.isPending && $0.downloadID == nil }
         guard !eligible.isEmpty else { return false }
@@ -5310,14 +5325,12 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Download — settings card (queued state)
-
-    @ViewBuilder
-    func downloadPreviewCard(preview: Binding<LinkPreview>) -> some View {
-        let p = preview.wrappedValue
-
-        let thumbView = AnyView(
-            AsyncImage(url: URL(string: p.thumbnailURL)) { phase in
+    // Shared by downloadPreviewCard and downloadCompletedCard, which used to
+    // each carry an identical copy of this exact 80x52 thumbnail+skeleton
+    // ZStack.
+    private func thumbnailView(urlString: String) -> AnyView {
+        AnyView(
+            AsyncImage(url: URL(string: urlString)) { phase in
                 ZStack {
                     RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                         .fill(Color.clear)
@@ -5331,8 +5344,17 @@ struct ContentView: View {
                 .frame(width: 80, height: 52)
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
             }
-            .animation(.easeOut(duration: 0.2), value: p.thumbnailURL)
+            .animation(.easeOut(duration: 0.2), value: urlString)
         )
+    }
+
+    // MARK: Download — settings card (queued state)
+
+    @ViewBuilder
+    func downloadPreviewCard(preview: Binding<LinkPreview>) -> some View {
+        let p = preview.wrappedValue
+
+        let thumbView = thumbnailView(urlString: p.thumbnailURL)
 
         // Simple mode -- always visible whether the card is collapsed or
         // expanded: URL, then input->output chip pairing (same visual
@@ -5617,23 +5639,7 @@ struct ContentView: View {
         if let did = p.downloadID,
            let dl = manager.downloads.first(where: { $0.id == did }) {
 
-        let thumbView = AnyView(
-            AsyncImage(url: URL(string: p.thumbnailURL)) { phase in
-                ZStack {
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                        .fill(Color.clear)
-                        .overlay(ThumbnailSkeleton().clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)))
-                    if case .success(let img) = phase {
-                        img.resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .transition(.fadeInOnly)
-                    }
-                }
-                .frame(width: 80, height: 52)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
-            }
-            .animation(.easeOut(duration: 0.2), value: p.thumbnailURL)
-        )
+        let thumbView = thumbnailView(urlString: p.thumbnailURL)
 
         // ORIGINAL link/file info chips (length + Source codec/resolution) —
         // unchanged, reads the source file. Matches Convert's input-row chip
@@ -5999,7 +6005,7 @@ struct ContentView: View {
             case .videoAndAudio:
                 // Video is never re-encoded when merging video+audio, so the
                 // output codec matches the source's own selected stream.
-                let videoParts = [videoFormat.rawValue.uppercased(), sourceVideoCodec, videoQuality.label].compactMap { $0 }
+                let videoParts = [videoFormat.rawValue.uppercased(), sourceVideoCodec, effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: sourceMaxHeight)].compactMap { $0 }
                 result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: "video"))
                 // Audio track is stream-copied (not re-encoded) when merging
                 // video+audio, so the output codec/channels/bitrate match the source.
@@ -6019,7 +6025,7 @@ struct ContentView: View {
         // per-card size label.
         func estimatedSizeString() -> String? {
             guard let bytes = estimatedBytes() else { return nil }
-            return "~" + formatBytes(bytes)
+            return "~" + formatByteSize(bytes)
         }
 
         // Raw byte version, used both by estimatedSizeString() above and to
@@ -6052,14 +6058,6 @@ struct ContentView: View {
             }
             return nil
         }
-
-        private func formatBytes(_ bytes: Int) -> String {
-            let d = Double(bytes)
-            if d >= 1_073_741_824 { return String(format: "%.1f GB", d / 1_073_741_824) }
-            if d >= 1_048_576     { return String(format: "%.1f MB", d / 1_048_576) }
-            if d >= 1_024         { return String(format: "%.0f KB", d / 1_024) }
-            return "\(bytes) B"
-        }
     }
 
     @State private var analyzeResult: AnalyzeResult? = nil
@@ -6073,11 +6071,7 @@ struct ContentView: View {
             .compactMap { $0.estimatedBytes() }
             .reduce(0, +)
         guard bytes > 0 else { return nil }
-        let d = Double(bytes)
-        if d >= 1_073_741_824 { return String(format: "~%.1f GB", d / 1_073_741_824) }
-        if d >= 1_048_576     { return String(format: "~%.0f MB", d / 1_048_576) }
-        if d >= 1_024         { return String(format: "~%.0f KB", d / 1_024) }
-        return "~\(bytes) B"
+        return "~" + formatByteSize(bytes)
     }
 
     // Instant preview for pending cards, mirroring how TBD makes a pasted
@@ -6198,25 +6192,12 @@ struct ContentView: View {
             // so there's no reason to queue it.
             fetchInstantPreview(for: url, cardID: cardID)
             group.enter()
-            // Per-card phase timing -- added to find where analyze's real-
-            // world latency (users have reported ~6s from paste to preview
-            // card) actually goes: waiting on the concurrency gate, the
-            // yt-dlp process itself (network fetch + extraction), or Drop's
-            // own result-applying code. Each card times independently since
-            // batches can have several running at once.
-            let analyzeT0 = Date()
-            func analyzePhaseLog(_ label: String) {
-                let elapsedMs = Int(Date().timeIntervalSince(analyzeT0) * 1000)
-                self.manager.appendLog("⏱ [analyze \(elapsedMs)ms] \(label): \(url)")
-            }
-            analyzePhaseLog("dispatched to background queue")
             DispatchQueue.global().async {
                 // Block this queued work item (not the main thread) until a
                 // concurrency slot is free -- same pattern as the errSem/
                 // errSem2 semaphores just below, which already block a
                 // background-queue thread safely within this same function.
                 analyzeGateSemaphore.wait()
-                analyzePhaseLog("concurrency gate passed")
                 defer { analyzeGateSemaphore.signal() }
                 // If this card was cancelled while it was still waiting for a
                 // concurrency slot, there's no yt-dlp process to spawn at all --
@@ -6283,7 +6264,6 @@ struct ContentView: View {
                 if let cachePath = reusedCachePath {
                     analyzeArgs.append("--load-info-json")
                     analyzeArgs.append(cachePath)
-                    analyzePhaseLog("reusing cached info-json, skipping network resolve")
                 } else {
                     analyzeArgs.append(url)
                 }
@@ -6295,7 +6275,6 @@ struct ContentView: View {
                 let errPipe = Pipe()
                 proc.standardOutput = outPipe
                 proc.standardError  = errPipe
-                analyzePhaseLog("launching yt-dlp analyze process")
                 try? proc.run()
                 DispatchQueue.main.async { self.analyzeProcesses[cardID] = proc }
                 // Read stderr concurrently to prevent pipe buffer deadlock.
@@ -6312,10 +6291,6 @@ struct ContentView: View {
                 let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
                 proc.waitUntilExit()
                 errSem.wait()
-                analyzePhaseLog("yt-dlp process exited, output read")
-                if FileManager.default.fileExists(atPath: infoJSONCachePath + ".info.json") {
-                    analyzePhaseLog("cached info-json written for fast download")
-                }
                 // Check if this URL was cancelled while we were waiting
                 var wasCancelled = false
                 DispatchQueue.main.sync { wasCancelled = self.analyzeProcesses[cardID] == nil }
@@ -6599,7 +6574,6 @@ struct ContentView: View {
                 lock.lock()
                 results.append((i, preview))
                 lock.unlock()
-                analyzePhaseLog("result parsed, applying to card")
                 // Push this URL's result to the UI the instant IT finishes,
                 // rather than waiting for every pasted URL in the batch to
                 // finish (the old group.notify-only path). Each yt-dlp
@@ -6635,7 +6609,6 @@ struct ContentView: View {
                                 // (the light-grey-then-dark flash).
                                 realCard.id = cardID
                                 self.linkPreviews[idx] = realCard
-                                analyzePhaseLog("preview card updated on screen")
                             }
                             // NOTE: deliberately no `else { append }` here anymore.
                             // If cardID isn't found, the user already cleared/

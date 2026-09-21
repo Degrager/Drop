@@ -328,7 +328,7 @@ struct HistoryRow: View {
         // exact layer order: blur base, black tint, white wash, hover lift.
         .background(
             ZStack {
-                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .withinWindow)
+                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
                 Color.black.opacity(DesignTokens.Glass.blackTint)
                 Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Glass.whiteWash)
                 DitherNoise(opacity: 0.04)
@@ -337,7 +337,6 @@ struct HistoryRow: View {
         )
         .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
             .stroke(Color.white.opacity(hovering ? DesignTokens.Interactive.strokeHover : DesignTokens.Interactive.strokeRest), lineWidth: 0.5))
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous))
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
     }

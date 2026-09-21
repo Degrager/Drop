@@ -125,14 +125,18 @@ struct PreviewCard<Settings: View>: View {
             cardHeader
             if !isAnalyzing {
                 if let belowHeader {
-                    belowHeader
+                    belowHeader.transition(.blurInTop)
                 }
                 if expanded {
-                    GlassDivider()
-                    settings()
+                    GlassDivider().transition(.blurInTop)
+                    settings().transition(.blurInTop)
                 }
             }
         }
+        // De-emphasise unselected cards in batch-select mode by dimming the
+        // CONTENT only. Opacity on the card itself would dilute the glass tint
+        // and turn the surface into a flat grey slab (see FocusEffect).
+        .opacity((showCheckbox && !isSelected) ? 0.6 : 1.0)
         .padding(16)
         // Match the 60%-of-window proportional width every other row in
         // the queue (list header, bottom bar) explicitly stretches to --
@@ -145,11 +149,10 @@ struct PreviewCard<Settings: View>: View {
         // Same view, same identity -- this just animates the chrome rather
         // than swapping to a different card.
         .glassCard(cornerRadius: isAnalyzing ? DesignTokens.Radius.medium : DesignTokens.Radius.large, isActive: isAnalyzing)
-        .opacity((showCheckbox && !isSelected) ? 0.6 : 1.0)
         .animation(.easeOut(duration: 0.15), value: isSelected)
         .animation(.easeOut(duration: 0.15), value: showCheckbox)
         .animation(.easeInOut(duration: 0.35), value: isAnalyzing)
-        .transition(.fadeInOnly)
+        .transition(.glassPop)
     }
 
     // MARK: Shared header
@@ -170,7 +173,7 @@ struct PreviewCard<Settings: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             cardHeaderRow
             if narrow, !isAnalyzing, let sub = subtitle {
-                sub.transition(.fadeInOnly)
+                sub.transition(.blurIn)
             }
         }
     }
@@ -213,9 +216,13 @@ struct PreviewCard<Settings: View>: View {
                 ThumbnailSkeleton()
                     .opacity(canRevealAnalyzed ? 0 : 1)
                 if let thumb = thumbnail {
+                    // Sharpens out of a blur as the skeleton pulses away
+                    // underneath, like a progressive image load.
                     thumb
                         .scaledToFill()
                         .clipped()
+                        .blur(radius: canRevealAnalyzed ? 0 : 10)
+                        .scaleEffect(canRevealAnalyzed ? 1 : 1.08)
                         .opacity(canRevealAnalyzed ? 1 : 0)
                 } else if !isAnalyzing {
                     Image(systemName: thumbnailPlaceholder)
@@ -270,6 +277,7 @@ struct PreviewCard<Settings: View>: View {
                         ))
                         .lineLimit(isAnalyzing ? 1 : 2)
                         .truncationMode(.middle)
+                        .blur(radius: canRevealAnalyzed ? 0 : 6)
                         // Measures this Text's own intrinsic single-line
                         // width (ignoring the lineLimit/truncation applied
                         // above, which would otherwise clip the reported
@@ -300,10 +308,10 @@ struct PreviewCard<Settings: View>: View {
                     Text("Analyzing\u{2026}")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        .transition(.fadeInOnly)
+                        .transition(.blurIn)
                 } else if let sub = subtitle, !narrow {
                     sub
-                        .transition(.fadeInOnly)
+                        .transition(.blurIn)
                 }
             }
             .animation(.easeInOut(duration: 0.35), value: isAnalyzing)
@@ -316,7 +324,7 @@ struct PreviewCard<Settings: View>: View {
             } else {
                 if collapseButtonInHeader, let isExpanded, !collapseLocked {
                     CollapseToggleButton(isExpanded: isExpanded.wrappedValue) {
-                        withAnimation(.spring(response: 0.25)) { isExpanded.wrappedValue.toggle() }
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) { isExpanded.wrappedValue.toggle() }
                     }
                 }
 
@@ -471,14 +479,15 @@ struct CompletedCard<Status: View>: View {
                 status()
             }
         }
+        // Content-only dim -- see PreviewCard.fullCard.
+        .opacity((showCheckbox && !isSelected) ? 0.6 : 1.0)
         .padding(compact ? 10 : 16)
         // Same proportional-width fix as PreviewCard.fullCard above.
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard(cornerRadius: DesignTokens.Radius.large)
-        .opacity((showCheckbox && !isSelected) ? 0.6 : 1.0)
         .animation(.easeOut(duration: 0.15), value: isSelected)
         .animation(.easeOut(duration: 0.15), value: showCheckbox)
-        .transition(.fadeInOnly)
+        .transition(.glassPop)
     }
 
     @Environment(\.contentColumnWidth) private var columnWidth

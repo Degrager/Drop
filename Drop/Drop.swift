@@ -2779,39 +2779,131 @@ extension Font {
     }
 }
 
-/// Shared appear/disappear transition for every card and element in the
-/// app. Insertion fades opacity 0→1 with ease-out and nothing else -- no
-/// scale, no color/tint change riding along, so there's nothing to flash.
-/// Removal is instant (no fade-out at all) per zanderriley's request --
-/// only the fade-in should animate. Cards/rows that call this should pair
-/// it with an explicit `.animation(.easeOut(duration: 0.2), value: ...)`
-/// (not a spring) scoped to the same state change that inserts/removes
-/// them, since a spring would overshoot opacity past 1 and read as a
-/// flash, and an un-scoped animation would pick up SwiftUI's implicit
-/// default instead of a clean linear fade.
+/// One effect drives every transition in the app: scale + blur, with
+/// opacity available but used sparingly. Never put opacity on a glass
+/// surface (`glassCard`): fading a `VisualEffectBlur`-backed view dilutes its
+/// 0.93 black tint while the raw material underneath stays lit, so the card
+/// turns into a flat grey slab mid-transition. Blur and scale don't have that
+/// problem -- they leave the tint alone -- so glass surfaces transition with
+/// those two only, and opacity is reserved for loose content (chips, text)
+/// sitting on top of a surface.
+struct FocusEffect: ViewModifier {
+    var blur: CGFloat
+    var scale: CGFloat
+    var opacity: Double = 1
+    var anchor: UnitPoint = .center
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(scale, anchor: anchor)
+            // A spring can overshoot past the identity value; a negative
+            // blur radius is meaningless, so clamp.
+            .blur(radius: max(0, blur))
+            .opacity(opacity)
+    }
+}
+
 extension AnyTransition {
-    static let fadeInOnly = AnyTransition.asymmetric(
-        insertion: .opacity,
+    static func focus(blur: CGFloat, scale: CGFloat, opacity: Double = 1, anchor: UnitPoint = .center) -> AnyTransition {
+        .modifier(
+            active: FocusEffect(blur: blur, scale: scale, opacity: opacity, anchor: anchor),
+            identity: FocusEffect(blur: 0, scale: 1, opacity: 1, anchor: anchor)
+        )
+    }
+
+    /// Glass surfaces -- Download's analyze/preview cards. Rises out of a
+    /// soft blur while settling from 90% to 100% scale, anchored on the top
+    /// edge so it reads as dropping into place. The spring is baked into the
+    /// transition so it plays the same regardless of the ambient
+    /// `withAnimation` at the call site. No opacity at all (see FocusEffect).
+    /// Removal is a quicker blur-and-shrink so cards leave as fluidly as
+    /// they arrive.
+    static let glassPop = AnyTransition.asymmetric(
+        insertion: focus(blur: 14, scale: 0.9, anchor: .top)
+            .animation(.spring(response: 0.5, dampingFraction: 0.78)),
+        removal: focus(blur: 10, scale: 0.95, anchor: .top)
+            .animation(.easeIn(duration: 0.2))
+    )
+
+    /// Insertion-only variants, for `if/else` branches that BOTH take layout
+    /// space in the same stack. An animated removal keeps the outgoing branch
+    /// in the layout until it finishes, so for that moment the container holds
+    /// both branches; that inflates its minimum height and the window
+    /// auto-grows to fit (and never shrinks back). Outgoing branches therefore
+    /// leave instantly and only the incoming one animates.
+    static let glassPopInOnly = AnyTransition.asymmetric(
+        insertion: focus(blur: 14, scale: 0.9, anchor: .top)
+            .animation(.spring(response: 0.5, dampingFraction: 0.78)),
+        removal: .identity
+    )
+    static let blurInOnly = AnyTransition.asymmetric(
+        insertion: focus(blur: 8, scale: 0.96, opacity: 0.4)
+            .animation(.spring(response: 0.4, dampingFraction: 0.86)),
         removal: .identity
     )
 
-    /// Card-spawn transition for the Download tab's analyze/preview cards
-    /// (AnalyzingCard, the analyze-error card, and the settled PreviewCard
-    /// wrapper) -- brought back by explicit request after fadeInOnly felt
-    /// too flat for these three. Insertion pops in from 80% scale to 100%
-    /// while fading opacity 0->1, anchored on .top so the pop reads as the
-    /// card dropping/settling into place. The bounce is baked directly into
-    /// this transition via `.animation(...)` (a real spring with visible
-    /// overshoot, not a plain ease curve) so it always plays with the same
-    /// unmistakable motion regardless of whatever ambient `withAnimation`
-    /// happens to be active at the call site -- the earlier 92%-scale
-    /// version was too subtle to read as a pop at all. Removal is still
-    /// instant/.identity -- only the spawn gets motion.
-    static let cardPopIn = AnyTransition.asymmetric(
-        insertion: .scale(scale: 0.8, anchor: .top)
-            .combined(with: .opacity)
-            .animation(.spring(response: 0.4, dampingFraction: 0.62)),
-        removal: .identity
+    /// Wide glass strips and rows (Download toolbar, bottom bar, History
+    /// rows). A gentler cousin of `glassPop` -- a 90% scale on something 600pt
+    /// wide swings its edges by 30pt, which reads as a lurch, so this only
+    /// shrinks to 96% while blurring. Anchor picks the edge it grows from.
+    static func glassBar(anchor: UnitPoint) -> AnyTransition {
+        .asymmetric(
+            insertion: focus(blur: 10, scale: 0.96, anchor: anchor)
+                .animation(.spring(response: 0.45, dampingFraction: 0.82)),
+            removal: focus(blur: 8, scale: 0.97, anchor: anchor)
+                .animation(.easeIn(duration: 0.18))
+        )
+    }
+
+    /// Loose content on a surface: thumbnails, progress text, empty states,
+    /// sub-rows. A short focus pull with only a light opacity assist so
+    /// bright elements (blue chips, green ETA) don't read as glowing blobs
+    /// at full blur.
+    static let blurIn = AnyTransition.asymmetric(
+        insertion: focus(blur: 8, scale: 0.96, opacity: 0.4)
+            .animation(.spring(response: 0.4, dampingFraction: 0.86)),
+        removal: focus(blur: 6, scale: 0.98, opacity: 0.4)
+            .animation(.easeIn(duration: 0.15))
+    )
+
+    /// Same as `blurIn`, anchored on the top edge -- for sections that unfold
+    /// downward inside a card (Options, the format chips) so the content
+    /// grows out of the header instead of scaling from its own centre while
+    /// the card height is still springing open.
+    static let blurInTop = AnyTransition.asymmetric(
+        insertion: focus(blur: 8, scale: 0.97, opacity: 0.3, anchor: .top)
+            .animation(.spring(response: 0.42, dampingFraction: 0.86)),
+        removal: focus(blur: 6, scale: 0.98, opacity: 0.3, anchor: .top)
+            .animation(.easeIn(duration: 0.14))
+    )
+
+    /// Same as `blurIn`, but growing from the leading edge -- for text that
+    /// appears beside an icon (sidebar labels) so it unfolds out of the icon
+    /// instead of scaling from its own centre.
+    static let blurInLeading = AnyTransition.asymmetric(
+        insertion: focus(blur: 6, scale: 0.85, opacity: 0.3, anchor: .leading)
+            .animation(.spring(response: 0.4, dampingFraction: 0.86).delay(0.1)),
+        removal: focus(blur: 6, scale: 0.85, opacity: 0.3, anchor: .leading)
+            .animation(.easeIn(duration: 0.12))
+    )
+
+    /// Tab-to-tab page change. The outgoing page blurs away fast; the
+    /// incoming one starts a beat later and focuses in, so the two headers
+    /// are never both legible at once (the reason this used to be a hard cut).
+    static let pageSwap = AnyTransition.asymmetric(
+        insertion: focus(blur: 12, scale: 0.985, opacity: 0.5, anchor: .top)
+            .animation(.spring(response: 0.45, dampingFraction: 0.9).delay(0.06)),
+        removal: focus(blur: 12, scale: 1.01, opacity: 0.3, anchor: .top)
+            .animation(.easeIn(duration: 0.14))
+    )
+
+    /// Centered overlay content (update sheet stages, popups): pops from
+    /// slightly small out of a blur, leaves the same way in reverse.
+    static let overlayPop = AnyTransition.asymmetric(
+        insertion: focus(blur: 10, scale: 0.94)
+            .animation(.spring(response: 0.42, dampingFraction: 0.82)),
+        removal: focus(blur: 8, scale: 0.97)
+            .animation(.easeIn(duration: 0.18))
     )
 }
 
@@ -3602,7 +3694,7 @@ struct HoverIconButton: View {
                     .clipShape(Capsule())
                     .offset(x: -(buttonWidth + 6))
                     .allowsHitTesting(false)
-                    .transition(.opacity)
+                    .transition(.focus(blur: 5, scale: 0.9, opacity: 0.3, anchor: .trailing))
             }
         }
         .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isHovering)
@@ -3832,20 +3924,26 @@ struct ToolsDropdownContent: View {
     }
 
     var body: some View {
-        if tiny && embedded {
-            // No room for the version readouts in a very short window; the
-            // update button is the one control worth keeping.
-            checkForUpdatesButton
-        } else if compact {
-            VStack(spacing: 10) {
-                compactRow("yt-dlp", installed: manager.toolsReady, updateAvailable: manager.updateAvailable, version: manager.ytdlpVersion)
-                compactRow("ffmpeg", installed: manager.toolsReady, updateAvailable: manager.ffmpegUpdateAvailable, version: manager.ffmpegVersion)
-                compactRow("Drop", installed: true, updateAvailable: dropDriver.hasActionableUpdate, version: manager.currentAppVersion)
+        // ZStack so the outgoing and incoming layouts overlay instead of stacking
+        // (see sidebarHeader).
+        ZStack(alignment: .top) {
+            if tiny && embedded {
+                // No room for the version readouts in a very short window; the
+                // update button is the one control worth keeping.
                 checkForUpdatesButton
+            } else if compact {
+                VStack(spacing: 10) {
+                    compactRow("yt-dlp", installed: manager.toolsReady, updateAvailable: manager.updateAvailable, version: manager.ytdlpVersion)
+                    compactRow("ffmpeg", installed: manager.toolsReady, updateAvailable: manager.ffmpegUpdateAvailable, version: manager.ffmpegVersion)
+                    compactRow("Drop", installed: true, updateAvailable: dropDriver.hasActionableUpdate, version: manager.currentAppVersion)
+                    checkForUpdatesButton
+                }
+                .padding(.top, 4)
+                .transition(.blurIn)
+            } else {
+                expandedBody
+                    .transition(.blurIn)
             }
-            .padding(.top, 4)
-        } else {
-            expandedBody
         }
     }
 
@@ -4434,6 +4532,14 @@ struct ContentView: View {
     @State private var mainAreaWidth: CGFloat = 0
     /// The user's own collapse choice (the toggle in the sidebar header).
     @AppStorage("sidebarCollapsed") private var sidebarCollapsedByUser = false
+    // The sidebar card's own width, animated explicitly (see the
+    // onChange(of: isCompactSidebar) below). It must NOT be computed from
+    // isCompactSidebar inline: then the width changes in the same render as
+    // the flag with no animation attached, and the card snaps to its final
+    // width while only its contents transition. Seeded from the persisted
+    // preference so a collapsed launch doesn't animate on first appearance.
+    @State private var sidebarWidth: CGFloat =
+        UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
     /// Below this window width the sidebar is ALWAYS icons-only, to free the
     /// room -- the toggle is disabled there rather than letting the sidebar
     /// swallow a third of a narrow window.
@@ -4561,38 +4667,18 @@ struct ContentView: View {
                 sidebar
 
                 VStack(spacing: 0) {
-                    // Active tab content -- these are structurally
-                    // unrelated pages (different layouts, different data),
-                    // not variations of one shared page, so switching
-                    // between them is a hard cut with no cross-fade. The
-                    // old crossfade briefly overlaid the outgoing and
-                    // incoming page on top of each other, which read as
-                    // "everything just fades into everything else" rather
-                    // than a real page change. `.animation(nil, ...)`
-                    // scopes the cut to just this container -- it does not
-                    // affect the sidebar's own selection-pill spring, which
-                    // is a separate, self-contained animation.
-                    // Wrapped in a Group so the hard-cut `.animation(nil, ...)`
-                    // modifier below can attach to the whole if/else-if chain as
-                    // a single View -- a bare if-chain inside a ViewBuilder can't
-                    // take a trailing modifier directly.
-                    // Pages are fully independent -- not overlapping layers of
-                    // one shared container. Each branch gets `.transition(.identity)`
-                    // (no opacity/scale/move at all, so there is nothing for
-                    // SwiftUI to animate between the outgoing and incoming page,
-                    // which is what was causing the two headers to render on top
-                    // of each other mid-switch) AND the whole switch is wrapped in
-                    // a zero-duration `.transaction` that force-disables animations
-                    // for this state change specifically -- `.animation(nil, ...)`
-                    // alone only cancels *implicit* animations and does not reliably
-                    // override an explicit `withAnimation` transaction still in
-                    // flight from the sidebar's own selection-pill spring, which is
-                    // what let the cross-fade leak through before.
+                    // Active tab content -- structurally unrelated pages, so
+                    // they swap with `.pageSwap`: the outgoing page blurs
+                    // away quickly while the incoming one focuses in a beat
+                    // later. The stagger matters -- the old cross-fade laid
+                    // both pages' headers over each other, which is why this
+                    // used to be a hard cut. Blur (not opacity) also keeps
+                    // the glass cards from greying out mid-switch.
                     ZStack(alignment: .top) {
                     Group {
                         if activeTab == .download {
                             mainPanel
-                                .transition(.identity)
+                                .transition(.pageSwap)
                         } else if activeTab == .history {
                             HistoryView(history: manager.history, activeTab: $activeTab, urlText: $urlText, hasInvalidURLs: $hasInvalidURLs, linkPreviews: $linkPreviews, config: config, onAnalyze: { urls, ids in analyzeURL(urls: urls, ids: ids) }, onReconvert: { fileURL in
                                 // Treat Reconvert exactly like freshly dropping/importing the original
@@ -4622,10 +4708,10 @@ struct ContentView: View {
                             // the content column" here is capping the whole panel -- the
                             // same shared column width and centering as every other tab.
                             .contentColumn(columnWidth)
-                            .transition(.identity)
+                            .transition(.pageSwap)
                         } else if activeTab == .convert {
                             ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
-                                .transition(.identity)
+                                .transition(.pageSwap)
                         } else if activeTab == .devRelease {
                             // Real content is devReleaseOverlay below, kept
                             // permanently mounted instead of created fresh
@@ -4638,23 +4724,13 @@ struct ContentView: View {
                             // convention as History, not a card floating on a page.
                             LogView(logs: manager.globalLogs)
                                 .contentColumn(columnWidth)
-                                .transition(.identity)
+                                .transition(.pageSwap)
                         }
                     }
-                    // Hard cut for tab switching only: `.animation(nil, value:
-                    // activeTab)` disables animation strictly for updates where
-                    // `activeTab` itself changed, and does NOT touch any other
-                    // state change flowing through this subtree (card pop-ins,
-                    // thumbnail fades, etc. keep their own explicit
-                    // withAnimation as normal). A blanket `.transaction {
-                    // disablesAnimations = true }` was here previously, but
-                    // that flag isn't scoped to activeTab at all -- it silently
-                    // killed EVERY animation for every view inside this Group,
-                    // including all the Download tab's card animations nested
-                    // deep inside `mainPanel`. That was the real bug behind
-                    // "pop-in/skeleton fade does nothing" -- not the transitions
-                    // themselves, which were correct all along.
-                    .animation(nil, value: activeTab)
+                    // Scoped to `activeTab` so only the page swap picks up this
+                    // spring; other state changes inside the subtree (card
+                    // spawns, thumbnail loads) keep their own animations.
+                    .animation(.spring(response: 0.45, dampingFraction: 0.9), value: activeTab)
 
                     // Dev tab, unlike the others above, keeps essentially
                     // all of its own state locally (pipeline, typed-in
@@ -4668,15 +4744,20 @@ struct ContentView: View {
                     // toggling opacity/hit-testing preserves its state for
                     // as long as the app runs, matching every other tab's
                     // actual persistence even though the mechanism here is
-                    // different. `.animation(nil, ...)` again for the same
-                    // hard-cut reason as the Group above.
+                    // different. It gets the same focus effect as `.pageSwap`
+                    // so it moves like the other pages.
                     #if DEV_BUILD
                     if DevKeychain.isDevMachine {
                         DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
                             .contentColumn(columnWidth)
-                            .opacity(activeTab == .devRelease ? 1 : 0)
+                            .modifier(FocusEffect(
+                                blur: activeTab == .devRelease ? 0 : 12,
+                                scale: activeTab == .devRelease ? 1 : 0.985,
+                                opacity: activeTab == .devRelease ? 1 : 0,
+                                anchor: .top
+                            ))
                             .allowsHitTesting(activeTab == .devRelease)
-                            .animation(nil, value: activeTab)
+                            .animation(.spring(response: 0.45, dampingFraction: 0.9), value: activeTab)
                     }
                     #endif
                     }
@@ -4704,6 +4785,16 @@ struct ContentView: View {
         )
         .environment(\.contentColumnWidth, columnWidth)
         .environment(\.isCompactSidebar, isCompactSidebar)
+        .onChange(of: isCompactSidebar) { _, compact in
+            // Collapsing waits a beat so the labels finish blurring out before
+            // the card narrows (otherwise its edge clips them mid-word);
+            // expanding widens immediately and the labels follow (see
+            // blurInLeading).
+            let spring = Animation.spring(response: 0.4, dampingFraction: 0.88)
+            withAnimation(compact ? spring.delay(0.1) : spring) {
+                sidebarWidth = compact ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
+            }
+        }
         .environment(\.isCompactHeight, isCompactHeight)
         .environment(\.isTinyHeight, isTinyHeight)
         // Window-level drop target — drag a URL anywhere onto Drop
@@ -4811,29 +4902,36 @@ struct ContentView: View {
             icon: "sidebar.left", size: 13,
             help: sidebarForcedCollapsed ? "" : (isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
         ) {
-            withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsedByUser.toggle() }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) { sidebarCollapsedByUser.toggle() }
         }
         .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
-        if isCompactSidebar {
-            VStack(spacing: isTinyHeight ? 4 : 8) {
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.appMono(size: 14, weight: .semibold))
-                    .foregroundColor(DesignTokens.Accent.primary)
-                if !sidebarForcedCollapsed { toggle }
+        // ZStack, not a bare if/else: while one layout blurs out the other blurs in,
+        // and in a stack the two would be laid out end to end, transiently doubling
+        // the sidebar's minimum height (and auto-growing the window to fit).
+        ZStack(alignment: .top) {
+            if isCompactSidebar {
+                VStack(spacing: isTinyHeight ? 4 : 8) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.appMono(size: 14, weight: .semibold))
+                        .foregroundColor(DesignTokens.Accent.primary)
+                    if !sidebarForcedCollapsed { toggle }
+                }
+                .frame(maxWidth: .infinity)
+                .transition(.blurIn)
+            } else {
+                HStack(spacing: 7) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.appMono(size: 14, weight: .semibold))
+                        .foregroundColor(DesignTokens.Accent.primary)
+                    Text("Drop")
+                        .font(.appMono(size: 14, weight: .semibold))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                    Spacer()
+                    toggle
+                }
+                .padding(.horizontal, 14)
+                .transition(.blurIn)
             }
-            .frame(maxWidth: .infinity)
-        } else {
-            HStack(spacing: 7) {
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.appMono(size: 14, weight: .semibold))
-                    .foregroundColor(DesignTokens.Accent.primary)
-                Text("Drop")
-                    .font(.appMono(size: 14, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                Spacer()
-                toggle
-            }
-            .padding(.horizontal, 14)
         }
     }
 
@@ -4910,8 +5008,7 @@ struct ContentView: View {
                 .padding(.horizontal, isCompactSidebar ? 6 : 16)
                 .padding(.bottom, isTinyHeight ? 8 : 16)
         }
-        .frame(width: isCompactSidebar ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth)
-        .animation(.easeInOut(duration: 0.2), value: isCompactSidebar)
+        .frame(width: sidebarWidth)
         // Real floating card -- identical material/radius/rim-stroke
         // recipe as every other GlassCard in the app (VisualEffectBlur +
         // black tint + grain + gradient rim stroke), not a bespoke
@@ -5026,7 +5123,7 @@ struct ContentView: View {
                             fitContent: true,
                             disabled: !hasExpandableLinks
                         ) {
-                            withAnimation(.spring(response: 0.25)) {
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
                                 toggleCollapseAllLinks()
                             }
                         }
@@ -5099,6 +5196,7 @@ struct ContentView: View {
                 // below and the bottom bar (see WindowLayout.columnWidth), so
                 // every row in this tab is pixel-identical in width.
                 .contentColumn(columnWidth)
+                .transition(.glassBar(anchor: .top))
             }
 
     }
@@ -5182,7 +5280,7 @@ struct ContentView: View {
                             title: "Paste a link to get started",
                             subtitle: "Supports YouTube, SoundCloud, Vimeo and more"
                         )
-                        .transition(.fadeInOnly)
+                        .transition(.blurIn)
                     }
                 }
                 .animation(.easeOut(duration: 0.25), value: linkPreviews.isEmpty)
@@ -5616,7 +5714,7 @@ struct ContentView: View {
                 // preserved across those updates. Scale-pop-in on spawn,
                 // brought back by explicit request for these download/
                 // analyze cards specifically. Removal is still instant.
-                .transition(.cardPopIn)
+                .transition(.glassPop)
         }
     }
 
@@ -5646,7 +5744,7 @@ struct ContentView: View {
                     if case .success(let img) = phase {
                         img.resizable()
                             .aspectRatio(contentMode: .fill)
-                            .transition(.fadeInOnly)
+                            .transition(.blurIn)
                     }
                 }
                 .frame(width: 80, height: 52)
@@ -5722,7 +5820,7 @@ struct ContentView: View {
                     Spacer()
                     if !isBatchMode {
                         CollapseToggleButton(isExpanded: collapseIsExpandedBinding.wrappedValue) {
-                            withAnimation(.spring(response: 0.25)) { collapseIsExpandedBinding.wrappedValue.toggle() }
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) { collapseIsExpandedBinding.wrappedValue.toggle() }
                         }
                     }
                 }
@@ -5761,7 +5859,7 @@ struct ContentView: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .glassCard(cornerRadius: DesignTokens.Radius.medium)
-            .transition(.cardPopIn)
+            .transition(.glassPop)
         } else {
         PreviewCard(
             isSelected: p.isSelected,
@@ -5825,15 +5923,16 @@ struct ContentView: View {
             // one header since they're really one decision -- "what exact
             // file do I get").
             //
-            // Whole body wrapped in one VStack + .animation(nil) so the
-            // Video-vs-Audio section swap (gated on p.mediaMode) is a hard
-            // cut instead of an implicit insert/remove cross-fade -- without
-            // this, switching Video+Audio -> Audio Only faded the outgoing
-            // VIDEO rows out while the incoming AUDIO rows faded in at the
-            // same time, so both sets of chips briefly overlapped on screen.
-            // Individual chip selections within a mode (format/quality
-            // picks) are unaffected -- they're not gated on mediaMode, so
-            // they keep their own spring feedback.
+            // The Video-vs-Audio sections are structurally different content,
+            // so a mode change swaps the whole body via `.pageSwap` (outgoing
+            // blurs away first, incoming focuses in a beat later -- that
+            // stagger is what stops the two chip sets reading as overlapped,
+            // the reason this used to be a hard cut). The ZStack keeps both
+            // bodies overlaid during the swap instead of stacking their
+            // heights, so the card doesn't bounce. Individual chip picks
+            // within a mode aren't gated on mediaMode and keep their own
+            // spring feedback.
+            ZStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 11) {
             if p.hasVideo && p.mediaMode != .audioOnly {
                 VStack(alignment: .leading, spacing: 8) {
@@ -5925,13 +6024,12 @@ struct ContentView: View {
                 }
             }
             } // close wrapper VStack (spacing: 11)
-            // Hard cut -- no fade/cross-fade -- when switching between
-            // Video+Audio and Audio Only, since the VIDEO FORMAT/
-            // RESOLUTION sections and AUDIO FORMAT/QUALITY sections are
-            // structurally different content, not a shared page.
-            .animation(nil, value: p.mediaMode)
+            .id(p.mediaMode)
+            .transition(.pageSwap)
+            }
+            .animation(.spring(response: 0.4, dampingFraction: 0.88), value: p.mediaMode)
         }
-        .transition(.cardPopIn)
+        .transition(.glassPop)
         } // end else (not pending)
     }
 
@@ -6097,14 +6195,14 @@ struct ContentView: View {
                                 .foregroundColor(hasRealProgress ? Color.green.opacity(0.95) : .white.opacity(DesignTokens.Text.disabled))
                                 .shadow(color: hasRealProgress ? Color.green.opacity(0.6) : .clear, radius: 4)
                                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)
-                                .transition(.fadeInOnly)
+                                .transition(.blurIn)
                         }
                         if !dl.activityText.isEmpty {
                             Text(dl.activityText)
                                 .font(.appMono(size: 10, design: .monospaced))
                                 .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                                 .lineLimit(1).truncationMode(.tail)
-                                .transition(.fadeInOnly)
+                                .transition(.blurIn)
                         }
                         Spacer(minLength: 4)
                     }

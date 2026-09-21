@@ -330,7 +330,15 @@ struct DropUpdateOverlayView: View {
     @ObservedObject var driver: DropCustomUserDriver
 
     var body: some View {
-        Group {
+        ZStack {
+            // The dim behind the panel is the one place a plain opacity fade
+            // belongs: it's a flat black wash, not a glass surface, so it can't
+            // grey out. It lives here (not inside each stage's card) so it
+            // persists across stage changes instead of flickering out and
+            // back in, while the panels themselves blur/scale via `overlayPop`.
+            if driver.isPresentingCard {
+                Color.black.opacity(0.45).ignoresSafeArea().transition(.opacity)
+            }
             switch driver.stage {
             case .idle:
                 EmptyView()
@@ -405,14 +413,11 @@ struct DropUpdateOverlayView: View {
 
     @ViewBuilder
     private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        ZStack {
-            Color.black.opacity(0.45).ignoresSafeArea()
-            VStack(spacing: 12) { content() }
-                .padding(24)
-                .frame(maxWidth: 360)
-                .glassCard(cornerRadius: DesignTokens.Radius.large)
-        }
-        .transition(.opacity)
+        VStack(spacing: 12) { content() }
+            .padding(24)
+            .frame(maxWidth: 360)
+            .glassCard(cornerRadius: DesignTokens.Radius.large)
+            .transition(.overlayPop)
     }
 
     /// Shared by updateFoundCard and whatsNewCard -- both show the same
@@ -439,55 +444,49 @@ struct DropUpdateOverlayView: View {
     }
 
     private func updateFoundCard(versionString: String, notesHTML: String?, reply: @escaping (SPUUserUpdateChoice) -> Void) -> some View {
-        ZStack {
-            Color.black.opacity(0.45).ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.down.circle.fill").foregroundColor(DesignTokens.Accent.primary).font(.appMono(size: 16))
-                    Text("Drop \(versionString) is available")
-                        .font(.appMono(size: 14, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                }
-
-                releaseNotesBody(notesHTML)
-
-                HStack(spacing: 10) {
-                    Spacer()
-                    GlassButton(label: "Skip", icon: "forward", tint: .white, fitContent: true) { reply(.skip) }
-                    GlassButton(label: "Later", icon: "clock", tint: .white, fitContent: true) { reply(.dismiss) }
-                    GlassButton(label: "Install", icon: "arrow.down.circle", tint: DesignTokens.Accent.primary, fitContent: true) { reply(.install) }
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill").foregroundColor(DesignTokens.Accent.primary).font(.appMono(size: 16))
+                Text("Drop \(versionString) is available")
+                    .font(.appMono(size: 14, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
             }
-            .padding(24)
-            .frame(maxWidth: 440)
-            .glassCard(cornerRadius: DesignTokens.Radius.large)
+
+            releaseNotesBody(notesHTML)
+
+            HStack(spacing: 10) {
+                Spacer()
+                GlassButton(label: "Skip", icon: "forward", tint: .white, fitContent: true) { reply(.skip) }
+                GlassButton(label: "Later", icon: "clock", tint: .white, fitContent: true) { reply(.dismiss) }
+                GlassButton(label: "Install", icon: "arrow.down.circle", tint: DesignTokens.Accent.primary, fitContent: true) { reply(.install) }
+            }
         }
-        .transition(.opacity)
+        .padding(24)
+        .frame(maxWidth: 440)
+        .glassCard(cornerRadius: DesignTokens.Radius.large)
+        .transition(.overlayPop)
     }
 
     private func whatsNewCard(versionString: String, notesHTML: String?) -> some View {
-        ZStack {
-            Color.black.opacity(0.45).ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 8) {
-                    Image(systemName: "sparkles").foregroundColor(DesignTokens.Accent.primary).font(.appMono(size: 16))
-                    Text("What's new in Drop \(versionString)")
-                        .font(.appMono(size: 14, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                }
-
-                releaseNotesBody(notesHTML)
-
-                HStack {
-                    Spacer()
-                    GlassButton(label: "Got It", icon: "checkmark", tint: DesignTokens.Accent.primary, fitContent: true) { driver.dismissWhatsNew() }
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").foregroundColor(DesignTokens.Accent.primary).font(.appMono(size: 16))
+                Text("What's new in Drop \(versionString)")
+                    .font(.appMono(size: 14, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
             }
-            .padding(24)
-            .frame(maxWidth: 440)
-            .glassCard(cornerRadius: DesignTokens.Radius.large)
+
+            releaseNotesBody(notesHTML)
+
+            HStack {
+                Spacer()
+                GlassButton(label: "Got It", icon: "checkmark", tint: DesignTokens.Accent.primary, fitContent: true) { driver.dismissWhatsNew() }
+            }
         }
-        .transition(.opacity)
+        .padding(24)
+        .frame(maxWidth: 440)
+        .glassCard(cornerRadius: DesignTokens.Radius.large)
+        .transition(.overlayPop)
     }
 
     /// Release notes from generate_appcast are simple HTML (a paragraph of

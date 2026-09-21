@@ -9,7 +9,7 @@
 /* Begin PBXBuildFile section */
 		BFA555EE51114B6EAE4DD04B /* Drop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B71349E9E0E461DA6C30234 /* Drop.swift */; };
 		7AE40FF723F1416084468121 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B44214C509D471095164925 /* main.swift */; };
-		EE112233445566778899AABB /* DownloadRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF112233445566778899AABB /* DownloadRow.swift */; };
+		EE112233445566778899AABB /* SharedComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF112233445566778899AABB /* SharedComponents.swift */; };
 		EE223344556677889900BBCC /* HistoryViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF223344556677889900BBCC /* HistoryViews.swift */; };
 		EE334455667788990011CCDD /* ConvertViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF334455667788990011CCDD /* ConvertViews.swift */; };
 		CC223344556677889900BBCC /* PreviewCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD223344556677889900BBCC /* PreviewCard.swift */; };
@@ -23,14 +23,14 @@
 		DEV1000000000000000000A1 /* DevKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A1 /* DevKeychain.swift */; };
 		DEV1000000000000000000A2 /* DevReleasePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A2 /* DevReleasePipeline.swift */; };
 		DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A3 /* DevReleaseView.swift */; };
-		DEV1000000000000000000A4 /* MarkdownEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A4 /* MarkdownEditor.swift */; };
+		DEV1000000000000000000A4 /* GitHubMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A4 /* GitHubMarkdown.swift */; };
 		OVL1000000000000000000A1 /* DropUpdateOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = OVL2000000000000000000A1 /* DropUpdateOverlay.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		5B71349E9E0E461DA6C30234 /* Drop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Drop.swift; sourceTree = "<group>"; };
 		0B44214C509D471095164925 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		FF112233445566778899AABB /* DownloadRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadRow.swift; sourceTree = "<group>"; };
+		FF112233445566778899AABB /* SharedComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedComponents.swift; sourceTree = "<group>"; };
 		FF223344556677889900BBCC /* HistoryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryViews.swift; sourceTree = "<group>"; };
 		FF334455667788990011CCDD /* ConvertViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConvertViews.swift; sourceTree = "<group>"; };
 		DD223344556677889900BBCC /* PreviewCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewCard.swift; sourceTree = "<group>"; };
@@ -43,7 +43,7 @@
 		DEV2000000000000000000A1 /* DevKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevKeychain.swift; sourceTree = "<group>"; };
 		DEV2000000000000000000A2 /* DevReleasePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevReleasePipeline.swift; sourceTree = "<group>"; };
 		DEV2000000000000000000A3 /* DevReleaseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevReleaseView.swift; sourceTree = "<group>"; };
-		DEV2000000000000000000A4 /* MarkdownEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownEditor.swift; sourceTree = "<group>"; };
+		DEV2000000000000000000A4 /* GitHubMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubMarkdown.swift; sourceTree = "<group>"; };
 		CFG1000000000000000000A1 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		CFG1000000000000000000A2 /* Local.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig; sourceTree = "<group>"; };
 		OVL2000000000000000000A1 /* DropUpdateOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropUpdateOverlay.swift; sourceTree = "<group>"; };
@@ -109,7 +109,7 @@
 		2B3C4D5E6F708192A3B4C5D6 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				FF112233445566778899AABB /* DownloadRow.swift */,
+				FF112233445566778899AABB /* SharedComponents.swift */,
 				FF223344556677889900BBCC /* HistoryViews.swift */,
 				FF334455667788990011CCDD /* ConvertViews.swift */,
 				DD223344556677889900BBCC /* PreviewCard.swift */,
@@ -143,7 +143,7 @@
 				DEV2000000000000000000A1 /* DevKeychain.swift */,
 				DEV2000000000000000000A2 /* DevReleasePipeline.swift */,
 				DEV2000000000000000000A3 /* DevReleaseView.swift */,
-				DEV2000000000000000000A4 /* MarkdownEditor.swift */,
+				DEV2000000000000000000A4 /* GitHubMarkdown.swift */,
 			);
 			path = DevTools;
 			sourceTree = "<group>";
@@ -235,7 +235,7 @@
 			files = (
 				BFA555EE51114B6EAE4DD04B /* Drop.swift in Sources */,
 				7AE40FF723F1416084468121 /* main.swift in Sources */,
-				EE112233445566778899AABB /* DownloadRow.swift in Sources */,
+				EE112233445566778899AABB /* SharedComponents.swift in Sources */,
 				EE223344556677889900BBCC /* HistoryViews.swift in Sources */,
 				EE334455667788990011CCDD /* ConvertViews.swift in Sources */,
 				CC223344556677889900BBCC /* PreviewCard.swift in Sources */,
@@ -243,7 +243,7 @@
 				DEV1000000000000000000A1 /* DevKeychain.swift in Sources */,
 				DEV1000000000000000000A2 /* DevReleasePipeline.swift in Sources */,
 				DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */,
-				DEV1000000000000000000A4 /* MarkdownEditor.swift in Sources */,
+				DEV1000000000000000000A4 /* GitHubMarkdown.swift in Sources */,
 				OVL1000000000000000000A1 /* DropUpdateOverlay.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -396,7 +396,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				CURRENT_PROJECT_VERSION = 1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zanderriley.drop;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zanderriley.drop.dev;
 				PRODUCT_NAME = Drop;
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;

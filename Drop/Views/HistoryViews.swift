@@ -158,7 +158,9 @@ struct HistoryView: View {
                         ForEach(grouped, id: \.label) { group in
                             Section {
                                 ForEach(group.entries) { entry in
-                                    HistoryRow(entry: entry, config: config) {
+                                    HistoryRow(entry: entry, config: config, onRemove: {
+                                        withAnimation(.easeOut(duration: 0.2)) { history.remove(id: entry.id) }
+                                    }) {
                                         if entry.entryType == "conversion" {
                                             // Reconvert: re-import the ORIGINAL input file (stored
                                             // in entry.url for conversions) exactly like a fresh
@@ -216,6 +218,7 @@ struct HistoryView: View {
 struct HistoryRow: View {
     let entry: HistoryEntry
     @ObservedObject var config: Config
+    let onRemove: () -> Void
     let onRedownload: () -> Void
     @State private var hovering = false
 
@@ -265,6 +268,19 @@ struct HistoryRow: View {
                         Spacer()
                         Text(formattedDate)
                             .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                        Button(action: onRemove) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                                .frame(width: 16, height: 16)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove from History")
+                        .accessibilityLabel("Remove from History")
+                        // Faint at rest (so it's discoverable without hovering,
+                        // and reachable by accessibility/keyboard), full on hover.
+                        .opacity(hovering ? 1 : 0.3)
                     }
                     // For conversions, `url` is the ORIGINAL input file — show
                     // the actual produced file's path instead when available.
@@ -339,6 +355,9 @@ struct HistoryRow: View {
             .stroke(Color.white.opacity(hovering ? DesignTokens.Interactive.strokeHover : DesignTokens.Interactive.strokeRest), lineWidth: 0.5))
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
+        .contextMenu {
+            Button("Remove from History", role: .destructive, action: onRemove)
+        }
     }
 }
 
@@ -406,6 +425,25 @@ enum HistoryThumbnailer {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
+
+    /// Deletes a cached thumbnail given the `file://` URL string stored on a
+    /// HistoryEntry. Anything outside the cache directory (a download's remote
+    /// https thumbnail, or an empty string) is ignored.
+    static func deleteCachedThumbnail(_ urlString: String) {
+        guard let cacheDir, urlString.hasPrefix("file://"), let url = URL(string: urlString),
+              url.standardizedFileURL.deletingLastPathComponent() == cacheDir.standardizedFileURL else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    /// Removes every cached thumbnail no history entry references anymore.
+    static func pruneCache(keeping referencedURLStrings: Set<String>) {
+        guard let cacheDir,
+              let files = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil) else { return }
+        let keep = Set(referencedURLStrings.compactMap { URL(string: $0)?.standardizedFileURL.path })
+        for file in files where !keep.contains(file.standardizedFileURL.path) {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
 
     /// Generates a thumbnail for `fileURL` and calls back with a `file://`
     /// URL string on success, or nil on failure. Callback fires on a

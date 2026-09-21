@@ -272,6 +272,9 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     /// on the right, mirroring Download's activityText/etaText split.
     @Published var etaText: String = ""
     @Published var outputURL: URL? = nil
+    /// Real on-disk size of the finished output, read once when the job
+    /// completes (see runConversion) rather than on every render of its row.
+    @Published var outputSizeLabel: String? = nil
     @Published var isSelected: Bool = true
     @Published var thumbnail: NSImage? = nil
     @Published var audioCodec: ConvertAudioCodec = .aac
@@ -351,6 +354,23 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     /// as selected, but the conversion silently kept re-encoding to H.265
     /// instead of stream-copying. Confirmed via the actual ffmpeg command
     /// logged for that exact sequence before this fix.
+    /// Human-readable size of the file at `url`, or nil (with a log line) if
+    /// it can't be read. NSNumber-backed sizes can be UInt64 for large files
+    /// on some volumes -- casting straight to Int silently failed and dropped
+    /// the size chip -- so this goes through NSNumber's int64Value, which
+    /// bridges correctly regardless of the underlying storage width.
+    static func fileSizeLabel(at url: URL) -> String? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            DropLogger.shared.write("Convert size chip: attributesOfItem failed for \(url.path)")
+            return nil
+        }
+        guard let sizeNumber = attrs[.size] as? NSNumber, sizeNumber.int64Value > 0 else {
+            DropLogger.shared.write("Convert size chip: unusable .size attr for \(url.path): \(String(describing: attrs[.size]))")
+            return nil
+        }
+        return ByteCountFormatter.string(fromByteCount: sizeNumber.int64Value, countStyle: .file)
+    }
+
     func useSameAsSourceForVideo() {
         transcodeVideo = false
         if let raw = mediaInfo?.videoCodec,
@@ -645,14 +665,7 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     var inputChips: [ChipData] {
         var result: [ChipData] = []
         let dur = mediaInfo?.durationSeconds.flatMap { formatDurationChip(seconds: Int($0)) } ?? mediaInfo?.duration
-        if let dur, let size = mediaInfo?.fileSize {
-            result.append(ChipData(label: "", value: dur, color: .white, icon: "clock",
-                                    icon2: "internaldrive", value2: size))
-        } else if let dur {
-            result.append(ChipData(label: "", value: dur, color: .white, icon: "clock"))
-        } else if let size = mediaInfo?.fileSize {
-            result.append(ChipData(label: "", value: size, color: .white, icon: "internaldrive"))
-        }
+        if let length = ChipData.lengthAndSize(length: dur, size: mediaInfo?.fileSize) { result.append(length) }
         // Unlike outputChips below, these describe the SOURCE file's own
         // characteristics, so they're gated on whether the source actually
         // has that track (mediaInfo data present) -- never on the selected
@@ -660,15 +673,13 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         // own video track from existence, so its input chip should stay.
         // Order: format, codec, framerate, resolution.
         let sourceFormat = isVideoFile ? inputURL.pathExtension.uppercased() : nil
-        let videoParts = [sourceFormat, mediaInfo?.videoCodec, mediaInfo?.videoFrameRateLabel, mediaInfo?.resolution].compactMap { $0 }
-        if !videoParts.isEmpty {
-            result.append(ChipData(label: "", value: videoParts.joined(separator: " · "), color: .blue, icon: isVideoFile ? "video" : "waveform"))
+        if let video = ChipData.video([sourceFormat, mediaInfo?.videoCodec, mediaInfo?.videoFrameRateLabel, mediaInfo?.resolution],
+                                      icon: isVideoFile ? "video" : "waveform") {
+            result.append(video)
         }
         // Order: codec, channels, bitrate.
-        let sourceBitrate = mediaInfo?.audioBitrateKbps.map { "\($0)kbps" }
-        let audioParts = [mediaInfo?.audioCodec, mediaInfo?.audioChannelLabel, sourceBitrate].compactMap { $0 }
-        if !audioParts.isEmpty {
-            result.append(ChipData(label: "", value: audioParts.joined(separator: " · "), color: .green, icon: "waveform"))
+        if let audio = ChipData.audio([mediaInfo?.audioCodec, mediaInfo?.audioChannelLabel, mediaInfo?.audioBitrateKbps.flatMap { bitrateLabel(kbps: $0) }]) {
+            result.append(audio)
         }
         return result
     }
@@ -676,19 +687,12 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     var outputChips: [ChipData] {
         var result: [ChipData] = []
         let dur = mediaInfo?.durationSeconds.flatMap { formatDurationChip(seconds: Int($0)) } ?? mediaInfo?.duration
-        if let dur, let sizeLabel = estimatedOutputSizeLabel {
-            result.append(ChipData(label: "", value: dur, color: .white, icon: "clock",
-                                    icon2: "internaldrive", value2: sizeLabel))
-        } else if let dur {
-            result.append(ChipData(label: "", value: dur, color: .white, icon: "clock"))
-        } else if let sizeLabel = estimatedOutputSizeLabel {
-            result.append(ChipData(label: "", value: sizeLabel, color: .white, icon: "internaldrive"))
-        }
+        if let length = ChipData.lengthAndSize(length: dur, size: estimatedOutputSizeLabel) { result.append(length) }
         if mediaMode != .audio {
             // Frame rate and resolution are unchanged by conversion (Convert
             // never retimes or resizes), so they carry over from the source.
-            let videoParts: [String?] = [outputFormat.rawValue.uppercased(), displayVideoCodec, mediaInfo?.videoFrameRateLabel, mediaInfo?.resolution]
-            result.append(ChipData(label: "", value: videoParts.compactMap { $0 }.joined(separator: " · "), color: .blue, icon: "video"))
+            result.append(ChipData.video([outputFormat.rawValue.uppercased(), displayVideoCodec, mediaInfo?.videoFrameRateLabel, mediaInfo?.resolution])
+                          ?? .videoPlaceholder)
         }
         if mediaMode != .videoOnly {
             // Convert never changes the channel layout except when MP3
@@ -698,8 +702,7 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
             // it, which previously made the output side look like it might
             // downmix when it never does.
             let codecPart = mediaMode == .audio ? outputFormat.rawValue.uppercased() : displayAudioCodec
-            let audioOutParts = [codecPart, displayAudioChannelLabel, displayAudioBitrateLabel].compactMap { $0 }
-            result.append(ChipData(label: "", value: audioOutParts.joined(separator: " · "), color: .green, icon: "waveform"))
+            result.append(ChipData.audio([codecPart, displayAudioChannelLabel, displayAudioBitrateLabel]) ?? .audioPlaceholder)
         }
         return result
     }
@@ -1305,7 +1308,10 @@ struct ConvertView: View {
                 }
             }
             .padding(16)
-            .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
+            // Outer container dimmed to 0.35 like queueDrawer/batchDirectoryField:
+            // the ConvertPreviewCard nested inside is itself a full-strength
+            // glassCard, and two stacked full-strength layers read as muddy.
+            .glassCard(cornerRadius: DesignTokens.Radius.xlarge, opacity: 0.35)
             .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
             .frame(width: mainPanelWidth > 0 ? mainPanelWidth * 0.60 : nil)
             .frame(maxWidth: .infinity)
@@ -1876,11 +1882,8 @@ struct ConvertView: View {
                     job.etaText = ""
                     self.manager.appendLog(success ? "Convert: ✓ Done: \(output.lastPathComponent)" : "Convert: ERROR — \(job.inputURL.lastPathComponent) failed (exit \(p.terminationStatus))")
                     // Real output size, read from disk now that the file exists.
-                    let outputSizeString: String? = {
-                        guard success, let attrs = try? FileManager.default.attributesOfItem(atPath: output.path),
-                              let bytes = attrs[.size] as? Int else { return nil }
-                        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-                    }()
+                    let outputSizeString: String? = success ? ConvertJob.fileSizeLabel(at: output) : nil
+                    job.outputSizeLabel = outputSizeString
                     // Codec/quality descriptor for the history chip — video gets codec + resolution,
                     // audio-only gets codec + bitrate. Falls back gracefully if info is unavailable.
                     let qualityDescriptor: String = {
@@ -2351,69 +2354,34 @@ struct ConvertPreviewCard: View {
 
         // Gray: length + size combined — same field order as the input row.
         // Length is unchanged by conversion (Convert never trims/retimes),
-        // so it carries over from the source media info. Size is only read
+        // so it carries over from the source media info. Size is only shown
         // once the job is done — while converting, the output file is still
-        // being written and its on-disk size is a partial/growing number,
-        // not the final file size, so we withhold it until it's final.
+        // being written, so its on-disk size is a partial/growing number,
+        // not the final file size. It's read from disk once, at completion
+        // (see runConversion), not on every render.
         // Unit-suffixed ("45s"/"12m"/"2h") to match Drop/History's chips --
         // falls back to the raw "H:MM:SS" string only if seconds is missing.
         let lengthValue = job.mediaInfo?.durationSeconds.flatMap { formatDurationChip(seconds: Int($0)) }
             ?? job.mediaInfo?.duration
-        let sizeValue: String? = {
-            // Bail out before any logging while still converting -- this
-            // closure re-runs on every body pass (i.e. every progress tick,
-            // many times per second during an active conversion), and "not
-            // done yet" isn't a failure worth a disk write each time. The
-            // logging below is for genuinely unexpected failures once
-            // status actually is .done, which only happens once per job.
-            guard job.status == .done else { return nil }
-            guard let out = job.outputURL else {
-                DropLogger.shared.write("Convert size chip: outputURL is nil")
-                return nil
-            }
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: out.path) else {
-                DropLogger.shared.write("Convert size chip: attributesOfItem failed for \(out.path)")
-                return nil
-            }
-            // NSNumber-backed sizes can be UInt64 for large files on some
-            // volumes — casting straight to Int silently failed and dropped
-            // the size chip. Go through NSNumber's int64Value instead, which
-            // bridges correctly regardless of the underlying storage width.
-            guard let sizeNumber = attrs[.size] as? NSNumber else {
-                DropLogger.shared.write("Convert size chip: .size attr not NSNumber, raw=\(String(describing: attrs[.size]))")
-                return nil
-            }
-            let bytes = sizeNumber.int64Value
-            guard bytes > 0 else {
-                DropLogger.shared.write("Convert size chip: bytes<=0 (\(bytes)) for \(out.path)")
-                return nil
-            }
-            return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-        }()
-        if let lengthValue, let sizeValue {
-            chips.append(ChipData(label: "", value: lengthValue, color: .white, icon: "clock",
-                                   icon2: "internaldrive", value2: sizeValue))
-        } else if let lengthValue {
-            chips.append(ChipData(label: "", value: lengthValue, color: .white, icon: "clock"))
-        } else if let sizeValue {
-            chips.append(ChipData(label: "", value: sizeValue, color: .white, icon: "internaldrive"))
+        if let length = ChipData.lengthAndSize(length: lengthValue, size: job.status == .done ? job.outputSizeLabel : nil) {
+            chips.append(length)
         }
 
         // Blue: format, codec, framerate, resolution. Framerate and resolution
         // are unchanged by conversion (Convert never retimes or resizes), so
         // they carry over from the source media info, matching the input row's
         // video chip.
-        if job.mediaMode.isVideo {
-            let parts: [String?] = [job.outputFormat.rawValue.uppercased(), job.displayVideoCodec, job.mediaInfo?.videoFrameRateLabel, job.mediaInfo?.resolution]
-            chips.append(ChipData(label: "", value: parts.compactMap { $0 }.joined(separator: " \u{b7} "), color: .blue, icon: "video"))
+        if job.mediaMode.isVideo,
+           let video = ChipData.video([job.outputFormat.rawValue.uppercased(), job.displayVideoCodec, job.mediaInfo?.videoFrameRateLabel, job.mediaInfo?.resolution]) {
+            chips.append(video)
         }
 
         // Green: codec, channels, bitrate. Channels are unchanged by
         // conversion (Convert never remixes), so they carry over from the
         // source media info, matching the input row's audio chip.
-        if job.mediaMode != .videoOnly {
-            let parts = [job.displayAudioCodec, job.mediaInfo?.audioChannelLabel, job.displayAudioBitrateLabel].compactMap { $0 }
-            chips.append(ChipData(label: "", value: parts.joined(separator: " \u{b7} "), color: .green, icon: "waveform"))
+        if job.mediaMode != .videoOnly,
+           let audio = ChipData.audio([job.displayAudioCodec, job.mediaInfo?.audioChannelLabel, job.displayAudioBitrateLabel]) {
+            chips.append(audio)
         }
 
         return AnyView(

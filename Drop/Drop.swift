@@ -3814,6 +3814,7 @@ struct ToolsDropdownContent: View {
     // with its own card.
     var embedded: Bool = false
     @Environment(\.isCompactSidebar) private var compact
+    @Environment(\.isTinyHeight) private var tiny
 
     /// Collapsed-sidebar version of a tool row: just the status glyph and
     /// name; the version moves into the tooltip.
@@ -3831,7 +3832,11 @@ struct ToolsDropdownContent: View {
     }
 
     var body: some View {
-        if compact {
+        if tiny && embedded {
+            // No room for the version readouts in a very short window; the
+            // update button is the one control worth keeping.
+            checkForUpdatesButton
+        } else if compact {
             VStack(spacing: 10) {
                 compactRow("yt-dlp", installed: manager.toolsReady, updateAvailable: manager.updateAvailable, version: manager.ytdlpVersion)
                 compactRow("ffmpeg", installed: manager.toolsReady, updateAvailable: manager.ffmpegUpdateAvailable, version: manager.ffmpegVersion)
@@ -4023,7 +4028,7 @@ extension Notification.Name {
     static let menuBarDownload = Notification.Name("dropMenuBarDownload")
 }
 
-// MARK: - App Delegate (enforces WindowLayout.minimumSize)
+// MARK: - App Delegate (enforces the screen-relative minimum window size)
 
 class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared: DropAppDelegate!
@@ -4085,18 +4090,11 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             if let window = NSApplication.shared.windows.first(where: { !($0 is NSPanel) }) {
                 window.delegate = self
-                window.minSize = WindowLayout.minimumSize
-                // minSize only constrains drags: a first-launch or restored
-                // frame smaller than it (the old 620x520 default; a size saved
-                // by an older build) would otherwise sit below the minimum
-                // until something forced a re-layout.
-                var frame = window.frame
-                let clamped = NSSize(width: max(frame.width, WindowLayout.minimumSize.width),
-                                     height: max(frame.height, WindowLayout.minimumSize.height))
-                if clamped != frame.size {
-                    frame.origin.y -= clamped.height - frame.height
-                    frame.size = clamped
-                    window.setFrame(frame, display: true)
+                self.applyMinimumSize(to: window)
+                NotificationCenter.default.addObserver(
+                    forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+                ) { [weak self, weak window] _ in
+                    if let window { self?.applyMinimumSize(to: window) }
                 }
                 window.collectionBehavior = [.managed, .fullScreenPrimary]
                 // Standard AppKit window -- no NonFullscreenWindow subclass
@@ -4186,9 +4184,29 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    /// The window minimum is a quarter of the screen the window is on, so it
+    /// follows the window to a different display (windowDidChangeScreen) and
+    /// a change of resolution. minSize only constrains drags, so a first-launch
+    /// or restored frame below it is grown to fit as well.
+    private func applyMinimumSize(to window: NSWindow) {
+        let minimum = WindowLayout.minimumSize(for: window.screen)
+        window.minSize = minimum
+        var frame = window.frame
+        let clamped = NSSize(width: max(frame.width, minimum.width), height: max(frame.height, minimum.height))
+        if clamped != frame.size {
+            frame.origin.y -= clamped.height - frame.height
+            frame.size = clamped
+            window.setFrame(frame, display: true)
+        }
+    }
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        if let window = notification.object as? NSWindow { applyMinimumSize(to: window) }
+    }
+
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        NSSize(width: max(frameSize.width, WindowLayout.minimumSize.width),
-               height: max(frameSize.height, WindowLayout.minimumSize.height))
+        let minimum = WindowLayout.minimumSize(for: sender.screen)
+        return NSSize(width: max(frameSize.width, minimum.width), height: max(frameSize.height, minimum.height))
     }
 
 }
@@ -4414,8 +4432,15 @@ struct ContentView: View {
     // agreed on a width.
     @State private var windowSize: CGSize = .zero
     @State private var mainAreaWidth: CGFloat = 0
-    private var isCompactSidebar: Bool { windowSize.width > 0 && windowSize.width < WindowLayout.compactSidebarBreakpoint }
+    /// The user's own collapse choice (the toggle in the sidebar header).
+    @AppStorage("sidebarCollapsed") private var sidebarCollapsedByUser = false
+    /// Below this window width the sidebar is ALWAYS icons-only, to free the
+    /// room -- the toggle is disabled there rather than letting the sidebar
+    /// swallow a third of a narrow window.
+    private var sidebarForcedCollapsed: Bool { windowSize.width > 0 && windowSize.width < WindowLayout.compactSidebarBreakpoint }
+    private var isCompactSidebar: Bool { sidebarForcedCollapsed || sidebarCollapsedByUser }
     private var isCompactHeight: Bool { windowSize.height > 0 && windowSize.height < WindowLayout.compactHeightBreakpoint }
+    private var isTinyHeight: Bool { windowSize.height > 0 && windowSize.height < WindowLayout.tinyHeightBreakpoint }
     private var columnWidth: CGFloat { WindowLayout.columnWidth(mainWidth: mainAreaWidth) }
     @State private var convertStagingJobs: [ConvertJob] = []
     @State private var convertQueue: [ConvertJob] = []
@@ -4680,6 +4705,7 @@ struct ContentView: View {
         .environment(\.contentColumnWidth, columnWidth)
         .environment(\.isCompactSidebar, isCompactSidebar)
         .environment(\.isCompactHeight, isCompactHeight)
+        .environment(\.isTinyHeight, isTinyHeight)
         // Window-level drop target — drag a URL anywhere onto Drop
         .onDrop(of: ["public.url", "public.plain-text"], isTargeted: nil) { providers in
             handleDrop(providers: providers)
@@ -4777,24 +4803,46 @@ struct ContentView: View {
     /// sitting as a flush edge-to-edge panel. Same three destinations and
     /// the same Tools pill / log toggle controls as the old horizontal tab
     /// bar, just re-flowed top-to-bottom.
-    var sidebar: some View {
-        VStack(spacing: 0) {
-            // App icon + name
+    /// Logo (and name when expanded) plus the collapse/expand toggle. The
+    /// toggle is hidden while the window is too narrow to expand at all.
+    @ViewBuilder
+    private var sidebarHeader: some View {
+        let toggle = HoverIconButton(
+            icon: "sidebar.left", size: 13,
+            help: sidebarForcedCollapsed ? "" : (isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
+        ) {
+            withAnimation(.easeInOut(duration: 0.2)) { sidebarCollapsedByUser.toggle() }
+        }
+        .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
+        if isCompactSidebar {
+            VStack(spacing: isTinyHeight ? 4 : 8) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.appMono(size: 14, weight: .semibold))
+                    .foregroundColor(DesignTokens.Accent.primary)
+                if !sidebarForcedCollapsed { toggle }
+            }
+            .frame(maxWidth: .infinity)
+        } else {
             HStack(spacing: 7) {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.appMono(size: 14, weight: .semibold))
                     .foregroundColor(DesignTokens.Accent.primary)
-                if !isCompactSidebar {
-                    Text("Drop")
-                        .font(.appMono(size: 14, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                    Spacer()
-                }
+                Text("Drop")
+                    .font(.appMono(size: 14, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                Spacer()
+                toggle
             }
-            .frame(maxWidth: .infinity, alignment: isCompactSidebar ? .center : .leading)
-            .padding(.horizontal, isCompactSidebar ? 0 : 14)
-            .padding(.top, 16)
-            .padding(.bottom, 18)
+            .padding(.horizontal, 14)
+        }
+    }
+
+    var sidebar: some View {
+        VStack(spacing: 0) {
+            // App icon + name
+            sidebarHeader
+                .padding(.top, isTinyHeight ? 8 : 16)
+                .padding(.bottom, isTinyHeight ? 6 : 18)
 
             // Nav items — larger touch targets (bumped padding/font inside
             // SidebarTabItem itself) with real breathing room between rows,
@@ -4860,9 +4908,10 @@ struct ContentView: View {
             // side panel triggered from this row.
             ToolsStatusPill(manager: manager)
                 .padding(.horizontal, isCompactSidebar ? 6 : 16)
-                .padding(.bottom, 16)
+                .padding(.bottom, isTinyHeight ? 8 : 16)
         }
         .frame(width: isCompactSidebar ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth)
+        .animation(.easeInOut(duration: 0.2), value: isCompactSidebar)
         // Real floating card -- identical material/radius/rim-stroke
         // recipe as every other GlassCard in the app (VisualEffectBlur +
         // black tint + grain + gradient rim stroke), not a bespoke
@@ -4882,7 +4931,6 @@ struct ContentView: View {
             // no outer card wrapper is needed here.
             urlCard
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
-                .padding(.horizontal, 16)
                 // Clearly more breathing room above the drop zone (top of
                 // window) and below it (before the toolbar/list header
                 // row). Previous +14/+8 bump read as barely-there at this
@@ -4894,6 +4942,44 @@ struct ContentView: View {
                 .padding(.top, isCompactHeight ? 26 : 40)
                 .padding(.bottom, isCompactHeight ? 12 : 20)
 
+            if isTinyHeight {
+                // Too short for pinned chrome AND a card list: everything under
+                // the paste bar scrolls together, so the list header, the cards
+                // and the bottom bar are all still reachable and fully legible.
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: true) {
+                        VStack(spacing: 12) {
+                            mainPanelToolbar
+                            mainPanelCardsContent
+                            if linkPreviews.isEmpty {
+                                EmptyStateView(
+                                    icon: "arrow.down.to.line",
+                                    title: "Paste a link to get started",
+                                    subtitle: "Supports YouTube, SoundCloud, Vimeo and more"
+                                )
+                                .padding(.vertical, 16)
+                            }
+                            mainPanelBottomBar
+                        }
+                    }
+                    .onChange(of: linkPreviews.count) {
+                        withAnimation(.spring(response: 0.4)) {
+                            proxy.scrollTo("scrollBottom", anchor: .bottom)
+                        }
+                    }
+                }
+            } else {
+                mainPanelToolbar
+                mainPanelCardsScroll
+                mainPanelBottomBar
+            }
+        }
+    }
+
+    // MARK: Main panel pieces (composed pinned or all-scrolling -- see mainPanel)
+
+    @ViewBuilder
+    private var mainPanelToolbar: some View {
             // ── List header — Select/Done + Select All/Deselect All on the
             // left, Clear All on the right. Mirrors Convert's header exactly.
             // Floats as its own bubble card, separate from the input area.
@@ -5013,20 +5099,12 @@ struct ContentView: View {
                 // below and the bottom bar (see WindowLayout.columnWidth), so
                 // every row in this tab is pixel-identical in width.
                 .contentColumn(columnWidth)
-                .padding(.horizontal, 16)
             }
 
-            // ── Scrollable cards area ────────────────────────────────
-            // LazyVStack instead of VStack: a plain VStack forces every
-            // card's full view tree (blur material, animated rim glow,
-            // async thumbnail) to build and render simultaneously
-            // regardless of scroll position, which is what caused the
-            // scroll lag/stutter as the queue grew. LazyVStack only
-            // renders rows near the visible viewport -- same visuals,
-            // no eager off-screen rendering cost. ScrollViewReader's
-            // .scrollTo still works identically with LazyVStack.
-            ScrollViewReader { proxy in
-                ScrollView(showsIndicators: true) {
+    }
+
+    @ViewBuilder
+    private var mainPanelCardsContent: some View {
                     LazyVStack(spacing: 12) {
                         // Bundled tools missing banner — should only ever appear if the
                         // app bundle itself is corrupt/incomplete, since yt-dlp and
@@ -5061,9 +5139,24 @@ struct ContentView: View {
                     // NEAREST container -- and this VStack sits inside a
                     // ScrollView, which has its own.
                     .contentColumn(columnWidth)
-                    .padding(.horizontal, 16)
                     .padding(.top, 20)
                     .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private var mainPanelCardsScroll: some View {
+            // ── Scrollable cards area ────────────────────────────────
+            // LazyVStack instead of VStack: a plain VStack forces every
+            // card's full view tree (blur material, animated rim glow,
+            // async thumbnail) to build and render simultaneously
+            // regardless of scroll position, which is what caused the
+            // scroll lag/stutter as the queue grew. LazyVStack only
+            // renders rows near the visible viewport -- same visuals,
+            // no eager off-screen rendering cost. ScrollViewReader's
+            // .scrollTo still works identically with LazyVStack.
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: true) {
+                    mainPanelCardsContent
                 }
                 // Fade scrolled cards out near the top edge instead of a hard
                 // clip against the frosted header above.
@@ -5095,6 +5188,10 @@ struct ContentView: View {
                 .animation(.easeOut(duration: 0.25), value: linkPreviews.isEmpty)
             }
 
+    }
+
+    @ViewBuilder
+    private var mainPanelBottomBar: some View {
             // ── Pinned bottom bar ─────────────────────────────────────
             TabBottomBar(
                     config: config,
@@ -5209,7 +5306,6 @@ struct ContentView: View {
                 .padding(10)
                 .glassCard(cornerRadius: DesignTokens.Radius.medium, opacity: 0.35)
             }
-        }
     }
 
     // MARK: - URL Card
@@ -5748,7 +5844,7 @@ struct ContentView: View {
                         Spacer()
                         nativeLegend()
                     }
-                    HStack(spacing: 8) {
+                    OptionRow {
                         ForEach(VideoFormat.allCases) { f in
                             SelectorChip(label: f.label, note: f.note, isSelected: p.videoFormat == f,
                                        tint: DesignTokens.Accent.primary, nativeBadge: f.isNative) {
@@ -5756,7 +5852,7 @@ struct ContentView: View {
                             }
                         }
                     }
-                    HStack(spacing: 8) {
+                    OptionRow {
                         // Tiers above what the source actually has are hidden
                         // (unknown height keeps the old up-to-1080p default).
                         // A sub-480p source still shows the 480p floor tier --
@@ -5782,7 +5878,7 @@ struct ContentView: View {
                         Spacer()
                         nativeLegend()
                     }
-                    HStack(spacing: 8) {
+                    OptionRow {
                         ForEach(AudioFormat.allCases) { f in
                             SelectorChip(label: f.label, note: f.note, isSelected: p.audioFormat == f,
                                        tint: DesignTokens.Accent.success, nativeBadge: f.isNative) {
@@ -5798,7 +5894,7 @@ struct ContentView: View {
                     // (mirrors Convert's handling of MP3/FLAC hiding the audio
                     // codec row).
                     if p.audioFormat != .m4a {
-                        HStack(spacing: 8) {
+                        OptionRow {
                             ForEach(AudioQuality.allCases) { q in
                                 let chipLabel = p.audioFormat == .flac ? q.flacLabel : q.label
                                 let kbps: Int = { switch q {
@@ -7125,6 +7221,21 @@ struct ChipRow: View {
     }
 }
 
+/// A row of "choose one" chips. Equal-width and filling the row when they
+/// fit; when they don't (a narrow window), they wrap onto more lines at their
+/// natural widths instead of every label truncating to "H.2…".
+struct OptionRow<Content: View>: View {
+    var spacing: CGFloat = 8
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: spacing) { content() }
+            FlowLayout(spacing: spacing) { content() }
+        }
+    }
+}
+
 /// Wraps children onto new lines when the row runs out of horizontal space —
 /// each chip keeps its own fixed size (no internal text wrapping), only the
 /// row itself wraps. Used by ChipRow so Download/Convert info chips never
@@ -7216,6 +7327,11 @@ struct SelectorChip: View {
     let action: () -> Void
     @State private var hovering = false
     @State private var glowPhase = false
+    @Environment(\.contentColumnWidth) private var columnWidth
+    /// The sub-note ("Universal compatibility, QuickTime-ready") is dropped in
+    /// a narrow column, where it forced every chip onto its own line; it stays
+    /// available as the tooltip.
+    private var showNote: Bool { !note.isEmpty && !(columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint) }
 
     var body: some View {
         Button(action: action) {
@@ -7240,15 +7356,19 @@ struct SelectorChip: View {
                         .font(.appMono(size: 12, weight: .semibold))
                 }
                 .foregroundColor(isSelected ? tint : .white.opacity(hovering ? DesignTokens.Text.primary : DesignTokens.Text.tertiary))
-                if !note.isEmpty {
+                if showNote {
                     Text(note)
                         .font(.appMono(size: 9))
                         .foregroundColor(isSelected ? tint.opacity(0.75) : .white.opacity(hovering ? DesignTokens.Text.tertiary : DesignTokens.Text.disabled))
                         .lineLimit(1)
                 }
             }
+            // Horizontal padding lives inside the chip so that when a row wraps
+            // (see OptionRow) the chips hug their labels with room to spare;
+            // in an equal-width row the extra padding is invisible.
+            .padding(.horizontal, 10)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, note.isEmpty ? 6 : 8)
+            .padding(.vertical, showNote ? 8 : 6)
             .background(
                 ZStack {
                     // Black-frosted-glass base, matching GlassButton/GlassCard
@@ -7305,6 +7425,7 @@ struct SelectorChip: View {
         }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .animation(.spring(response: 0.2), value: isSelected)
+        .help(!note.isEmpty && !showNote ? note : "")
     }
 
     /// Slow ambient pulse for the selected state, independent of hover --

@@ -219,6 +219,8 @@ struct HistoryRow: View {
     let onRemove: () -> Void
     let onRedownload: () -> Void
     @State private var hovering = false
+    @Environment(\.contentColumnWidth) private var columnWidth
+    private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint }
 
     var formattedDate: String {
         let cal = Calendar.current
@@ -262,7 +264,7 @@ struct HistoryRow: View {
                         Text(entry.title)
                             .font(.appMono(size: 13, weight: .medium))
                             .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                            .lineLimit(1).truncationMode(.middle)
+                            .lineLimit(narrow ? 2 : 1).truncationMode(.middle)
                         Spacer()
                         Text(formattedDate)
                             .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
@@ -307,10 +309,7 @@ struct HistoryRow: View {
             }
 
             // Metadata chips row — dynamic, color-grouped chips reflecting final output data
-            HStack(spacing: 6) {
-                ChipRow(chips: entry.chips)
-
-                Spacer()
+            let actionButtons = Group {
 
                 if !entry.failed {
                     // Reveal button — selects the actual finished file (not just
@@ -333,6 +332,20 @@ struct HistoryRow: View {
                     fitContent: true,
                     action: onRedownload
                 )
+            }
+            // In a narrow column the chips get their own full-width line and the
+            // buttons sit beneath, instead of both fighting for one row.
+            if narrow {
+                VStack(alignment: .leading, spacing: 8) {
+                    ChipRow(chips: entry.chips)
+                    HStack(spacing: 6) { Spacer(); actionButtons }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    ChipRow(chips: entry.chips)
+                    Spacer()
+                    actionButtons
+                }
             }
         }
         .padding(12)

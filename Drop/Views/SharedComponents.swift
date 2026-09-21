@@ -9,12 +9,25 @@ import QuickLookThumbnailing
 /// Download, Convert and History/Log/Dev), and the window minimum was
 /// declared in four places with three different numbers.
 enum WindowLayout {
-    /// Enforced by AppKit (window.minSize) and applied to restored/first-launch
-    /// frames too. 640 is tall enough for the bottom bar plus a usable card
-    /// viewport on every tab; 896 leaves the compact sidebar a comfortable
-    /// main area (see minColumnWidth).
-    static let minimumSize = NSSize(width: 896, height: 640)
+    // MARK: Window size
+
+    /// The smallest the window may ever be, whatever the screen: the point
+    /// below which even the collapsed layout (icon sidebar, cards at their
+    /// minimum width, everything scrolling) stops working.
+    static let absoluteMinimumSize = NSSize(width: 488, height: 320)
+    /// The window minimum is a quarter of the screen it's on (see
+    /// minimumSize(for:)), so it scales with the display instead of being one
+    /// fixed number.
+    static let minimumScreenFraction: CGFloat = 0.25
     static let firstLaunchSize = NSSize(width: 1000, height: 720)
+
+    static func minimumSize(for screen: NSScreen?) -> NSSize {
+        let visible = (screen ?? NSScreen.main)?.visibleFrame.size ?? NSSize(width: 1440, height: 900)
+        return NSSize(width: max(absoluteMinimumSize.width, (visible.width * minimumScreenFraction).rounded()),
+                      height: max(absoluteMinimumSize.height, (visible.height * minimumScreenFraction).rounded()))
+    }
+
+    // MARK: Sidebar
 
     static let sidebarWidth: CGFloat = 240
     static let compactSidebarWidth: CGFloat = 72
@@ -22,32 +35,57 @@ enum WindowLayout {
     static let sidebarMargins: CGFloat = 20
     /// Window width below which the sidebar collapses to icons.
     static let compactSidebarBreakpoint: CGFloat = 1000
-    /// Window height below which the bottom bar drops its secondary chrome.
-    /// Measured against the content area (window height minus the title bar),
-    /// so the 720pt first-launch window (692pt of content) keeps the full bar.
-    static let compactHeightBreakpoint: CGFloat = 680
 
-    /// The centered content column every tab lays out against.
-    static let minColumnWidth: CGFloat = 600
+    // MARK: Height breakpoints (against the content area: window minus title bar)
+
+    /// Below this the bottom bar drops its secondary chrome and the top padding
+    /// tightens. The 720pt first-launch window (692pt of content) keeps the full bar.
+    static let compactHeightBreakpoint: CGFloat = 680
+    /// Below this there's no room for pinned chrome AND a card list, so the
+    /// bottom bar (and list header) scroll with the cards instead of staying
+    /// pinned, and the sidebar sheds its logo and tool readouts.
+    static let tinyHeightBreakpoint: CGFloat = 500
+
+    // MARK: Content column
+
+    /// The narrowest a card (and the paste bar, list header and bottom bar,
+    /// which share its width) is ever allowed to get.
+    static let minColumnWidth: CGFloat = 380
     static let maxColumnWidth: CGFloat = 1100
-    static let columnPadding: CGFloat = 16
+    /// Side padding never drops below this, however small the window gets.
+    static let minSidePadding: CGFloat = 8
+    /// At or above this main-area width the column is the roomy 60%; at or
+    /// below tightMainWidth it fills the area minus minSidePadding; in between
+    /// the share grows steadily -- so the side padding shrinks as the window
+    /// does, rather than staying a fixed multiple of a shrinking window.
+    static let comfortableMainWidth: CGFloat = 1500
+    static let tightMainWidth: CGFloat = 480
     /// Below this, side-by-side input -> output chip rows no longer fit
     /// without truncating, so they stack instead.
     static let stackedChipsBreakpoint: CGFloat = 700
+    /// Below this, card headers and History rows move their chips onto a
+    /// full-width line, and option chips drop their sub-notes.
+    static let narrowColumnBreakpoint: CGFloat = 540
+    /// Below this the bottom bar's toggle and folder field can't share a row
+    /// without the folder path being cut off, so they stack.
+    static let barStackBreakpoint: CGFloat = 610
 
-    /// Width of the content column for a given main-area width: 60% of it,
-    /// but never narrower than minColumnWidth (unless the area itself is), and
-    /// never wider than maxColumnWidth. 0 means "not measured yet".
+    /// Width of the content column for a given main-area width. 0 means "not
+    /// measured yet".
     static func columnWidth(mainWidth: CGFloat) -> CGFloat {
         guard mainWidth > 0 else { return 0 }
-        let available = max(mainWidth - 2 * columnPadding, 0)
-        return min(max(mainWidth * 0.60, minColumnWidth), available, maxColumnWidth)
+        let fillShare = 1 - 2 * minSidePadding / mainWidth
+        let t = min(max((comfortableMainWidth - mainWidth) / (comfortableMainWidth - tightMainWidth), 0), 1)
+        let share = 0.60 + (fillShare - 0.60) * t
+        let widest = max(mainWidth - 2 * minSidePadding, 0)
+        return min(max(mainWidth * share, minColumnWidth), widest, maxColumnWidth)
     }
 }
 
 private struct ContentColumnWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 private struct CompactSidebarKey: EnvironmentKey { static let defaultValue = false }
 private struct CompactHeightKey: EnvironmentKey { static let defaultValue = false }
+private struct TinyHeightKey: EnvironmentKey { static let defaultValue = false }
 
 extension EnvironmentValues {
     /// Width of the centered content column (see WindowLayout.columnWidth);
@@ -64,14 +102,24 @@ extension EnvironmentValues {
         get { self[CompactHeightKey.self] }
         set { self[CompactHeightKey.self] = newValue }
     }
+    var isTinyHeight: Bool {
+        get { self[TinyHeightKey.self] }
+        set { self[TinyHeightKey.self] = newValue }
+    }
 }
 
 extension View {
-    /// Fixes a view to the shared content column (falls back to unconstrained
-    /// until the width is measured), centered in its container.
+    /// Fixes a view to the shared content column, centered in its container.
+    /// The column already leaves the side padding, so callers add none of
+    /// their own. Until the width is measured it falls back to the minimum
+    /// side padding.
+    @ViewBuilder
     func contentColumn(_ width: CGFloat) -> some View {
-        self.frame(width: width > 0 ? width : nil)
-            .frame(maxWidth: .infinity)
+        if width > 0 {
+            self.frame(width: width).frame(maxWidth: .infinity)
+        } else {
+            self.padding(.horizontal, WindowLayout.minSidePadding)
+        }
     }
 }
 
@@ -234,6 +282,7 @@ struct SidebarTabItem: View {
     var badge: String? = nil
     let action: () -> Void
     @Environment(\.isCompactSidebar) private var compact
+    @Environment(\.isTinyHeight) private var tiny
 
     private static let accent = DesignTokens.Accent.primary
     // Neutral rim/fill tint for unselected tabs -- GlassInteractive tints
@@ -282,7 +331,7 @@ struct SidebarTabItem: View {
             // label length. Sidebar is 240pt wide, so 216 = 90% of that.
             .foregroundColor(isSelected ? Self.accent : .white.opacity(DesignTokens.Text.secondary))
             .frame(width: compact ? WindowLayout.compactSidebarWidth - 24 : 216, alignment: .center)
-            .padding(.vertical, 11)
+            .padding(.vertical, tiny ? 6 : 11)
             // Scoped to isSelected specifically -- without this, the label/
             // icon color change riding along with GlassInteractive's own
             // tint/isActive swap picked up SwiftUI's implicit default

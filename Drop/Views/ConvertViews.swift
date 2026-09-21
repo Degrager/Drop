@@ -837,6 +837,7 @@ struct ConvertView: View {
     /// Download's rows.
     @Environment(\.contentColumnWidth) private var columnWidth
     @Environment(\.isCompactHeight) private var compactHeight
+    @Environment(\.isTinyHeight) private var tinyHeight
 
     /// Convert Queue drawer collapse state -- the item-count subtext stays
     /// visible either way; collapsing only hides the row list beneath it.
@@ -1041,7 +1042,6 @@ struct ConvertView: View {
             // .padding(.top, 40)/.padding(.bottom, 20)/.padding(.horizontal, 16).
             dropZoneView
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
-                .padding(.horizontal, 16)
                 .padding(.top, compactHeight ? 26 : 40)
                 .padding(.bottom, compactHeight ? 12 : 20)
 
@@ -1055,11 +1055,29 @@ struct ConvertView: View {
             // and without this it was being painted UNDER TabBottomBar
             // (later siblings in a VStack paint on top by default) any time
             // it overlapped it.
-            analyzePanel
-                .zIndex(99)
+            if tinyHeight {
+                // Too short for a pinned bar AND the Analyze panel: both scroll
+                // together, so every control stays reachable and legible.
+                ScrollView(showsIndicators: true) {
+                    VStack(spacing: 12) {
+                        analyzePanel
+                            .zIndex(99)
+                        convertBottomBar
+                    }
+                }
+            } else {
+                analyzePanel
+                    .zIndex(99)
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
+                convertBottomBar
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var convertBottomBar: some View {
             // ── Pinned bottom bar — SAVE TO (always on, single shared
             // destination for every job) plus the Convert Queue drawer.
             TabBottomBar(
@@ -1105,7 +1123,6 @@ struct ConvertView: View {
                 extraControls: { queueDrawer },
                 batchDirectoryControl: { batchDirectoryField }
             )
-        }
     }
 
     // MARK: - Analyze panel
@@ -1314,7 +1331,6 @@ struct ConvertView: View {
             .glassCard(cornerRadius: DesignTokens.Radius.xlarge, opacity: 0.35)
             .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
             .contentColumn(columnWidth)
-            .padding(.horizontal, 16)
         } else {
             EmptyStateView(
                 icon: "arrow.triangle.2.circlepath",
@@ -2149,7 +2165,7 @@ struct ConvertPreviewCard: View {
     /// subtitleView above.
     private var modeRow: AnyView {
         AnyView(
-            HStack(spacing: 6) {
+            OptionRow(spacing: 6) {
                 ForEach(ConvertMediaMode.allCases.filter { job.isVideoFile || $0 == .audio }, id: \.rawValue) { mode in
                     CompactModeChip(label: mode.label, icon: mode.icon, isSelected: job.mediaMode == mode, tint: mode.chipTint) {
                         withAnimation(.spring(response: 0.25)) {
@@ -2169,7 +2185,7 @@ struct ConvertPreviewCard: View {
     /// convertSettingsCard), after the codec choices are settled.
     private var formatRow: AnyView {
         AnyView(
-            HStack(spacing: 6) {
+            OptionRow(spacing: 6) {
                 ForEach(job.availableFormats) { fmt in
                     SelectorChip(
                         label: fmt.rawValue,
@@ -2239,7 +2255,7 @@ struct ConvertPreviewCard: View {
                                     .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                             }
                         }
-                        HStack(spacing: 8) {
+                        OptionRow {
                             let sameAsSourceChip = SelectorChip(label: "Same as Source", isSelected: !job.transcodeVideo) {
                                 withAnimation(.spring(response: 0.25)) {
                                     job.useSameAsSourceForVideo()
@@ -2286,7 +2302,7 @@ struct ConvertPreviewCard: View {
                                     .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                             }
                         }
-                        HStack(spacing: 8) {
+                        OptionRow {
                             let sameAsSourceChip = SelectorChip(label: "Same as Source", isSelected: !job.transcodeAudio) {
                                 withAnimation(.spring(response: 0.25)) {
                                     job.useSameAsSourceForAudio()

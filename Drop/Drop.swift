@@ -2811,18 +2811,24 @@ extension AnyTransition {
         )
     }
 
-    /// Glass surfaces -- Download's analyze/preview cards. Rises out of a
-    /// soft blur while settling from 90% to 100% scale, anchored on the top
-    /// edge so it reads as dropping into place. The spring is baked into the
-    /// transition so it plays the same regardless of the ambient
-    /// `withAnimation` at the call site. No opacity at all (see FocusEffect).
-    /// Removal is a quicker blur-and-shrink so cards leave as fluidly as
-    /// they arrive.
+    // GPU budget. Every glass surface is a live backdrop blur, and moving,
+    // scaling or fading one makes the compositor recompute that blur EVERY
+    // FRAME it animates. Measured on the WindowServer: a no-op transition costs
+    // the same as no transition; a 12px-blur, ~1s-spring page swap cost 9x a
+    // hard cut; blur 4 over 0.22s with the outgoing page removed instantly cost
+    // half that. So: short fixed-duration ease curves (a spring's long tail keeps
+    // the GPU busy long after it stops being visible), small blur radii, and
+    // outgoing views leave instantly unless they're small.
+
+    /// Glass surfaces -- Download's analyze/preview cards. Rises out of a soft
+    /// blur while settling from 95% scale, anchored on the top edge. No opacity
+    /// (see FocusEffect). Removal is a quick shrink so cards still leave with
+    /// motion.
     static let glassPop = AnyTransition.asymmetric(
-        insertion: focus(blur: 14, scale: 0.9, anchor: .top)
-            .animation(.spring(response: 0.5, dampingFraction: 0.78)),
-        removal: focus(blur: 10, scale: 0.95, anchor: .top)
-            .animation(.easeIn(duration: 0.2))
+        insertion: focus(blur: 6, scale: 0.95, anchor: .top)
+            .animation(.easeOut(duration: 0.26)),
+        removal: focus(blur: 4, scale: 0.97, anchor: .top)
+            .animation(.easeIn(duration: 0.14))
     )
 
     /// Insertion-only variants, for `if/else` branches that BOTH take layout
@@ -2830,17 +2836,33 @@ extension AnyTransition {
     /// in the layout until it finishes, so for that moment the container holds
     /// both branches; that inflates its minimum height and the window
     /// auto-grows to fit (and never shrinks back). Outgoing branches therefore
-    /// leave instantly and only the incoming one animates.
+    /// leave instantly and only the incoming one animates. Also used for
+    /// status swaps inside one card (a card going from analyzed to
+    /// downloading), where animating both glass surfaces at once was the most
+    /// expensive thing the app did.
     static let glassPopInOnly = AnyTransition.asymmetric(
-        insertion: focus(blur: 14, scale: 0.9, anchor: .top)
-            .animation(.spring(response: 0.5, dampingFraction: 0.78)),
+        insertion: focus(blur: 6, scale: 0.95, anchor: .top)
+            .animation(.easeOut(duration: 0.26)),
         removal: .identity
     )
     static let blurInOnly = AnyTransition.asymmetric(
-        insertion: focus(blur: 8, scale: 0.96, opacity: 0.4)
-            .animation(.spring(response: 0.4, dampingFraction: 0.86)),
+        insertion: focus(blur: 5, scale: 0.97, opacity: 0.4)
+            .animation(.easeOut(duration: 0.2)),
         removal: .identity
     )
+
+    /// Wide glass strips and rows (Download toolbar, bottom bar, History
+    /// rows). A gentler cousin of `glassPop` -- a 90% scale on something 600pt
+    /// wide swings its edges by 30pt, which reads as a lurch, so this only
+    /// shrinks to 97% while blurring. Anchor picks the edge it grows from.
+    static func glassBar(anchor: UnitPoint) -> AnyTransition {
+        .asymmetric(
+            insertion: focus(blur: 5, scale: 0.97, anchor: anchor)
+                .animation(.easeOut(duration: 0.24)),
+            removal: focus(blur: 4, scale: 0.98, anchor: anchor)
+                .animation(.easeIn(duration: 0.14))
+        )
+    }
 
     /// The selected-state fill of a chip. The chip's glass base stays put and
     /// the accent fill grows out of its centre (blurred, scale only) on select
@@ -2850,22 +2872,9 @@ extension AnyTransition {
     static func chipFill(scale: CGFloat = 0.4) -> AnyTransition {
         .asymmetric(
             insertion: focus(blur: 4, scale: scale)
-                .animation(.spring(response: 0.3, dampingFraction: 0.8)),
+                .animation(.easeOut(duration: 0.2)),
             removal: focus(blur: 4, scale: scale)
-                .animation(.easeIn(duration: 0.14))
-        )
-    }
-
-    /// Wide glass strips and rows (Download toolbar, bottom bar, History
-    /// rows). A gentler cousin of `glassPop` -- a 90% scale on something 600pt
-    /// wide swings its edges by 30pt, which reads as a lurch, so this only
-    /// shrinks to 96% while blurring. Anchor picks the edge it grows from.
-    static func glassBar(anchor: UnitPoint) -> AnyTransition {
-        .asymmetric(
-            insertion: focus(blur: 10, scale: 0.96, anchor: anchor)
-                .animation(.spring(response: 0.45, dampingFraction: 0.82)),
-            removal: focus(blur: 8, scale: 0.97, anchor: anchor)
-                .animation(.easeIn(duration: 0.18))
+                .animation(.easeIn(duration: 0.12))
         )
     }
 
@@ -2874,50 +2883,53 @@ extension AnyTransition {
     /// bright elements (blue chips, green ETA) don't read as glowing blobs
     /// at full blur.
     static let blurIn = AnyTransition.asymmetric(
-        insertion: focus(blur: 8, scale: 0.96, opacity: 0.4)
-            .animation(.spring(response: 0.4, dampingFraction: 0.86)),
-        removal: focus(blur: 6, scale: 0.98, opacity: 0.4)
-            .animation(.easeIn(duration: 0.15))
+        insertion: focus(blur: 5, scale: 0.97, opacity: 0.4)
+            .animation(.easeOut(duration: 0.2)),
+        removal: focus(blur: 4, scale: 0.98, opacity: 0.4)
+            .animation(.easeIn(duration: 0.12))
     )
 
     /// Same as `blurIn`, anchored on the top edge -- for sections that unfold
     /// downward inside a card (Options, the format chips) so the content
     /// grows out of the header instead of scaling from its own centre while
-    /// the card height is still springing open.
+    /// the card height is still animating open.
     static let blurInTop = AnyTransition.asymmetric(
-        insertion: focus(blur: 8, scale: 0.97, opacity: 0.3, anchor: .top)
-            .animation(.spring(response: 0.42, dampingFraction: 0.86)),
-        removal: focus(blur: 6, scale: 0.98, opacity: 0.3, anchor: .top)
-            .animation(.easeIn(duration: 0.14))
+        insertion: focus(blur: 5, scale: 0.97, opacity: 0.3, anchor: .top)
+            .animation(.easeOut(duration: 0.22)),
+        removal: focus(blur: 4, scale: 0.98, opacity: 0.3, anchor: .top)
+            .animation(.easeIn(duration: 0.12))
     )
 
     /// Same as `blurIn`, but growing from the leading edge -- for text that
     /// appears beside an icon (sidebar labels) so it unfolds out of the icon
     /// instead of scaling from its own centre.
     static let blurInLeading = AnyTransition.asymmetric(
-        insertion: focus(blur: 6, scale: 0.85, opacity: 0.3, anchor: .leading)
-            .animation(.spring(response: 0.4, dampingFraction: 0.86).delay(0.1)),
-        removal: focus(blur: 6, scale: 0.85, opacity: 0.3, anchor: .leading)
-            .animation(.easeIn(duration: 0.12))
+        insertion: focus(blur: 4, scale: 0.85, opacity: 0.3, anchor: .leading)
+            .animation(.easeOut(duration: 0.2).delay(0.06)),
+        removal: focus(blur: 4, scale: 0.85, opacity: 0.3, anchor: .leading)
+            .animation(.easeIn(duration: 0.1))
     )
 
-    /// Tab-to-tab page change. The outgoing page blurs away fast; the
-    /// incoming one starts a beat later and focuses in, so the two headers
-    /// are never both legible at once (the reason this used to be a hard cut).
+    /// Tab-to-tab page change and the Video<->Audio section swap. The outgoing
+    /// page is removed instantly (animating two full pages of glass at once was
+    /// the single most expensive thing here, and a measured contributor to the
+    /// app feeling sluggish/freezing when several cards updated at once) and
+    /// the incoming one focuses in over a short, fixed-duration ease-out --
+    /// deliberately not a spring: a spring's tail keeps the GPU compositing
+    /// long after the motion is visually done.
     static let pageSwap = AnyTransition.asymmetric(
-        insertion: focus(blur: 12, scale: 0.985, opacity: 0.5, anchor: .top)
-            .animation(.spring(response: 0.45, dampingFraction: 0.9).delay(0.06)),
-        removal: focus(blur: 12, scale: 1.01, opacity: 0.3, anchor: .top)
-            .animation(.easeIn(duration: 0.14))
+        insertion: focus(blur: 4, scale: 0.99, opacity: 0.6, anchor: .top)
+            .animation(.easeOut(duration: 0.2)),
+        removal: .identity
     )
 
     /// Centered overlay content (update sheet stages, popups): pops from
     /// slightly small out of a blur, leaves the same way in reverse.
     static let overlayPop = AnyTransition.asymmetric(
-        insertion: focus(blur: 10, scale: 0.94)
-            .animation(.spring(response: 0.42, dampingFraction: 0.82)),
-        removal: focus(blur: 8, scale: 0.97)
-            .animation(.easeIn(duration: 0.18))
+        insertion: focus(blur: 6, scale: 0.95)
+            .animation(.easeOut(duration: 0.24)),
+        removal: focus(blur: 4, scale: 0.97)
+            .animation(.easeIn(duration: 0.14))
     )
 }
 
@@ -3514,7 +3526,15 @@ struct RimBeam: View {
         GeometryReader { geo in
             let rim = Self.rimPoints(size: geo.size, cornerRadius: cornerRadius)
             let perimeter = max(rim.last?.distance ?? 1, 1)
-            TimelineView(.animation) { timeline in
+            // Capped to 30fps (.periodic), not every display frame (.animation,
+            // up to 120Hz on ProMotion) -- a 1.8s-per-loop beam is imperceptibly
+            // different at 30fps, but this is a Canvas redraw plus two shadow
+            // blur passes running continuously for as long as a card is active,
+            // and each analyzing/downloading card gets its own. Starting several
+            // downloads at once used to mean several of these all repainting at
+            // max refresh rate simultaneously -- measurably the single most
+            // expensive thing running at that moment.
+            TimelineView(.periodic(from: start, by: 1.0 / 30.0)) { timeline in
                 let elapsed = timeline.date.timeIntervalSince(start)
                 let phase = CGFloat((elapsed * cyclesPerSecond).truncatingRemainder(dividingBy: 1.0))
                 trail(rim: rim, perimeter: perimeter, headPhase: phase)
@@ -3554,7 +3574,10 @@ struct RimBeam: View {
         // constant visual speed through corners and straight edges alike.
         let headDistance = headPhase * perimeter
         let trailLength = headLength * perimeter
-        let sampleCount = 28
+        // Halved from 28 -- at 30fps the extra points bought smoothness for a
+        // frame rate this no longer renders at; 14 still reads as a continuous
+        // trail and roughly halves the per-frame path/shadow work.
+        let sampleCount = 14
         let trailPoints: [CGPoint] = (0...sampleCount).map { i in
             let back = trailLength * (1 - CGFloat(i) / CGFloat(sampleCount))
             return position(at: headDistance - back, rim: rim, perimeter: perimeter)
@@ -3576,8 +3599,10 @@ struct RimBeam: View {
                 context.stroke(segment, with: .color(color), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
             }
         }
-        .shadow(color: DesignTokens.Accent.primary.opacity(0.6), radius: 6)
-        .shadow(color: DesignTokens.Accent.primaryLight.opacity(0.4), radius: 3)
+        // One shadow pass instead of two -- the second, tighter-radius shadow
+        // added a second full blur pass for a bloom that's barely visible over
+        // the first at this stroke width.
+        .shadow(color: DesignTokens.Accent.primary.opacity(0.55), radius: 5)
     }
 }
 
@@ -4750,7 +4775,7 @@ struct ContentView: View {
                     // Scoped to `activeTab` so only the page swap picks up this
                     // spring; other state changes inside the subtree (card
                     // spawns, thumbnail loads) keep their own animations.
-                    .animation(.spring(response: 0.45, dampingFraction: 0.9), value: activeTab)
+                    .animation(.easeOut(duration: 0.2), value: activeTab)
 
                     // Dev tab, unlike the others above, keeps essentially
                     // all of its own state locally (pipeline, typed-in
@@ -4771,13 +4796,13 @@ struct ContentView: View {
                         DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
                             .contentColumn(columnWidth)
                             .modifier(FocusEffect(
-                                blur: activeTab == .devRelease ? 0 : 12,
+                                blur: activeTab == .devRelease ? 0 : 4,
                                 scale: activeTab == .devRelease ? 1 : 0.985,
                                 opacity: activeTab == .devRelease ? 1 : 0,
                                 anchor: .top
                             ))
                             .allowsHitTesting(activeTab == .devRelease)
-                            .animation(.spring(response: 0.45, dampingFraction: 0.9), value: activeTab)
+                            .animation(.easeOut(duration: 0.2), value: activeTab)
                     }
                     #endif
                     }
@@ -4805,18 +4830,35 @@ struct ContentView: View {
         )
         .environment(\.contentColumnWidth, columnWidth)
         .environment(\.isCompactSidebar, isCompactSidebar)
+        .environment(\.sidebarWidth, sidebarWidth)
         .onChange(of: isCompactSidebar) { _, compact in
-            // Collapsing waits a beat so the labels finish blurring out before
-            // the card narrows (otherwise its edge clips them mid-word);
-            // expanding widens immediately and the labels follow (see
-            // blurInLeading).
-            let spring = Animation.spring(response: 0.4, dampingFraction: 0.88)
-            withAnimation(compact ? spring.delay(0.1) : spring) {
-                sidebarWidth = compact ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
+            // One spring drives the card AND everything sized from sidebarWidth
+            // (the tab pills), so they shrink to icons together. The labels blur
+            // out fast on collapse and blur in after the card has started to
+            // widen on expand (see blurInLeading).
+            let target = compact ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
+            if NSApp.keyWindow?.inLiveResize == true {
+                // The user is dragging the window edge across the collapse threshold:
+                // follow their hand, don't start a 0.24s animation mid-drag.
+                sidebarWidth = target
+            } else {
+                withAnimation(.easeInOut(duration: 0.24)) { sidebarWidth = target }
             }
         }
         .environment(\.isCompactHeight, isCompactHeight)
         .environment(\.isTinyHeight, isTinyHeight)
+        // While the user drags the window edge, layout should track their hand
+        // exactly. Every breakpoint the drag crosses (compact sidebar, compact
+        // height, a section appearing or disappearing) used to start its own
+        // animation mid-drag, stacking GPU work on top of the per-frame relayout
+        // and making resizing feel sluggish. Scoped to live resize only, so
+        // every other animation in the app is unaffected.
+        .transaction { t in
+            if NSApp.keyWindow?.inLiveResize == true {
+                t.animation = nil
+                t.disablesAnimations = true
+            }
+        }
         // Window-level drop target — drag a URL anywhere onto Drop
         .onDrop(of: ["public.url", "public.plain-text"], isTargeted: nil) { providers in
             handleDrop(providers: providers)
@@ -4922,7 +4964,7 @@ struct ContentView: View {
             icon: "sidebar.left", size: 13,
             help: sidebarForcedCollapsed ? "" : (isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
         ) {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) { sidebarCollapsedByUser.toggle() }
+            withAnimation(.easeInOut(duration: 0.24)) { sidebarCollapsedByUser.toggle() }
         }
         .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
         // ZStack, not a bare if/else: while one layout blurs out the other blurs in,
@@ -5025,7 +5067,7 @@ struct ContentView: View {
             // sidebar tab (see nav items above) instead of a floating
             // side panel triggered from this row.
             ToolsStatusPill(manager: manager)
-                .padding(.horizontal, isCompactSidebar ? 6 : 16)
+                .padding(.horizontal, 6 + 10 * WindowLayout.sidebarExpansion(sidebarWidth))
                 .padding(.bottom, isTinyHeight ? 8 : 16)
         }
         .frame(width: sidebarWidth)
@@ -5143,7 +5185,7 @@ struct ContentView: View {
                             fitContent: true,
                             disabled: !hasExpandableLinks
                         ) {
-                            withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                            withAnimation(.easeOut(duration: 0.22)) {
                                 toggleCollapseAllLinks()
                             }
                         }
@@ -5840,7 +5882,7 @@ struct ContentView: View {
                     Spacer()
                     if !isBatchMode {
                         CollapseToggleButton(isExpanded: collapseIsExpandedBinding.wrappedValue) {
-                            withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) { collapseIsExpandedBinding.wrappedValue.toggle() }
+                            withAnimation(.easeOut(duration: 0.22)) { collapseIsExpandedBinding.wrappedValue.toggle() }
                         }
                     }
                 }
@@ -5879,7 +5921,7 @@ struct ContentView: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .glassCard(cornerRadius: DesignTokens.Radius.medium)
-            .transition(.glassPop)
+            .transition(.glassPopInOnly)
         } else {
         PreviewCard(
             isSelected: p.isSelected,
@@ -6047,9 +6089,9 @@ struct ContentView: View {
             .id(p.mediaMode)
             .transition(.pageSwap)
             }
-            .animation(.spring(response: 0.4, dampingFraction: 0.88), value: p.mediaMode)
+            .animation(.easeOut(duration: 0.2), value: p.mediaMode)
         }
-        .transition(.glassPop)
+        .transition(.glassPopInOnly)
         } // end else (not pending)
     }
 

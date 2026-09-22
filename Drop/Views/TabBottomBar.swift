@@ -251,7 +251,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                                         .id(label)
                                         .transition(.blurIn)
                                 }
-                                .animation(.spring(response: 0.4, dampingFraction: 0.86), value: label)
+                                .animation(.easeOut(duration: 0.2), value: label)
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, compactHeight ? 9 : 14)

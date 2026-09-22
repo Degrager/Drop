@@ -152,7 +152,7 @@ struct PreviewCard<Settings: View>: View {
         .animation(.easeOut(duration: 0.15), value: isSelected)
         .animation(.easeOut(duration: 0.15), value: showCheckbox)
         .animation(.easeInOut(duration: 0.35), value: isAnalyzing)
-        .transition(.glassPop)
+        .transition(.glassPopInOnly)
     }
 
     // MARK: Shared header
@@ -324,7 +324,7 @@ struct PreviewCard<Settings: View>: View {
             } else {
                 if collapseButtonInHeader, let isExpanded, !collapseLocked {
                     CollapseToggleButton(isExpanded: isExpanded.wrappedValue) {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) { isExpanded.wrappedValue.toggle() }
+                        withAnimation(.easeOut(duration: 0.22)) { isExpanded.wrappedValue.toggle() }
                     }
                 }
 

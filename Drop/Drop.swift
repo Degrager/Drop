@@ -2878,29 +2878,37 @@ extension AnyTransition {
         )
     }
 
-    /// Gap between one sidebar row's domino step and the next. 60ms -- large
-    /// enough that consecutive rows are clearly offset (at the original 40ms
-    /// several rows were always overlapping mid-pop at once, which read as
-    /// "everything happened together" rather than one-by-one); still brisk
-    /// enough that a 10-row sequence (header, 5 tabs, 4 tool rows) finishes
-    /// in well under a second. Single source of truth -- ContentView's own
-    /// sequencing (how long to wait before snapping sidebarWidth) reads this
-    /// same constant so the two stay in lockstep.
-    static let dominoStagger: Double = 0.06
+    /// Gap between one sidebar row's domino step and the next. 45ms, with
+    /// each row's OWN pop kept deliberately quick (see dominoPop) so most of
+    /// the ≤0.5s budget goes to the gap BETWEEN rows rather than to any one
+    /// row's own animation -- at equal or larger per-row duration, rows
+    /// spend most of their time overlapping mid-motion with their neighbors,
+    /// which reads as "everything happening together" instead of a visible
+    /// one-by-one march. Over 10 rows: 9 gaps * 45ms + a 0.08s shrink =
+    /// 0.485s. Single source of truth -- ContentView's own sequencing (how
+    /// long to wait before snapping sidebarWidth) reads this same constant so
+    /// the two stay in lockstep.
+    static let dominoStagger: Double = 0.045
 
     /// Sidebar collapse/expand: a row vanishes (blur + shrink toward nothing,
     /// no opacity -- these rows are GlassInteractive pills with their own
     /// VisualEffectBlur, and fading opacity on a glass surface dilutes its
     /// tint and flashes it grey, see FocusEffect/glassPop) then pops back in
-    /// with a springy overshoot, staggered top-to-bottom by `index` so the
-    /// rows go/come one after another (domino) rather than all at once.
+    /// growing from near-zero scale with a springy overshoot, staggered
+    /// top-to-bottom by `index` -- the TOP row starts first, each following
+    /// row starts a beat later (the stagger is when each row's own pop
+    /// BEGINS, not where it scales from -- every row still grows from its
+    /// own center/top, matching its own anchor). Each row's own pop is kept
+    /// short and snappy (a fast spring response, not a lingering one) so
+    /// rows read as distinct quick pops marching down the list rather than
+    /// a smooth wave of overlapping motion.
     static func dominoPop(index: Int) -> AnyTransition {
         let stagger = Double(index) * dominoStagger
         return .asymmetric(
-            insertion: focus(blur: 8, scale: 0.2)
-                .animation(.spring(response: 0.3, dampingFraction: 0.62).delay(stagger)),
-            removal: focus(blur: 6, scale: 0.2)
-                .animation(.easeIn(duration: 0.12).delay(stagger))
+            insertion: focus(blur: 10, scale: 0.05)
+                .animation(.spring(response: 0.18, dampingFraction: 0.58).delay(stagger)),
+            removal: focus(blur: 8, scale: 0.05)
+                .animation(.easeIn(duration: 0.08).delay(stagger))
         )
     }
 
@@ -4671,6 +4679,18 @@ struct ContentView: View {
     // doesn't animate on first appearance.
     @State private var sidebarWidth: CGFloat =
         UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
+    // What every ROW actually renders as (icon+label vs icon-only) -- this,
+    // not isCompactSidebar directly, is what's published to the
+    // \.isCompactSidebar environment SidebarTabItem/ToolsDropdownContent/
+    // CheckForUpdatesButton read. It only changes at the same moment
+    // sidebarWidth snaps. Without this split, those views saw the NEW mode
+    // the instant the toggle was tapped -- their own hard-cut content swap
+    // (e.g. SidebarTabItem's `if !compact { Text(label) }`) fired
+    // immediately, so labels vanished/reflowed well before the domino's
+    // staggered exit even got to that row, instead of staying full-content
+    // through the whole exit and only changing together with the width snap.
+    @State private var sidebarDisplayCompact: Bool =
+        UserDefaults.standard.bool(forKey: "sidebarCollapsed")
     /// True while the sidebar's rows (header, tab pills, tools block) are
     /// hidden mid-collapse/expand -- see onChange(of: isCompactSidebar) and
     /// AnyTransition.dominoPop.
@@ -4696,13 +4716,19 @@ struct ContentView: View {
     // the wait before the width snap is a touch more generous than strictly
     // needed, never too short.
     private static let sidebarRowCount = 10
-    private static let sidebarExitDuration: Double = 0.12
+    // Per request: fade-out + collapse together should be half a second or
+    // less. Must match dominoPop's own removal duration (see there for why
+    // most of the budget goes to the gap, not this). 9 gaps * 45ms + a
+    // 0.08s per-row shrink = 0.485s.
+    private static let sidebarExitDuration: Double = 0.08
     private static var sidebarExitTotal: Double { AnyTransition.dominoStagger * Double(sidebarRowCount - 1) + sidebarExitDuration }
     // How long the enter sequence's last row takes to fully settle: its own
     // delay plus its spring's response plus a little slack for the spring's
     // overshoot to visibly damp out (a spring doesn't stop dead at
-    // `response`, it keeps interpolating past it).
-    private static var sidebarEnterTotal: Double { AnyTransition.dominoStagger * Double(sidebarRowCount - 1) + 0.3 + 0.35 }
+    // `response`, it keeps interpolating past it). Must stay ≥ dominoPop's
+    // insertion animation (response + delay) or the last rows get cut off
+    // before their pop plays -- see the ambient-wrapper comment below.
+    private static var sidebarEnterTotal: Double { AnyTransition.dominoStagger * Double(sidebarRowCount - 1) + 0.18 + 0.15 }
     /// Below this window width the sidebar is ALWAYS icons-only, to free the
     /// room -- the toggle is disabled there rather than letting the sidebar
     /// swallow a third of a narrow window.
@@ -4961,7 +4987,7 @@ struct ContentView: View {
             }
         )
         .environment(\.contentColumnWidth, columnWidth)
-        .environment(\.isCompactSidebar, isCompactSidebar)
+        .environment(\.isCompactSidebar, sidebarDisplayCompact)
         .environment(\.sidebarWidth, sidebarWidth)
         .onChange(of: isCompactSidebar) { _, compact in
             // Domino sequence, per request: rows pop OUT top-to-bottom, the
@@ -4986,6 +5012,7 @@ struct ContentView: View {
             sidebarUserInitiatedToggle = false
             guard userInitiated, NSApp.keyWindow?.inLiveResize != true else {
                 sidebarWidth = target
+                sidebarDisplayCompact = compact
                 sidebarRowsHidden = false
                 return
             }
@@ -5005,6 +5032,9 @@ struct ContentView: View {
                 // that newer onChange already owns sidebarWidth/sidebarRowsHidden.
                 guard sidebarToggleGeneration == generation else { return }
                 sidebarWidth = target
+                // Rows only learn about the new mode right as they're about to
+                // pop back in -- see sidebarDisplayCompact's declaration.
+                sidebarDisplayCompact = compact
                 withAnimation(.linear(duration: Self.sidebarEnterTotal)) { sidebarRowsHidden = false }
             }
         }

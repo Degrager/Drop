@@ -31,6 +31,10 @@ enum WindowLayout {
 
     static let sidebarWidth: CGFloat = 240
     static let compactSidebarWidth: CGFloat = 72
+    /// 0 = fully collapsed, 1 = fully expanded, for an in-flight sidebar width.
+    static func sidebarExpansion(_ width: CGFloat) -> CGFloat {
+        min(max((width - compactSidebarWidth) / (sidebarWidth - compactSidebarWidth), 0), 1)
+    }
     /// The sidebar's margin from the window (leading 12 + trailing 8).
     static let sidebarMargins: CGFloat = 20
     /// Window width below which the sidebar collapses to icons.
@@ -84,6 +88,7 @@ enum WindowLayout {
 
 private struct ContentColumnWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 private struct CompactSidebarKey: EnvironmentKey { static let defaultValue = false }
+private struct SidebarWidthKey: EnvironmentKey { static let defaultValue: CGFloat = WindowLayout.sidebarWidth }
 private struct CompactHeightKey: EnvironmentKey { static let defaultValue = false }
 private struct TinyHeightKey: EnvironmentKey { static let defaultValue = false }
 
@@ -97,6 +102,15 @@ extension EnvironmentValues {
     var isCompactSidebar: Bool {
         get { self[CompactSidebarKey.self] }
         set { self[CompactSidebarKey.self] = newValue }
+    }
+    /// The sidebar card's CURRENT width, animated between compactSidebarWidth
+    /// and sidebarWidth. Everything inside that should shrink/grow with the
+    /// card (tab pills, paddings) derives from this, not from the discrete
+    /// isCompactSidebar flag -- the flag flips instantly, so anything sized
+    /// from it snaps to its final size while the card is still mid-animation.
+    var sidebarWidth: CGFloat {
+        get { self[SidebarWidthKey.self] }
+        set { self[SidebarWidthKey.self] = newValue }
     }
     var isCompactHeight: Bool {
         get { self[CompactHeightKey.self] }
@@ -282,6 +296,7 @@ struct SidebarTabItem: View {
     var badge: String? = nil
     let action: () -> Void
     @Environment(\.isCompactSidebar) private var compact
+    @Environment(\.sidebarWidth) private var sidebarWidth
     @Environment(\.isTinyHeight) private var tiny
 
     private static let accent = DesignTokens.Accent.primary
@@ -333,7 +348,9 @@ struct SidebarTabItem: View {
             // sidebar width -- all tabs now the same size regardless of
             // label length. Sidebar is 240pt wide, so 216 = 90% of that.
             .foregroundColor(isSelected ? Self.accent : .white.opacity(DesignTokens.Text.secondary))
-            .frame(width: compact ? WindowLayout.compactSidebarWidth - 24 : 216, alignment: .center)
+            // From the card's animated width, so the pill shrinks to an icon WITH the
+            // sidebar rather than snapping to icon size the instant the flag flips.
+            .frame(width: max(sidebarWidth - 24, 0), alignment: .center)
             .padding(.vertical, tiny ? 6 : 11)
             // Scoped to isSelected specifically -- without this, the label/
             // icon color change riding along with GlassInteractive's own

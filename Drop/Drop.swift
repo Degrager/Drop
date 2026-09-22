@@ -2878,6 +2878,22 @@ extension AnyTransition {
         )
     }
 
+    /// Sidebar collapse/expand: a row vanishes (blur + shrink toward nothing,
+    /// no opacity -- these rows are GlassInteractive pills with their own
+    /// VisualEffectBlur, and fading opacity on a glass surface dilutes its
+    /// tint and flashes it grey, see FocusEffect/glassPop) then pops back in
+    /// with a springy overshoot, staggered top-to-bottom by `index` so the
+    /// rows go/come one after another (domino) rather than all at once.
+    static func dominoPop(index: Int) -> AnyTransition {
+        let stagger = Double(index) * 0.04
+        return .asymmetric(
+            insertion: focus(blur: 8, scale: 0.2)
+                .animation(.spring(response: 0.34, dampingFraction: 0.6).delay(stagger)),
+            removal: focus(blur: 6, scale: 0.2)
+                .animation(.easeIn(duration: 0.12).delay(stagger))
+        )
+    }
+
     /// Loose content on a surface: thumbnails, progress text, empty states,
     /// sub-rows. A short focus pull with only a light opacity assist so
     /// bright elements (blue chips, green ETA) don't read as glowing blobs
@@ -4169,6 +4185,10 @@ extension View {
 
 extension Notification.Name {
     static let menuBarDownload = Notification.Name("dropMenuBarDownload")
+    /// Fired once, from DropAppDelegate.windowDidEndLiveResize, when the user
+    /// releases a window-edge drag. See ContentView's settledWindowSize /
+    /// settledMainAreaWidth for why this exists.
+    static let dropLiveResizeEnded = Notification.Name("dropLiveResizeEnded")
 }
 
 // MARK: - App Delegate (enforces the screen-relative minimum window size)
@@ -4350,6 +4370,19 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         let minimum = WindowLayout.minimumSize(for: sender.screen)
         return NSSize(width: max(frameSize.width, minimum.width), height: max(frameSize.height, minimum.height))
+    }
+
+    // Fires once when the user releases a window-edge drag (not on every
+    // in-between resize tick, unlike windowWillResize above). ContentView uses
+    // this to defer recomputing its layout breakpoints (compact sidebar/height,
+    // content column width, chip wrapping) until the drag actually ends,
+    // instead of re-deciding all of them on every one of the dozens of frames
+    // a drag produces -- see settledWindowSize/settledMainAreaWidth. Standard
+    // AppKit-recommended pattern for expensive live-resize content (Apple's
+    // "Cocoa Live Window Resizing" guide): let the raw frame track the mouse,
+    // defer real relayout to resize's end.
+    func windowDidEndLiveResize(_ notification: Notification) {
+        NotificationCenter.default.post(name: .dropLiveResizeEnded, object: nil)
     }
 
 }
@@ -4573,26 +4606,69 @@ struct ContentView: View {
     // resolves against whatever container happens to be nearest -- its own
     // "60% of something", so Download, Convert and History/Log/Dev never
     // agreed on a width.
+    // Raw, continuously-updated geometry -- cheap to store, but every
+    // breakpoint BELOW deliberately reads the "settled" snapshot instead (see
+    // those two @State vars) so a live window-edge drag doesn't re-decide
+    // "should the bottom bar stack / is the sidebar forced compact" on every
+    // single one of the dozens of frames a drag produces. Kept around because
+    // the settled snapshot needs a live value to catch up to once the drag ends.
     @State private var windowSize: CGSize = .zero
     @State private var mainAreaWidth: CGFloat = 0
+    // What every breakpoint below actually reads. Equal to windowSize/
+    // mainAreaWidth except while NSApp.keyWindow?.inLiveResize is true, during
+    // which they're pinned to their pre-drag values and only catch up once
+    // (via the .dropLiveResizeEnded notification, posted from
+    // DropAppDelegate.windowDidEndLiveResize) when the drag actually ends.
+    // Without this, live-resize was measurably the most expensive thing the
+    // app did: every layout decision derived from these two numbers --
+    // compact sidebar/height, content column width, chip wrapping, bottom bar
+    // stacking -- recomputed on every resize tick, stacking GPU/CPU work on
+    // top of AppKit's own per-frame relayout of the window itself.
+    @State private var settledWindowSize: CGSize = .zero
+    @State private var settledMainAreaWidth: CGFloat = 0
     /// The user's own collapse choice (the toggle in the sidebar header).
     @AppStorage("sidebarCollapsed") private var sidebarCollapsedByUser = false
-    // The sidebar card's own width, animated explicitly (see the
-    // onChange(of: isCompactSidebar) below). It must NOT be computed from
-    // isCompactSidebar inline: then the width changes in the same render as
-    // the flag with no animation attached, and the card snaps to its final
-    // width while only its contents transition. Seeded from the persisted
-    // preference so a collapsed launch doesn't animate on first appearance.
+    // The sidebar card's own width. Snapped, not animated -- see
+    // onChange(of: isCompactSidebar) below, which sequences a staggered
+    // "rows pop out, width snaps, rows pop back in" instead of tweening this
+    // smoothly, because a smooth tween dragged mainAreaWidth (and everything
+    // derived from it) through every intermediate width, causing the main
+    // content to repeatedly reflow between side-by-side and stacked mid-
+    // animation. Seeded from the persisted preference so a collapsed launch
+    // doesn't animate on first appearance.
     @State private var sidebarWidth: CGFloat =
         UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
+    /// True while the sidebar's rows (header, tab pills, tools block) are
+    /// hidden mid-collapse/expand -- see onChange(of: isCompactSidebar) and
+    /// AnyTransition.dominoPop.
+    @State private var sidebarRowsHidden = false
+    /// Bumped on every collapse/expand toggle so a stale, still-in-flight
+    /// asyncAfter from a superseded toggle (the user tapped twice quickly)
+    /// can recognize it's no longer current and no-op instead of clobbering
+    /// a newer sequence's width/visibility.
+    @State private var sidebarToggleGeneration = 0
+    /// Set true by sidebarHeader's toggle button right before it flips
+    /// sidebarCollapsedByUser, and consumed (read + cleared) by the very next
+    /// onChange(of: isCompactSidebar). Distinguishes a deliberate tap -- which
+    /// gets the domino pop -- from isCompactSidebar changing because the
+    /// window's width crossed sidebarForcedCollapsed's threshold, which can
+    /// happen repeatedly during any resize (a live drag, but also a
+    /// programmatic one: Stage Manager, an external display, tiling) and
+    /// should always be the cheap instant snap, never the multi-row spring
+    /// sequence.
+    @State private var sidebarUserInitiatedToggle = false
+    private static let sidebarRowStagger: Double = 0.04
+    private static let sidebarRowCount = 7  // header, 5 tab pills (Dev optional), tools block
+    private static let sidebarExitDuration: Double = 0.12
+    private static var sidebarExitTotal: Double { sidebarRowStagger * Double(sidebarRowCount - 1) + sidebarExitDuration }
     /// Below this window width the sidebar is ALWAYS icons-only, to free the
     /// room -- the toggle is disabled there rather than letting the sidebar
     /// swallow a third of a narrow window.
-    private var sidebarForcedCollapsed: Bool { windowSize.width > 0 && windowSize.width < WindowLayout.compactSidebarBreakpoint }
+    private var sidebarForcedCollapsed: Bool { settledWindowSize.width > 0 && settledWindowSize.width < WindowLayout.compactSidebarBreakpoint }
     private var isCompactSidebar: Bool { sidebarForcedCollapsed || sidebarCollapsedByUser }
-    private var isCompactHeight: Bool { windowSize.height > 0 && windowSize.height < WindowLayout.compactHeightBreakpoint }
-    private var isTinyHeight: Bool { windowSize.height > 0 && windowSize.height < WindowLayout.tinyHeightBreakpoint }
-    private var columnWidth: CGFloat { WindowLayout.columnWidth(mainWidth: mainAreaWidth) }
+    private var isCompactHeight: Bool { settledWindowSize.height > 0 && settledWindowSize.height < WindowLayout.compactHeightBreakpoint }
+    private var isTinyHeight: Bool { settledWindowSize.height > 0 && settledWindowSize.height < WindowLayout.tinyHeightBreakpoint }
+    private var columnWidth: CGFloat { WindowLayout.columnWidth(mainWidth: settledMainAreaWidth) }
     @State private var convertStagingJobs: [ConvertJob] = []
     @State private var convertQueue: [ConvertJob] = []
     /// Lives here (not as local @State in ConvertView) because activeTab
@@ -4815,8 +4891,16 @@ struct ContentView: View {
                 .background(
                     GeometryReader { geo in
                         Color.clear
-                            .onAppear { mainAreaWidth = geo.size.width }
-                            .onChange(of: geo.size.width) { _, newWidth in mainAreaWidth = newWidth }
+                            .onAppear {
+                                mainAreaWidth = geo.size.width
+                                settledMainAreaWidth = geo.size.width
+                            }
+                            .onChange(of: geo.size.width) { _, newWidth in
+                                mainAreaWidth = newWidth
+                                // See settledMainAreaWidth's declaration: only follow the
+                                // live value outside of a live-resize drag.
+                                if NSApp.keyWindow?.inLiveResize != true { settledMainAreaWidth = newWidth }
+                            }
                     }
                 )
             }
@@ -4824,25 +4908,52 @@ struct ContentView: View {
         .background(
             GeometryReader { geo in
                 Color.clear
-                    .onAppear { windowSize = geo.size }
-                    .onChange(of: geo.size) { _, newSize in windowSize = newSize }
+                    .onAppear {
+                        windowSize = geo.size
+                        settledWindowSize = geo.size
+                    }
+                    .onChange(of: geo.size) { _, newSize in
+                        windowSize = newSize
+                        if NSApp.keyWindow?.inLiveResize != true { settledWindowSize = newSize }
+                    }
             }
         )
         .environment(\.contentColumnWidth, columnWidth)
         .environment(\.isCompactSidebar, isCompactSidebar)
         .environment(\.sidebarWidth, sidebarWidth)
         .onChange(of: isCompactSidebar) { _, compact in
-            // One spring drives the card AND everything sized from sidebarWidth
-            // (the tab pills), so they shrink to icons together. The labels blur
-            // out fast on collapse and blur in after the card has started to
-            // widen on expand (see blurInLeading).
+            // Domino sequence, per request: rows pop OUT top-to-bottom, the
+            // card's width snaps (not tweens) once they're gone, then the new
+            // row set pops IN top-to-bottom. See AnyTransition.dominoPop and
+            // sidebarRowsHidden's declaration for why this replaced a smooth
+            // width tween -- that tween dragged mainAreaWidth through every
+            // intermediate width, and every breakpoint derived from it
+            // (bottom bar stacking, chip wrapping) reflowed several times
+            // mid-animation.
             let target = compact ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
-            if NSApp.keyWindow?.inLiveResize == true {
-                // The user is dragging the window edge across the collapse threshold:
-                // follow their hand, don't start a 0.24s animation mid-drag.
+            sidebarToggleGeneration += 1
+            let generation = sidebarToggleGeneration
+            // Consume the intent flag: only a genuine tap on the toggle button
+            // gets the domino. A change caused by the window's width crossing
+            // sidebarForcedCollapsed's threshold -- whether from a live mouse
+            // drag or a programmatic resize (Stage Manager, an external
+            // display, tiling) -- always gets the cheap instant snap, since
+            // that can happen repeatedly in quick succession and isn't a
+            // deliberate action worth a multi-row spring show.
+            let userInitiated = sidebarUserInitiatedToggle
+            sidebarUserInitiatedToggle = false
+            guard userInitiated, NSApp.keyWindow?.inLiveResize != true else {
                 sidebarWidth = target
-            } else {
-                withAnimation(.easeInOut(duration: 0.24)) { sidebarWidth = target }
+                sidebarRowsHidden = false
+                return
+            }
+            withAnimation(.easeIn(duration: Self.sidebarExitDuration)) { sidebarRowsHidden = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarExitTotal) {
+                // A second toggle landed while this one's exit was still playing --
+                // that newer onChange already owns sidebarWidth/sidebarRowsHidden.
+                guard sidebarToggleGeneration == generation else { return }
+                sidebarWidth = target
+                withAnimation(.linear(duration: 0.01)) { sidebarRowsHidden = false }
             }
         }
         .environment(\.isCompactHeight, isCompactHeight)
@@ -4871,6 +4982,13 @@ struct ContentView: View {
             // immediately for visual feedback, then kick off analysis — so
             // pasting from the menu bar behaves identically to pasting on
             // the Download page itself.
+            // A live-resize drag just ended -- catch the settled breakpoint
+            // snapshot up to wherever the raw geometry actually landed. See
+            // settledWindowSize/settledMainAreaWidth's declaration.
+            NotificationCenter.default.addObserver(forName: .dropLiveResizeEnded, object: nil, queue: .main) { _ in
+                settledWindowSize = windowSize
+                settledMainAreaWidth = mainAreaWidth
+            }
             NotificationCenter.default.addObserver(forName: .menuBarDownload, object: nil, queue: .main) { note in
                 guard let raw = note.userInfo?["url"] as? String else { return }
                 let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4964,7 +5082,13 @@ struct ContentView: View {
             icon: "sidebar.left", size: 13,
             help: sidebarForcedCollapsed ? "" : (isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
         ) {
-            withAnimation(.easeInOut(duration: 0.24)) { sidebarCollapsedByUser.toggle() }
+            // Marks the resulting isCompactSidebar change as user-initiated --
+            // see sidebarUserInitiatedToggle's declaration and the onChange
+            // handler below for why this matters (only a deliberate tap gets
+            // the domino pop; the window merely crossing the width threshold
+            // never should).
+            sidebarUserInitiatedToggle = true
+            sidebarCollapsedByUser.toggle()
         }
         .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
         // ZStack, not a bare if/else: while one layout blurs out the other blurs in,
@@ -4999,33 +5123,43 @@ struct ContentView: View {
 
     var sidebar: some View {
         VStack(spacing: 0) {
-            // App icon + name
-            sidebarHeader
-                .padding(.top, isTinyHeight ? 8 : 16)
-                .padding(.bottom, isTinyHeight ? 6 : 18)
+            // App icon + name. Wrapped in the domino gate (index 0, first to
+            // go/first to come back) -- see sidebarRowsHidden's declaration.
+            if !sidebarRowsHidden {
+                sidebarHeader
+                    .padding(.top, isTinyHeight ? 8 : 16)
+                    .padding(.bottom, isTinyHeight ? 6 : 18)
+                    .transition(.dominoPop(index: 0))
+            }
 
             // Nav items — larger touch targets (bumped padding/font inside
             // SidebarTabItem itself) with real breathing room between rows,
-            // instead of the previous near-zero 2pt gap.
+            // instead of the previous near-zero 2pt gap. Each row is its own
+            // domino step (index 1-5), gated the same way as the header.
+            if !sidebarRowsHidden {
             VStack(spacing: 6) {
                 SidebarTabItem(label: "Download", icon: "arrow.down.circle", isSelected: activeTab == .download) {
                     withAnimation(.spring(response: 0.25)) { activeTab = .download }
                 }
                 .accessibilityIdentifier("tab_download")
+                .transition(.dominoPop(index: 1))
                 SidebarTabItem(label: "Convert", icon: "arrow.triangle.2.circlepath", isSelected: activeTab == .convert) {
                     withAnimation(.spring(response: 0.25)) { activeTab = .convert }
                 }
                 .accessibilityIdentifier("tab_convert")
+                .transition(.dominoPop(index: 2))
                 SidebarTabItem(label: "History", icon: "clock",
                         isSelected: activeTab == .history,
                         badge: manager.history.entries.isEmpty ? nil : "\(manager.history.entries.count)") {
                     withAnimation(.spring(response: 0.25)) { activeTab = .history }
                 }
                 .accessibilityIdentifier("tab_history")
+                .transition(.dominoPop(index: 3))
                 SidebarTabItem(label: "Log", icon: "terminal", isSelected: activeTab == .log) {
                     withAnimation(.spring(response: 0.25)) { activeTab = .log }
                 }
                 .accessibilityIdentifier("tab_log")
+                .transition(.dominoPop(index: 4))
                 // Present only on a machine holding the Sparkle signing key
                 // and GitHub token -- see DevKeychain.isDevMachine. On any
                 // other machine this row, and everything behind it, simply
@@ -5040,6 +5174,7 @@ struct ContentView: View {
                         withAnimation(.spring(response: 0.25)) { activeTab = .devRelease }
                     }
                     .accessibilityIdentifier("tab_dev")
+                    .transition(.dominoPop(index: 5))
                 }
                 // DEBUG only (never in the Release build that ships to users,
                 // where the Dev tab's absence is the access control): a Debug
@@ -5052,11 +5187,13 @@ struct ContentView: View {
                         .opacity(0.4)
                         .help("Keychain access to the Sparkle signing key / GitHub token was denied or is missing. Relaunch and choose Always Allow.")
                         .accessibilityIdentifier("tab_dev_locked")
+                        .transition(.dominoPop(index: 5))
                 }
                 #endif
                 #endif
             }
             .padding(.horizontal, 8)
+            }
 
             Spacer()
 
@@ -5065,12 +5202,24 @@ struct ContentView: View {
             // the bottom via the Spacer() above. The log toggle that
             // used to live here is gone -- Log is now its own full
             // sidebar tab (see nav items above) instead of a floating
-            // side panel triggered from this row.
-            ToolsStatusPill(manager: manager)
-                .padding(.horizontal, 6 + 10 * WindowLayout.sidebarExpansion(sidebarWidth))
-                .padding(.bottom, isTinyHeight ? 8 : 16)
+            // side panel triggered from this row. Last domino step (index 6);
+            // its own internal compact/expanded switch is unchanged (it
+            // already only renders once sidebarRowsHidden has gone back to
+            // false, so isCompactSidebar has already settled by then).
+            if !sidebarRowsHidden {
+                ToolsStatusPill(manager: manager)
+                    .padding(.horizontal, 6 + 10 * WindowLayout.sidebarExpansion(sidebarWidth))
+                    .padding(.bottom, isTinyHeight ? 8 : 16)
+                    .transition(.dominoPop(index: 6))
+            }
         }
+        // maxHeight: .infinity guards against the card collapsing to the lone
+        // Spacer's zero intrinsic height during the brief window where every
+        // row is hidden mid-domino (header/nav/tools all conditionally gone)
+        // -- keeps the card's HEIGHT stable throughout, so only its width
+        // ever visibly changes.
         .frame(width: sidebarWidth)
+        .frame(maxHeight: .infinity)
         // Real floating card -- identical material/radius/rim-stroke
         // recipe as every other GlassCard in the app (VisualEffectBlur +
         // black tint + grain + gradient rim stroke), not a bespoke
@@ -7531,9 +7680,16 @@ struct SelectorChip: View {
             .padding(.vertical, showNote ? 8 : 6)
             .background(
                 ZStack {
-                    // Black-frosted-glass base, matching GlassButton/GlassCard
-                    // so every chip in the app shares the same material.
-                    VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                    // Tinted base -- NOT its own VisualEffectBlur. Every chip
+                    // here sits directly on a parent glassCard (the card's
+                    // settings section), which already provides a live
+                    // backdrop blur; stacking a second, independent
+                    // NSVisualEffectView per chip (several per card: format +
+                    // quality + mode) multiplied the number of live blur
+                    // layers the compositor had to recompute on every resize
+                    // frame for a visual difference this opaque a tint (0.93)
+                    // made negligible. The parent's blur shows through this
+                    // tint exactly as before.
                     Color.black.opacity(DesignTokens.Glass.blackTint)
                     // One selected-state treatment everywhere: a soft tint
                     // wash, not a solid fill and not a plain outline-only

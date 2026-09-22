@@ -378,11 +378,15 @@ struct CompactModeChip: View {
             .padding(.horizontal, 9).padding(.vertical, 5)
             .background(
                 ZStack {
-                    // Glass base is always present; only the solid accent fill
-                    // comes and goes. Swapping the two with an if/else made
-                    // SwiftUI cross-fade a VisualEffectBlur layer, which flashed
-                    // the chip flat grey mid-change (see FocusEffect).
-                    VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                    // Tinted base is always present; only the solid accent fill
+                    // comes and goes (swapping via if/else made SwiftUI cross-
+                    // fade a VisualEffectBlur layer, which flashed the chip flat
+                    // grey mid-change -- see FocusEffect). NOT its own
+                    // VisualEffectBlur: this chip always sits on its parent
+                    // card's already-blurred glassCard background, so a second,
+                    // independent live backdrop blur per chip only multiplied
+                    // the compositor's per-resize-frame work for a visual
+                    // difference this opaque a tint (0.93) made negligible.
                     Color.black.opacity(DesignTokens.Glass.blackTint)
                     Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Interactive.fillRest)
                     if isSelected {

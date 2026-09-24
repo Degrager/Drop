@@ -124,28 +124,30 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
 
     private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.barStackBreakpoint }
 
+    /// Auto-open Folder as one compact chip: lit blue when on, plain when off.
+    /// (It used to be an icon, "AUTO-OPEN", "On"/"Off" and a switch -- about
+    /// 200pt for one setting.) The tooltip says what it does.
     private var autoOpenToggle: some View {
-        HStack(spacing: DropGrid.labelSpacing) {
-                            Image(systemName: "folder")
-                                .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                                .frame(width: 14, alignment: .center)
-                            // Short label always: the destination shares this row now,
-                            // and the toggle's own On/Off text says the rest.
-                            Text("AUTO-OPEN")
-                                .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                            Text(config.autoOpenFolder ? "On" : "Off")
-                                .font(.appMono(size: DropGrid.fieldFontSize))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                            Toggle("", isOn: $config.autoOpenFolder)
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .tint(DesignTokens.Accent.primary)
-                                .labelsHidden()
-                        }
-                        .fixedSize()
-                        .frame(height: DropGrid.controlHeight)
+        GlassInteractive(
+            shape: .capsule,
+            tint: config.autoOpenFolder ? DesignTokens.Accent.primary : .white,
+            isActive: config.autoOpenFolder,
+            action: { config.autoOpenFolder.toggle() }
+        ) {
+            HStack(spacing: 5) {
+                Image(systemName: "folder.badge.gearshape")
+                    .font(.appMono(size: 11, weight: .semibold))
+                Text("Auto-open")
+                    .font(.appMono(size: 10.5, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 11)
+            .frame(height: DropGrid.controlHeight)
+        }
+        .fixedSize()
+        .help(config.autoOpenFolder
+              ? "Auto-open is on: the save folder opens when a run finishes"
+              : "Auto-open is off: click to open the save folder when a run finishes")
     }
 
     var body: some View {
@@ -156,7 +158,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
             // window's edges with no margin -- previously this was the one
             // section that broke the app's card-based language.
             if hasItems {
-                VStack(spacing: compactHeight ? 8 : 12) {
+                VStack(spacing: compactHeight ? 8 : 10) {
 
                     // The grey inner card: everything that isn't the primary
                     // action. Convert's queue sits at the top (its slot is
@@ -211,7 +213,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                             }
                         }
                     }
-                    .padding(10)
+                    .padding(8)
                     .innerCard()
 
                     // Primary action button.
@@ -254,7 +256,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                                 .animation(.easeOut(duration: 0.2), value: label)
                             }
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, compactHeight ? 9 : 14)
+                            .padding(.vertical, compactHeight ? 8 : 11)
                             .background(
                                 RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
                                     .fill(enabled ?
@@ -301,8 +303,8 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                     }
 
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, compactHeight ? 10 : 16)
+                .padding(.horizontal, 12)
+                .padding(.vertical, compactHeight ? 8 : 12)
                 .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
                 .contentColumn()

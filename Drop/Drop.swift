@@ -2774,9 +2774,15 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
 /// .monospaced)` -- NOT `Font.custom("SF Mono", ...)`, which Apple does
 /// not expose a stable PostScript name for. This gives every existing
 /// `weight:` argument at each of the 133 call sites real effect again.
+/// One knob for the app's text size. Every monospaced font in the app goes
+/// through Font.appMono, so scaling it here scales the whole interface.
+enum Typography {
+    static let scale: CGFloat = 0.95
+}
+
 extension Font {
     static func appMono(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
+        .system(size: size * Typography.scale, weight: weight, design: .monospaced)
     }
 }
 
@@ -5573,8 +5579,8 @@ struct ContentView: View {
                 // 12pt spacing so this gap grows without also widening the
                 // toolbar-to-scroll-area gap beneath it. Tighter in a short
                 // window, where the card list needs every point.
-                .padding(.top, isCompactHeight ? 26 : 40)
-                .padding(.bottom, isCompactHeight ? 12 : 20)
+                .padding(.top, isCompactHeight ? 22 : 30)
+                .padding(.bottom, isCompactHeight ? 10 : 14)
 
             if isTinyHeight {
                 // Too short for pinned chrome AND a card list: everything under
@@ -5742,7 +5748,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private var mainPanelCardsContent: some View {
-                    LazyVStack(spacing: 12) {
+                    LazyVStack(spacing: 10) {
                         // Bundled tools missing banner — should only ever appear if the
                         // app bundle itself is corrupt/incomplete, since yt-dlp and
                         // ffmpeg ship inside Drop.app rather than being installed.
@@ -5776,8 +5782,8 @@ struct ContentView: View {
                     // NEAREST container -- and this VStack sits inside a
                     // ScrollView, which has its own.
                     .contentColumn()
-                    .padding(.top, 20)
-                    .padding(.bottom, 8)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
     }
 
     @ViewBuilder
@@ -5867,9 +5873,17 @@ struct ContentView: View {
                 // No SAVE TO label -- the folder itself says what it is.
                 HStack(spacing: DropGrid.rowSpacing) {
                     FieldCapsule {
-                        Image(systemName: "folder.fill")
-                            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                            .font(.appMono(size: DropGrid.fieldFontSize))
+                        FieldBrowseButton {
+                            let panel = NSOpenPanel()
+                            panel.canChooseFiles = false
+                            panel.canChooseDirectories = true
+                            panel.canCreateDirectories = true
+                            panel.allowsMultipleSelection = false
+                            panel.prompt = "Select"
+                            if panel.runModal() == .OK, let url = panel.url {
+                                config.outputDir = url.path
+                            }
+                        }
                         TextField("", text: $config.outputDir)
                             .textFieldStyle(.plain)
                             .font(.appMono(size: DropGrid.fieldFontSize))
@@ -5878,18 +5892,6 @@ struct ContentView: View {
                     }
                     .help("Save to this folder" + (totalEstimatedSizeLabel.map { " · est. \($0)" } ?? ""))
 
-                    GlassButton(label: "Browse", icon: "folder", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
-                        let panel = NSOpenPanel()
-                        panel.canChooseFiles = false
-                        panel.canChooseDirectories = true
-                        panel.canCreateDirectories = true
-                        panel.allowsMultipleSelection = false
-                        panel.prompt = "Select"
-                        if panel.runModal() == .OK, let url = panel.url {
-                            config.outputDir = url.path
-                        }
-                    }
-                    .frame(width: DropGrid.browseWidth, height: DropGrid.controlHeight)
                     // Always-available Reveal -- same control Convert's folder
                     // row has, opening the shared output directory in Finder
                     // any time, not tied to any single download.

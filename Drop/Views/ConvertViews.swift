@@ -1045,8 +1045,8 @@ struct ConvertView: View {
             // .padding(.top, 40)/.padding(.bottom, 20)/.padding(.horizontal, 16).
             dropZoneView
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
-                .padding(.top, compactHeight ? 26 : 40)
-                .padding(.bottom, compactHeight ? 12 : 20)
+                .padding(.top, compactHeight ? 22 : 30)
+                .padding(.bottom, compactHeight ? 10 : 14)
 
             // ── Analyze panel — fixed in place (never scrolls): exactly one
             // staged file at a time, switchable via the dropdown, so every
@@ -1202,7 +1202,7 @@ struct ConvertView: View {
         // filenames need room to grow past the trigger pill's width, but
         // still shouldn't be free to blow out to an arbitrary width for a
         // very long name.
-        .frame(maxWidth: switcherCardWidth > 0 ? switcherCardWidth * 0.65 : nil, alignment: .leading)
+        .frame(maxWidth: switcherCardWidth > 0 ? switcherCardWidth * 0.65 : nil, alignment: .trailing)
         .background(
             ZStack {
                 VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
@@ -1219,89 +1219,68 @@ struct ConvertView: View {
         .shadow(color: .black.opacity(0.6), radius: 24, y: 12)
     }
 
-    /// The one staged file currently being configured, plus a dropdown to
-    /// switch between every staged file and buttons to commit it (or all of
-    /// them) to the Convert Queue. Empty state when nothing's staged.
+    /// "2 of 3" -- where the file in Analyze sits among every staged file.
+    private var stagingPositionLabel: String {
+        guard let selectedStagingID,
+              let idx = stagingJobs.firstIndex(where: { $0.id == selectedStagingID }) else { return "" }
+        return "\(idx + 1) of \(stagingJobs.count)"
+    }
+
+    /// The list of staged files, as a capsule in the Analyze card's top-right
+    /// corner ("2 of 3" with a chevron). Its popup is an expanded version of the
+    /// same capsule acting as an .overlay, so it floats above everything without
+    /// shifting any surrounding layout, and is never a native macOS menu.
+    private var fileSwitcher: some View {
+        Button {
+            withAnimation(.spring(response: 0.25)) { isFileSwitcherOpen.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Text(stagingPositionLabel)
+                Image(systemName: isFileSwitcherOpen ? "chevron.up" : "chevron.down")
+                    .font(.appMono(size: 9, weight: .bold))
+            }
+            .font(.appMono(size: 11, weight: .semibold))
+            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background(Color.white.opacity(isFileSwitcherOpen ? 0.16 : 0.08))
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Choose which staged file to review")
+        .overlay(alignment: .topTrailing) {
+            if isFileSwitcherOpen {
+                ZStack(alignment: .topTrailing) {
+                    // Oversized, effectively-invisible tap catcher so clicking
+                    // anywhere else dismisses the popup -- sits behind it in this
+                    // same overlay group, never affecting layout.
+                    Color.black.opacity(0.001)
+                        .frame(width: 3000, height: 3000)
+                        .offset(x: 1200, y: -1200)
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.2)) { isFileSwitcherOpen = false }
+                        }
+                    fileSwitcherPopup
+                        .offset(y: 34)
+                }
+                .zIndex(20)
+                // Unfolds out of the capsule (top-trailing corner) with blur +
+                // scale only -- the popup is a glass surface, so no opacity
+                // (see FocusEffect).
+                .transition(.focus(blur: 10, scale: 0.9, anchor: .topTrailing))
+            }
+        }
+    }
+
+    /// The one staged file currently being configured, as a card (the file list
+    /// in its top-right corner when there is more than one), with the buttons that
+    /// commit it -- or all of them -- to the Convert Queue beneath. Empty state
+    /// when nothing's staged.
     @ViewBuilder
     private var analyzePanel: some View {
         if let job = selectedStagingJob {
-            VStack(alignment: .leading, spacing: 12) {
-                if !compactHeight {
-                Label("ANALYZE", systemImage: "slider.horizontal.3")
-                    .font(.appMono(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                }
-                // zIndex(99) here, not just on the popup's own local ZStack
-                // below -- this HStack is the EARLIER of two siblings in
-                // analyzePanel's VStack (ConvertPreviewCard, the full
-                // settings card, comes right after it), and a VStack paints
-                // later children on top of earlier ones by default. The
-                // popup is an .overlay attached deep inside this HStack, so
-                // without raising the HStack itself, ConvertPreviewCard's
-                // own opaque background was painting over the popup even
-                // though the popup's local zIndex(20) "won" against its own
-                // tap-catcher sibling -- that locality is exactly the bug:
-                // zIndex only orders siblings sharing the same parent, and
-                // the real occluding view lived one level up.
-                HStack(alignment: .center, spacing: 8) {
-                    // Pill-chip design (Capsule, accent-tinted fill + border,
-                    // matching the app's chip language elsewhere), and the
-                    // popup itself is fully custom -- an expanded version of
-                    // the same pill acting as an .overlay (so it floats above
-                    // everything without shifting any surrounding layout,
-                    // and never a native macOS menu).
-                    Button {
-                        withAnimation(.spring(response: 0.25)) { isFileSwitcherOpen.toggle() }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "doc.text")
-                                .font(.appMono(size: 10, weight: .semibold))
-                            Text(job.inputURL.deletingPathExtension().lastPathComponent)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Image(systemName: isFileSwitcherOpen ? "chevron.up" : "chevron.down")
-                                .font(.appMono(size: 9, weight: .bold))
-                        }
-                        .font(.appMono(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Color.white.opacity(isFileSwitcherOpen ? 0.16 : 0.08))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    .overlay(alignment: .topLeading) {
-                        if isFileSwitcherOpen {
-                            ZStack(alignment: .topLeading) {
-                                // Oversized, effectively-invisible tap catcher
-                                // so clicking anywhere else dismisses the
-                                // popup -- sits behind it in this same
-                                // overlay group, never affecting layout.
-                                Color.black.opacity(0.001)
-                                    .frame(width: 3000, height: 3000)
-                                    .offset(x: -1200, y: -1200)
-                                    .onTapGesture {
-                                        withAnimation(.spring(response: 0.2)) { isFileSwitcherOpen = false }
-                                    }
-                                fileSwitcherPopup
-                                    .offset(y: 40)
-                            }
-                            .zIndex(20)
-                            // Unfolds out of the trigger pill (top-leading corner)
-                            // with blur + scale only -- the popup is a glass
-                            // surface, so no opacity (see FocusEffect).
-                            .transition(.focus(blur: 10, scale: 0.9, anchor: .topLeading))
-                        }
-                    }
-                    if let stagingProgressLabel {
-                        Text(stagingProgressLabel)
-                            .font(.appMono(size: 11))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    }
-                    Spacer()
-                }
-                .zIndex(99)
+            VStack(alignment: .trailing, spacing: 8) {
                 // The settings card hugs its content when the window is tall
                 // enough for all of it, and scrolls inside the panel when it
                 // isn't -- this panel used to be "fixed in place (never
@@ -1312,19 +1291,17 @@ struct ConvertView: View {
                     job: job,
                     config: config,
                     onRemove: { removeFromStaging(job) },
-                    isQueueRow: false
+                    isQueueRow: false,
+                    headerAccessory: stagingJobs.count > 1 ? AnyView(fileSwitcher) : nil
                 )
                 ViewThatFits(in: .vertical) {
                     settingsCard
                     ScrollView(.vertical, showsIndicators: true) { settingsCard }
                         .frame(minHeight: compactHeight ? 110 : 130)
                 }
-                // Add to Queue / Add All to Queue -- moved to the bottom of
-                // the Analyze card (below the full settings card) rather
-                // than sitting up in the header row beside the file
-                // switcher, so committing a file to the queue reads as the
-                // final action after reviewing/adjusting its settings, not
-                // a header-row control competing with the switcher for space.
+                // Add to Queue / Add All to Queue -- below the card, so
+                // committing a file reads as the final action after reviewing
+                // its settings.
                 HStack(spacing: 8) {
                     Spacer()
                     if stagingJobs.count > 1 {
@@ -1337,12 +1314,6 @@ struct ConvertView: View {
                     }
                 }
             }
-            .padding(16)
-            // Outer container dimmed to 0.35 like queueDrawer/batchDirectoryField:
-            // the ConvertPreviewCard nested inside is itself a full-strength
-            // glassCard, and two stacked full-strength layers read as muddy.
-            .glassCard(cornerRadius: DesignTokens.Radius.xlarge, opacity: 0.35)
-            .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
             .background {
                 if isFileSwitcherOpen {
                     GeometryReader { geo in
@@ -1608,9 +1579,17 @@ struct ConvertView: View {
         // itself says what it is. Sits in the bottom bar's grey inner card.
         HStack(spacing: DropGrid.rowSpacing) {
             FieldCapsule {
-                Image(systemName: "folder.fill")
-                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                    .font(.appMono(size: DropGrid.fieldFontSize))
+                FieldBrowseButton {
+                    let panel = NSOpenPanel()
+                    panel.canChooseFiles = false
+                    panel.canChooseDirectories = true
+                    panel.canCreateDirectories = true
+                    panel.allowsMultipleSelection = false
+                    panel.prompt = "Select"
+                    if panel.runModal() == .OK, let url = panel.url {
+                        config.convertOutputDir = url.path
+                    }
+                }
                 Text(config.convertOutputDir)
                     .font(.appMono(size: DropGrid.fieldFontSize))
                     .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
@@ -1621,18 +1600,6 @@ struct ConvertView: View {
             }
             .help("Convert to this folder" + (totalEstimatedSizeLabel.map { " · est. \($0)" } ?? ""))
 
-            GlassButton(label: "Browse", icon: "folder", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
-                let panel = NSOpenPanel()
-                panel.canChooseFiles = false
-                panel.canChooseDirectories = true
-                panel.canCreateDirectories = true
-                panel.allowsMultipleSelection = false
-                panel.prompt = "Select"
-                if panel.runModal() == .OK, let url = panel.url {
-                    config.convertOutputDir = url.path
-                }
-            }
-            .frame(width: DropGrid.browseWidth, height: DropGrid.controlHeight)
             // Always-available Reveal -- replaces the per-row "Reveal in
             // Finder" button a completed job used to have. This one isn't tied
             // to any single job: it just opens the shared destination, usable
@@ -2019,11 +1986,11 @@ private struct QueueRowView: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .center, spacing: 6) {
             Text("\(position)")
                 .font(.appMono(size: 11, weight: .bold))
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                .frame(width: 18, alignment: .center)
+                .frame(width: 14, alignment: .center)
             ConvertPreviewCard(
                 job: job,
                 config: config,
@@ -2071,6 +2038,9 @@ struct ConvertPreviewCard: View {
     /// queueRow) since the actual move state lives there, not here -- this
     /// view just places whatever's given next to the checkbox.
     var leadingAccessory: AnyView? = nil
+    /// A control for the settings card's top-right corner, beside Remove (the
+    /// Analyze panel's list of staged files).
+    var headerAccessory: AnyView? = nil
 
     var body: some View {
         if isQueueRow {
@@ -2226,7 +2196,8 @@ struct ConvertPreviewCard: View {
             thumbnailPlaceholder: job.isVideoFile ? "video" : "waveform",
             title: job.inputURL.deletingPathExtension().lastPathComponent,
             secondaryTitle: job.inputURL.path,
-            subtitle: subtitleView // IN / OUT lines
+            subtitle: subtitleView, // IN / OUT lines
+            headerAccessory: headerAccessory
         ) {
             // Four labelled rows, top to bottom: CONVERT AS -> VIDEO CODEC ->
             // AUDIO CODEC -> OUTPUT FORMAT. The output folder lives in the
@@ -2360,7 +2331,72 @@ struct ConvertPreviewCard: View {
     /// become," since the full input->output comparison (outputLayer) is
     /// still there in Analyze where settings are actually being decided.
     private var queueRowSubtitle: AnyView {
-        AnyView(MetaLine(chips: job.outputChips))
+        AnyView(
+            VStack(alignment: .leading, spacing: 3) {
+                // The same IN / OUT lines as the Analyze card, so a row reads like
+                // the card it came from.
+                MetaLines(input: job.inputChips, output: job.outputChips)
+                if job.status == .failed {
+                    Text(job.progress)
+                        .font(.appMono(size: 10))
+                        .foregroundColor(.red.opacity(0.75))
+                        .lineLimit(2)
+                }
+            }
+        )
+    }
+
+    /// The row's status, in line with everything else: "Converting" with the
+    /// percentage and a slim progress bar beneath while it runs, otherwise a
+    /// glyph and a word.
+    private var queueInlineStatus: AnyView {
+        AnyView(
+            VStack(alignment: .trailing, spacing: 5) {
+                HStack(spacing: 5) {
+                    switch job.status {
+                    case .done:
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                    case .failed:
+                        Image(systemName: "xmark.circle.fill").foregroundColor(.red)
+                    case .cancelled:
+                        Image(systemName: "slash.circle.fill").foregroundColor(.orange)
+                    case .converting:
+                        Image(systemName: "arrow.triangle.2.circlepath").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                    case .queued:
+                        Image(systemName: "clock").foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                    }
+                    Text(job.status == .converting && !job.etaText.isEmpty ? job.etaText : statusLabel)
+                        .foregroundColor(job.status == .queued ? .white.opacity(DesignTokens.Text.tertiary) : statusColor)
+                        .lineLimit(1)
+                }
+                .font(.appMono(size: 10, weight: .semibold))
+                if job.status == .converting {
+                    inlineProgressBar
+                }
+            }
+            .frame(width: 128, alignment: .trailing)
+        )
+    }
+
+    /// Filled and animated when a fraction is known, an indeterminate shimmer
+    /// otherwise -- the same bar as Download's, just slim.
+    private var inlineProgressBar: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(DesignTokens.Interactive.fillRest)).frame(height: 4)
+                if let pct = job.progressFraction, pct > 0 {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(LinearGradient(colors: [Color.green.opacity(0.6), Color.green.opacity(1.0)],
+                                             startPoint: .leading, endPoint: .trailing))
+                        .frame(width: geo.size.width * CGFloat(pct), height: 4)
+                        .shadow(color: Color.green.opacity(0.6), radius: 4)
+                        .animation(.easeOut(duration: 0.25), value: pct)
+                } else {
+                    ShimmerBar(width: geo.size.width, color: .green, glow: true, duration: 1.2)
+                }
+            }
+        }
+        .frame(height: 4)
     }
 
     /// Edit control -- pulls this job back to the Analyze panel for
@@ -2393,14 +2429,17 @@ struct ConvertPreviewCard: View {
                 onSelectionChange()
             },
             onRemove: onRemove,
-            showCheckbox: isQueueRow,
+            // No checkboxes: every row in the queue is included the next time
+            // Convert is pressed (isSelected stays true).
+            showCheckbox: false,
             leadingAccessory: leadingAccessory,
             trailingAccessory: editAccessory,
             thumbnail: thumbView,
             thumbnailPlaceholder: job.isVideoFile ? "video" : "waveform",
             title: job.inputURL.deletingPathExtension().lastPathComponent,
             subtitle: isQueueRow ? queueRowSubtitle : outputLayer,
-            hasStatusContent: hasCompletedCardStatusContent,
+            inlineStatus: isQueueRow ? queueInlineStatus : nil,
+            hasStatusContent: isQueueRow ? false : hasCompletedCardStatusContent,
             compact: isQueueRow,
             // Queue rows sit inside the bottom bar's grey card, told apart by
             // the hairlines the drawer draws between them.

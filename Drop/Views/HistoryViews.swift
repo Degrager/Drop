@@ -142,8 +142,8 @@ struct HistoryView: View {
     var body: some View {
         VStack(spacing: 12) {
             searchHeader
-                .padding(.top, compactHeight ? 26 : 40)
-                .padding(.bottom, compactHeight ? 12 : 20)
+                .padding(.top, compactHeight ? 22 : 30)
+                .padding(.bottom, compactHeight ? 10 : 14)
 
             if filtered.isEmpty {
                 EmptyStateView(
@@ -152,7 +152,7 @@ struct HistoryView: View {
                 )
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 8, pinnedViews: [.sectionHeaders]) {
+                    LazyVStack(spacing: 6, pinnedViews: [.sectionHeaders]) {
                         ForEach(grouped, id: \.label) { group in
                             Section {
                                 ForEach(group.entries) { entry in
@@ -374,7 +374,7 @@ struct HistoryRow: View {
                 }
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .padding(.horizontal, 12).padding(.vertical, 8)
         // Same black-frosted glass material every other card in the app
         // uses (was previously flat white-on-black with no blur -- a gap
         // versus the rest of the design language). Mirrors GlassCard's

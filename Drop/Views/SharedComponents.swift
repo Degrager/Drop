@@ -113,6 +113,25 @@ extension EnvironmentValues {
     }
 }
 
+/// Keeps its one child mounted (so its state survives) but only lays it out
+/// while `isActive`. Inactive, it reports zero size and gives the child a fixed
+/// zero proposal, which SwiftUI memoizes -- so a hidden-but-mounted view costs
+/// nothing on each window-resize tick.
+struct ActiveOnlyLayout: Layout {
+    var isActive: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard isActive, let child = subviews.first else { return .zero }
+        return child.sizeThatFits(proposal)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        child.place(at: bounds.origin, anchor: .topLeading,
+                    proposal: isActive ? ProposedViewSize(width: bounds.width, height: bounds.height) : .zero)
+    }
+}
+
 /// Gives its one child exactly `width` when there's room, but never REPORTS
 /// `width` as a minimum: it reports whatever it's proposed, capped at `width`.
 /// A plain `.frame(width:)` reports `width` as a hard minimum, and since the
@@ -120,17 +139,41 @@ extension EnvironmentValues {
 /// own minimum size was propped up by the size it had a moment ago -- a drag
 /// (or programmatic resize) toward the real minimum stalled well above it and
 /// only crept down a step at a time.
+///
+/// SwiftUI asks a layout for its size several times per pass with the same
+/// proposal, and each answer walks the whole child subtree, so the child's
+/// answers are cached per proposal for the length of one pass (SwiftUI drops
+/// the cache whenever the layout's inputs change).
 private struct ContentColumnLayout: Layout {
     var width: CGFloat
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    struct Cache {
+        var fitted: [Proposal: CGSize] = [:]
+    }
+
+    struct Proposal: Hashable {
+        var width: CGFloat?
+        var height: CGFloat?
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    private func childSize(_ proposal: ProposedViewSize, _ child: LayoutSubview, _ cache: inout Cache) -> CGSize {
+        let key = Proposal(width: proposal.width, height: proposal.height)
+        if let hit = cache.fitted[key] { return hit }
+        let size = child.sizeThatFits(proposal)
+        cache.fitted[key] = size
+        return size
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         guard let child = subviews.first else { return .zero }
         let w = min(width, proposal.width ?? width)
-        let size = child.sizeThatFits(ProposedViewSize(width: w, height: proposal.height))
+        let size = childSize(ProposedViewSize(width: w, height: proposal.height), child, &cache)
         return CGSize(width: w, height: size.height)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         guard let child = subviews.first else { return }
         let w = min(width, bounds.width)
         child.place(at: CGPoint(x: bounds.midX, y: bounds.minY), anchor: .top,

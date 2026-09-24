@@ -60,15 +60,13 @@ enum WindowLayout {
     /// The narrowest a card (and the paste bar, list header and bottom bar,
     /// which share its width) is ever allowed to get.
     static let minColumnWidth: CGFloat = 380
-    static let maxColumnWidth: CGFloat = 1100
-    /// Side padding never drops below this, however small the window gets.
-    static let minSidePadding: CGFloat = 8
-    /// At or above this main-area width the column is the roomy 60%; at or
-    /// below tightMainWidth it fills the area minus minSidePadding; in between
-    /// the share grows steadily -- so the side padding shrinks as the window
-    /// does, rather than staying a fixed multiple of a shrinking window.
-    static let comfortableMainWidth: CGFloat = 1500
-    static let tightMainWidth: CGFloat = 480
+    /// The widest the column grows: past this, extra window width becomes margin.
+    static let maxColumnWidth: CGFloat = 1300
+    /// The margin between the column and each edge of the main area (the space
+    /// between the sidebar and the window's right edge). The column fills the
+    /// area minus this, at every window width, so the cards run nearly edge to
+    /// edge instead of sitting in a narrow centered strip.
+    static let sidePadding: CGFloat = 12
     /// Below this, side-by-side input -> output chip rows no longer fit
     /// without truncating, so they stack instead.
     static let stackedChipsBreakpoint: CGFloat = 700
@@ -102,15 +100,13 @@ enum WindowLayout {
         return columnBreakpoints.filter { $0 <= width }.max() ?? ((columnBreakpoints.min() ?? 1) - 1)
     }
 
-    /// Width of the content column for a given main-area width. 0 means "not
+    /// Width of the content column for a given main-area width: the whole area
+    /// minus a small gutter each side, up to maxColumnWidth. 0 means "not
     /// measured yet".
     static func columnWidth(mainWidth: CGFloat) -> CGFloat {
         guard mainWidth > 0 else { return 0 }
-        let fillShare = 1 - 2 * minSidePadding / mainWidth
-        let t = min(max((comfortableMainWidth - mainWidth) / (comfortableMainWidth - tightMainWidth), 0), 1)
-        let share = 0.60 + (fillShare - 0.60) * t
-        let widest = max(mainWidth - 2 * minSidePadding, 0)
-        return min(max(mainWidth * share, minColumnWidth), widest, maxColumnWidth)
+        let widest = max(mainWidth - 2 * sidePadding, 0)
+        return min(max(widest, minColumnWidth), widest, maxColumnWidth)
     }
 }
 
@@ -341,8 +337,8 @@ struct LogView: View {
     var body: some View {
         VStack(spacing: 12) {
             logHeader
-                .padding(.top, compactHeight ? 26 : 40)
-                .padding(.bottom, compactHeight ? 12 : 20)
+                .padding(.top, compactHeight ? 22 : 30)
+                .padding(.bottom, compactHeight ? 10 : 14)
 
             if logs.isEmpty {
                 EmptyStateView(icon: "terminal", title: "No log output yet")
@@ -376,9 +372,7 @@ struct LogView: View {
 }
 
 /// One log line, split into a quiet timestamp column, a status symbol and the
-/// message. Errors and warnings wrap in full so nothing is hidden; everything
-/// else stays on one line (middle-truncated -- the full text is the tooltip and
-/// what Copy/Export write out).
+/// message. Long messages wrap onto further lines.
 private struct LogRow: View {
     let line: String
     let color: Color
@@ -414,7 +408,6 @@ private struct LogRow: View {
     }
 
     var body: some View {
-        let wraps = isError || isWarning
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(parts.time)
                 .font(.appMono(size: 10, design: .monospaced))
@@ -429,8 +422,9 @@ private struct LogRow: View {
                 .font(.appMono(size: 11, design: .monospaced))
                 .foregroundColor(color)
                 .textSelection(.enabled)
-                .lineLimit(wraps ? nil : 1)
-                .truncationMode(.middle)
+                // Every line wraps in full -- long paths and error output are
+                // exactly what people come to the log to read.
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
@@ -677,29 +671,37 @@ struct MetaLines: View {
         }
     }
 
+    /// The aligned grid. `withTime` false leaves out the length / size column, so
+    /// a narrower place (a Convert queue row) still gets the same two lines of
+    /// video and audio before anything has to wrap.
+    private func grid(withTime: Bool) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
+            if !input.isEmpty {
+                GridRow {
+                    tag("IN", out: false)
+                    if withTime { cell(input, .time) }
+                    cell(input, .video)
+                    cell(input, .audio)
+                }
+            }
+            if !output.isEmpty {
+                GridRow {
+                    tag("OUT", out: true)
+                    if withTime { cell(output, .time) }
+                    cell(output, .video)
+                    cell(output, .audio)
+                }
+            }
+        }
+    }
+
     var body: some View {
         if input.isEmpty && output.isEmpty {
             EmptyView()
         } else {
             ViewThatFits(in: .horizontal) {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
-                    if !input.isEmpty {
-                        GridRow {
-                            tag("IN", out: false)
-                            cell(input, .time)
-                            cell(input, .video)
-                            cell(input, .audio)
-                        }
-                    }
-                    if !output.isEmpty {
-                        GridRow {
-                            tag("OUT", out: true)
-                            cell(output, .time)
-                            cell(output, .video)
-                            cell(output, .audio)
-                        }
-                    }
-                }
+                grid(withTime: true)
+                grid(withTime: false)
                 VStack(alignment: .leading, spacing: 3) {
                     if !input.isEmpty { wrapped(input, "IN", out: false) }
                     if !output.isEmpty { wrapped(output, "OUT", out: true) }
@@ -920,15 +922,36 @@ struct FieldCapsule<Content: View>: View {
     }
 }
 
-/// The estimated total size, at the trailing end of a folder capsule. Shown only
-/// when the bar is wide enough for it not to squeeze the folder path (the
-/// capsule's tooltip carries it otherwise).
-struct FolderSizeLabel: View {
-    let label: String?
-    @Environment(\.contentColumnWidth) private var columnWidth
+/// The folder capsule's leading icon, doubling as the Browse button: a tinted
+/// folder in a soft circle that lights up under the pointer.
+struct FieldBrowseButton: View {
+    var help: String = "Browse…"
+    let action: () -> Void
+    @State private var hovering = false
 
     var body: some View {
-        if let label, columnWidth >= WindowLayout.barLabelBreakpoint {
+        Button(action: action) {
+            Image(systemName: "folder.fill")
+                .font(.appMono(size: DropGrid.fieldFontSize))
+                .foregroundColor(hovering ? DesignTokens.Accent.primaryLight : DesignTokens.Accent.primary)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(DesignTokens.Accent.primary.opacity(hovering ? 0.22 : 0.12)))
+                .overlay(Circle().stroke(DesignTokens.Accent.primary.opacity(hovering ? 0.6 : 0.3), lineWidth: 0.75))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .help(help)
+    }
+}
+
+/// The estimated total size, at the trailing end of a folder capsule (it also
+/// rides along in the capsule's tooltip).
+struct FolderSizeLabel: View {
+    let label: String?
+
+    var body: some View {
+        if let label {
             HStack(spacing: 4) {
                 Image(systemName: "internaldrive")
                     .font(.appMono(size: 9))

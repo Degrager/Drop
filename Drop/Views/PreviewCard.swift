@@ -52,6 +52,9 @@ struct PreviewCard<Settings: View>: View {
     /// The link or file path, shown dim on the same line as the title.
     var secondaryTitle: String = ""
     var subtitle: AnyView?          // the IN / OUT metadata lines
+    /// A control for the header's trailing edge, beside the collapse and remove
+    /// buttons (Convert's list of staged files).
+    var headerAccessory: AnyView? = nil
 
     /// Extra always-visible row rendered below the header but OUTSIDE
     /// cardHeader's own HStack -- e.g. Download's Video+Audio/Audio Only
@@ -130,8 +133,11 @@ struct PreviewCard<Settings: View>: View {
     // MARK: Full card
 
     private var fullCard: some View {
-        VStack(alignment: .leading, spacing: 11) {
+        VStack(alignment: .leading, spacing: 9) {
             cardHeader
+                // Above the settings below it, so the header's own popups (the
+                // Convert file switcher) aren't painted over.
+                .zIndex(1)
             if !isAnalyzing {
                 if let belowHeader {
                     belowHeader.transition(.blurInTop)
@@ -146,7 +152,7 @@ struct PreviewCard<Settings: View>: View {
         // CONTENT only. Opacity on the card itself would dilute the glass tint
         // and turn the surface into a flat grey slab (see FocusEffect).
         .opacity((showCheckbox && !isSelected) ? 0.6 : 1.0)
-        .padding(.horizontal, 14).padding(.vertical, 12)
+        .padding(.horizontal, 12).padding(.vertical, 10)
         // Match the 60%-of-window proportional width every other row in
         // the queue (list header, bottom bar) explicitly stretches to --
         // without this the card just hugs its own content and reads
@@ -286,7 +292,7 @@ struct PreviewCard<Settings: View>: View {
                             }
                     }
                     Text(title.isEmpty ? "Fetching title metadata" : title)
-                        .font(.system(size: isAnalyzing ? 12 : 13, weight: isAnalyzing ? .medium : .semibold))
+                        .font(.system(size: isAnalyzing ? 11.5 : 12.5, weight: isAnalyzing ? .medium : .semibold))
                         .foregroundColor(.white.opacity(
                             !canRevealAnalyzed ? 0 :
                             (isAnalyzing ? DesignTokens.Text.secondary :
@@ -303,7 +309,7 @@ struct PreviewCard<Settings: View>: View {
                         // the resolved title will actually render at.
                         .background(
                             Text(title.isEmpty ? "Fetching title metadata" : title)
-                                .font(.system(size: isAnalyzing ? 12 : 13, weight: isAnalyzing ? .medium : .semibold))
+                                .font(.system(size: isAnalyzing ? 11.5 : 12.5, weight: isAnalyzing ? .medium : .semibold))
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
                                 .hidden()
@@ -351,6 +357,7 @@ struct PreviewCard<Settings: View>: View {
                 // Spinner → X on hover, exactly like AnalyzingCard.
                 SkeletonCancelButton(action: onCancelAnalyze)
             } else {
+                if let headerAccessory { headerAccessory }
                 if collapseButtonInHeader, let isExpanded, !collapseLocked {
                     HoverIconButton(
                         icon: isExpanded.wrappedValue ? "chevron.up" : "chevron.down", size: 12,
@@ -503,6 +510,10 @@ struct CompletedCard<Status: View>: View {
     /// The link or file path, shown dim on the title's line.
     var secondaryTitle: String = ""
     var subtitle: AnyView?
+    /// Status shown in the header itself, between the text and the buttons (the
+    /// Convert queue's "Converting 64%" with its progress bar), instead of in a
+    /// section below a divider.
+    var inlineStatus: AnyView? = nil
     /// False hides the divider + status() section entirely -- for rows
     /// where that section would otherwise render as an empty divider with
     /// nothing beneath it (e.g. a freshly-queued Convert job with no
@@ -523,7 +534,7 @@ struct CompletedCard<Status: View>: View {
     @ViewBuilder var status: () -> Status
 
     private var rowContent: some View {
-        VStack(alignment: .leading, spacing: compact ? 10 : 12) {
+        VStack(alignment: .leading, spacing: compact ? 8 : 10) {
             cardHeader
             if hasStatusContent {
                 GlassDivider()
@@ -532,7 +543,7 @@ struct CompletedCard<Status: View>: View {
         }
         // Content-only dim -- see PreviewCard.fullCard.
         .opacity((showCheckbox && !isSelected) ? 0.6 : 1.0)
-        .padding(flat ? 6 : (compact ? 10 : 14))
+        .padding(flat ? 4 : (compact ? 8 : 12))
         // Same proportional-width fix as PreviewCard.fullCard above.
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -602,7 +613,7 @@ struct CompletedCard<Status: View>: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(title)
-                        .font(.system(size: compact ? 12 : 13, weight: .semibold))
+                        .font(.system(size: compact ? 11.5 : 12.5, weight: .semibold))
                         .foregroundColor(.white.opacity((showCheckbox && !isSelected) ? DesignTokens.Text.disabled : DesignTokens.Text.primary))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -619,6 +630,8 @@ struct CompletedCard<Status: View>: View {
             }
 
             Spacer()
+
+            if let inlineStatus { inlineStatus }
 
             // Destructive action -- same red treatment as PreviewCard's
             // remove control, so "this deletes the item" reads identically

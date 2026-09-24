@@ -22,6 +22,16 @@ enum WindowLayout {
 
     static let sidebarWidth: CGFloat = 240
     static let compactSidebarWidth: CGFloat = 72
+    /// The row content sits 12pt in from the card edge (8 of stack padding + 4
+    /// of row padding) everywhere in the rail, so rows and pills share edges.
+    static let railContentInset: CGFloat = 12
+    /// Width of the box every rail icon (tab, tool status, update button) sits
+    /// in, and how far in from the row's leading edge that box starts. Chosen
+    /// so the icon is centered in the COLLAPSED rail: because the same values
+    /// are used open and closed, the icon never moves as the sidebar resizes --
+    /// the text beside it is what appears and disappears.
+    static let railIconSlot: CGFloat = 18
+    static let railIconInset: CGFloat = (compactSidebarWidth - 2 * railContentInset - railIconSlot) / 2
     /// 0 = fully collapsed, 1 = fully expanded, for an in-flight sidebar width.
     static func sidebarExpansion(_ width: CGFloat) -> CGFloat {
         min(max((width - compactSidebarWidth) / (sidebarWidth - compactSidebarWidth), 0), 1)
@@ -65,6 +75,29 @@ enum WindowLayout {
     /// without the folder path being cut off, so they stack.
     static let barStackBreakpoint: CGFloat = 610
 
+    /// Below this the bottom bar's "AUTO-OPEN FOLDER" label shortens to "AUTO-OPEN".
+    static let barLabelBreakpoint: CGFloat = 720
+
+    /// Every width that any view compares the content column against. Keep in
+    /// step with those comparisons: columnClass(mainWidth:) is only exact for
+    /// thresholds listed here.
+    static let columnBreakpoints: [CGFloat] = [
+        narrowColumnBreakpoint, barStackBreakpoint, barLabelBreakpoint, stackedChipsBreakpoint
+    ]
+
+    /// The column width reduced to which side of each breakpoint it falls on:
+    /// the largest breakpoint at or below it (or one under the smallest).
+    /// `class < T` gives the same answer as `columnWidth < T` for every T in
+    /// columnBreakpoints, but the value only changes when a breakpoint is
+    /// crossed -- so publishing it to the environment costs nothing on the
+    /// dozens of resize ticks in between, while the column's ACTUAL width
+    /// (ContentColumnLayout) follows the window live. 0 means "not measured".
+    static func columnClass(mainWidth: CGFloat) -> CGFloat {
+        let width = columnWidth(mainWidth: mainWidth)
+        guard width > 0 else { return 0 }
+        return columnBreakpoints.filter { $0 <= width }.max() ?? ((columnBreakpoints.min() ?? 1) - 1)
+    }
+
     /// Width of the content column for a given main-area width. 0 means "not
     /// measured yet".
     static func columnWidth(mainWidth: CGFloat) -> CGFloat {
@@ -84,8 +117,11 @@ private struct CompactHeightKey: EnvironmentKey { static let defaultValue = fals
 private struct TinyHeightKey: EnvironmentKey { static let defaultValue = false }
 
 extension EnvironmentValues {
-    /// Width of the centered content column (see WindowLayout.columnWidth);
-    /// 0 until ContentView has measured the main area.
+    /// The content column's width reduced to which side of each breakpoint it
+    /// is on (see WindowLayout.columnClass) -- for `columnWidth < breakpoint`
+    /// decisions only, NOT its real width, which ContentColumnLayout works
+    /// out live from the space it is offered. 0 until ContentView has
+    /// measured the main area.
     var contentColumnWidth: CGFloat {
         get { self[ContentColumnWidthKey.self] }
         set { self[ContentColumnWidthKey.self] = newValue }
@@ -132,21 +168,24 @@ struct ActiveOnlyLayout: Layout {
     }
 }
 
-/// Gives its one child exactly `width` when there's room, but never REPORTS
-/// `width` as a minimum: it reports whatever it's proposed, capped at `width`.
-/// A plain `.frame(width:)` reports `width` as a hard minimum, and since the
-/// column width is derived from the last settled window width, the window's
-/// own minimum size was propped up by the size it had a moment ago -- a drag
-/// (or programmatic resize) toward the real minimum stalled well above it and
-/// only crept down a step at a time.
+/// Lays its one child out as the shared content column: as wide as
+/// WindowLayout.columnWidth says for the space it is OFFERED -- the area
+/// between the sidebar and the window's right edge -- and never wider than
+/// that space, so a card can't slide under the sidebar.
+///
+/// Working the width out here, from the live proposal, is what makes cards,
+/// the paste bar and the bottom bar follow a window drag frame by frame with no
+/// state in between: nothing has to be measured, stored and re-published, so
+/// there's no stale value to catch up (or ease) to once the mouse is released.
+/// It also reports the offered width as its minimum, not some remembered size,
+/// so a plain `.frame(width:)`'s stale minimum can't stall a drag toward the
+/// window's real minimum size.
 ///
 /// SwiftUI asks a layout for its size several times per pass with the same
 /// proposal, and each answer walks the whole child subtree, so the child's
 /// answers are cached per proposal for the length of one pass (SwiftUI drops
 /// the cache whenever the layout's inputs change).
 private struct ContentColumnLayout: Layout {
-    var width: CGFloat
-
     struct Cache {
         var fitted: [Proposal: CGSize] = [:]
     }
@@ -166,33 +205,35 @@ private struct ContentColumnLayout: Layout {
         return size
     }
 
+    /// nil means an "ideal size" query (nothing to be a share of): the narrowest
+    /// column. 0 is the window's minimum-size query: no width at all.
+    private func columnWidth(offered: CGFloat?) -> CGFloat {
+        guard let offered else { return WindowLayout.minColumnWidth }
+        guard offered > 0 else { return 0 }
+        return min(WindowLayout.columnWidth(mainWidth: offered), offered)
+    }
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         guard let child = subviews.first else { return .zero }
-        let w = min(width, proposal.width ?? width)
+        let w = columnWidth(offered: proposal.width)
         let size = childSize(ProposedViewSize(width: w, height: proposal.height), child, &cache)
         return CGSize(width: w, height: size.height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         guard let child = subviews.first else { return }
-        let w = min(width, bounds.width)
+        // bounds.width is the width sizeThatFits reported, i.e. already the column.
         child.place(at: CGPoint(x: bounds.midX, y: bounds.minY), anchor: .top,
-                    proposal: ProposedViewSize(width: w, height: bounds.height))
+                    proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
     }
 }
 
 extension View {
-    /// Fixes a view to the shared content column, centered in its container.
-    /// The column already leaves the side padding, so callers add none of
-    /// their own. Until the width is measured it falls back to the minimum
-    /// side padding.
-    @ViewBuilder
-    func contentColumn(_ width: CGFloat) -> some View {
-        if width > 0 {
-            ContentColumnLayout(width: width) { self }.frame(maxWidth: .infinity)
-        } else {
-            self.padding(.horizontal, WindowLayout.minSidePadding)
-        }
+    /// Lays a view out as the shared content column, centered in its
+    /// container. The column already leaves the side padding, so callers add
+    /// none of their own.
+    func contentColumn() -> some View {
+        ContentColumnLayout { self }.frame(maxWidth: .infinity)
     }
 }
 
@@ -365,10 +406,8 @@ struct SidebarTabItem: View {
     // Only the selected tab should carry the accent color; unselected
     // tabs get a plain white/grey rim instead.
     private static let neutral = Color.white
-    private static let iconSlot: CGFloat = 18
-    /// Leading inset that centers the icon slot in the COLLAPSED pill
-    /// (compactSidebarWidth - the 24pt of side room the pill leaves).
-    private static let iconInset: CGFloat = (WindowLayout.compactSidebarWidth - 24 - iconSlot) / 2
+    private static let iconSlot = WindowLayout.railIconSlot
+    private static let iconInset = WindowLayout.railIconInset
 
     var body: some View {
         GlassInteractive(

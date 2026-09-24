@@ -3997,16 +3997,72 @@ struct ToolsStatusPill: View {
     var rowsHidden: Bool = false
 
     var body: some View {
-        ToolsDropdownContent(manager: manager, dropDriver: manager.dropUpdater.userDriver, embedded: true, baseIndex: baseIndex, rowsHidden: rowsHidden)
+        ToolsDropdownContent(manager: manager, dropDriver: manager.dropUpdater.userDriver, baseIndex: baseIndex, rowsHidden: rowsHidden)
     }
 }
 
-/// Contents of the Tools dropdown -- one row per bundled tool (yt-dlp,
-/// ffmpeg) showing version + update button. Presented via a `.popover()`
-/// on `ToolsStatusPill` with `.presentationBackground(.clear)`, so AppKit's
-/// own translucent chrome is suppressed and the `.glassCard()` background
-/// applied below is the only thing that shows -- same black-frosted-glass
-/// material as every other card in the app, not a stock system popover.
+/// One row of the sidebar's update block -- the SAME view whether the rail is
+/// collapsed or open. The status glyph sits on the rail exactly where the tab
+/// icons do (WindowLayout.railIconInset), and the tool's name and version chip
+/// are revealed beside it as the sidebar widens, the way a tab's label is.
+/// Nothing is swapped for a separate collapsed version, so widening the sidebar
+/// never cross-fades one layout into another; the row just gets wider.
+struct SidebarToolRow: View {
+    let name: String
+    let installed: Bool
+    let updateAvailable: Bool
+    /// Raw version string, for the collapsed tooltip.
+    let version: String
+    let versionChip: AnyView
+    @Environment(\.isCompactSidebar) private var compact
+
+    private var iconName: String {
+        if !installed { return "exclamationmark.circle.fill" }
+        if updateAvailable { return "exclamationmark.triangle.fill" }
+        return "checkmark.circle.fill"
+    }
+    private var iconColor: Color {
+        if !installed { return .orange.opacity(0.85) }
+        if updateAvailable { return .yellow.opacity(0.9) }
+        return .green.opacity(0.85)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: iconName)
+                .font(.appMono(size: 12))
+                .foregroundColor(iconColor)
+                .frame(width: WindowLayout.railIconSlot)
+            if !compact {
+                Text(name)
+                    .font(.appMono(size: 11.5, weight: .medium))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .transition(.blurInLeading)
+                Spacer(minLength: 8)
+                versionChip
+                    .transition(.blurInLeading)
+            }
+        }
+        .padding(.leading, WindowLayout.railIconInset)
+        .padding(.trailing, 6)
+        .padding(.vertical, 8)
+        // The open row is as tall as its version chip (22pt) plus padding; the
+        // collapsed row has no chip. Holding the collapsed row to the same
+        // height means the block doesn't move up and down as the sidebar
+        // opens and closes.
+        .frame(maxWidth: .infinity, minHeight: 22 + 16, alignment: .leading)
+        .clipped()
+        .help(compact ? (version.isEmpty ? name : "\(name) \(version)") : "")
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The sidebar's update block: a status row per bundled tool (yt-dlp, ffmpeg,
+/// Drop itself) and the single button that checks all of them. Built once for
+/// every sidebar width -- see SidebarToolRow -- and pinned to the bottom of the
+/// rail by the Spacer() above it in `sidebar`.
 struct ToolsDropdownContent: View {
     @ObservedObject var manager: DownloadManager
     // manager.dropUpdater.userDriver is a *nested* ObservableObject --
@@ -4017,14 +4073,8 @@ struct ToolsDropdownContent: View {
     // justConfirmedUpToDate change from the driver. Observing it directly
     // here is what makes those changes reliably reactive.
     @ObservedObject var dropDriver: DropCustomUserDriver
-    // When true (inline-in-sidebar usage) the standalone glassCard
-    // background/frame is skipped since the sidebar itself already
-    // supplies that same black-frosted-glass surface -- this content is
-    // now a section within the rail's own card, not a floating popover
-    // with its own card.
-    var embedded: Bool = false
-    /// First domino index this block's own rows should use when embedded in
-    /// the sidebar -- see AnyTransition.dominoPop and ToolsStatusPill.
+    /// First domino index this block's own rows should use -- see
+    /// AnyTransition.dominoPop and ToolsStatusPill.
     var baseIndex: Int = 0
     /// Mirrors ContentView.sidebarRowsHidden. Each row below carries its OWN
     /// `.dominoVisibility(hidden: rowsHidden, index:)` and stays mounted the
@@ -4034,56 +4084,63 @@ struct ToolsDropdownContent: View {
     /// slides its top edge, dragging every row with it instead of each one
     /// popping in place (see DominoVisibility).
     var rowsHidden: Bool = false
-    @Environment(\.isCompactSidebar) private var compact
     @Environment(\.isTinyHeight) private var tiny
 
-    /// Collapsed-sidebar version of a tool row: just the status glyph and
-    /// name; the version moves into the tooltip.
-    private func compactRow(_ name: String, installed: Bool, updateAvailable: Bool, version: String) -> some View {
-        let icon = !installed ? "exclamationmark.circle.fill" : (updateAvailable ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-        let color: Color = !installed ? .orange.opacity(0.85) : (updateAvailable ? .yellow.opacity(0.9) : .green.opacity(0.85))
-        return VStack(spacing: 2) {
-            Image(systemName: icon).font(.appMono(size: 12)).foregroundColor(color)
-            Text(name).font(.appMono(size: 8.5, weight: .medium))
-                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                .lineLimit(1)
+    var body: some View {
+        if tiny {
+            // No room for the version readouts in a very short window; the
+            // update button is the one control worth keeping.
+            checkForUpdatesButton
+                .dominoVisibility(hidden: rowsHidden, index: baseIndex)
+        } else {
+            // Each row is a static status readout -- no per-tool click target.
+            // Checking/updating happens in exactly one place, the single
+            // button below, so there's no ambiguity about whether clicking a
+            // specific row's chip silently kicked off its own separate check.
+            // Chips show no per-row spinner: yt-dlp's download, ffmpeg's
+            // download, the local re-verify pass and Sparkle's own network
+            // check are independent async operations that were never going
+            // to start/stop in sync, so separately-flickering spinners just
+            // read as broken. The button's single "Checking…" state covers
+            // the whole operation; each chip updates in place when its own
+            // piece finishes.
+            // Each row is paired with its own trailing divider so the divider
+            // shrinks with the row it belongs to, and is its own domino step.
+            VStack(alignment: .leading, spacing: 2) {
+                toolRow("yt-dlp", installed: manager.toolsReady, updateAvailable: manager.updateAvailable,
+                        version: manager.ytdlpVersion)
+                    .dominoVisibility(hidden: rowsHidden, index: baseIndex)
+                toolRow("ffmpeg", installed: manager.toolsReady, updateAvailable: manager.ffmpegUpdateAvailable,
+                        version: manager.ffmpegVersion)
+                    .dominoVisibility(hidden: rowsHidden, index: baseIndex + 1)
+                toolRow("Drop", installed: true, updateAvailable: dropDriver.hasActionableUpdate,
+                        version: manager.currentAppVersion)
+                    .dominoVisibility(hidden: rowsHidden, index: baseIndex + 2)
+                checkForUpdatesButton
+                    .padding(.top, 4)
+                    .dominoVisibility(hidden: rowsHidden, index: baseIndex + 3)
+            }
+            .padding(.top, 4)
         }
-        .frame(maxWidth: .infinity)
-        .help(version.isEmpty ? name : "\(name) \(version)")
     }
 
-    var body: some View {
-        // ZStack so the outgoing and incoming layouts overlay instead of stacking
-        // (see sidebarHeader).
-        ZStack(alignment: .top) {
-            if tiny && embedded {
-                // No room for the version readouts in a very short window; the
-                // update button is the one control worth keeping.
-                checkForUpdatesButton
-                    .dominoVisibility(hidden: rowsHidden, index: baseIndex)
-            } else if compact {
-                // Each row is its own domino step (baseIndex...baseIndex+3),
-                // continuing the sequence the sidebar's nav pills started --
-                // NOT the outer VStack's own .blurIn below, which is a
-                // separate, unrelated transition for switching modes in place
-                // (e.g. a live resize crossing isCompactSidebar) without the
-                // whole block mounting/unmounting.
-                VStack(spacing: 10) {
-                    compactRow("yt-dlp", installed: manager.toolsReady, updateAvailable: manager.updateAvailable, version: manager.ytdlpVersion)
-                        .dominoVisibility(hidden: rowsHidden, index: baseIndex)
-                    compactRow("ffmpeg", installed: manager.toolsReady, updateAvailable: manager.ffmpegUpdateAvailable, version: manager.ffmpegVersion)
-                        .dominoVisibility(hidden: rowsHidden, index: baseIndex + 1)
-                    compactRow("Drop", installed: true, updateAvailable: dropDriver.hasActionableUpdate, version: manager.currentAppVersion)
-                        .dominoVisibility(hidden: rowsHidden, index: baseIndex + 2)
-                    checkForUpdatesButton
-                        .dominoVisibility(hidden: rowsHidden, index: baseIndex + 3)
-                }
-                .padding(.top, 4)
-                .transition(.blurIn)
-            } else {
-                expandedBody
-                    .transition(.blurIn)
-            }
+    private func toolRow(_ name: String, installed: Bool, updateAvailable: Bool, version: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            SidebarToolRow(
+                name: name,
+                installed: installed,
+                updateAvailable: updateAvailable,
+                version: version,
+                versionChip: AnyView(
+                    VersionChip(
+                        version: version,
+                        isUpdating: false,
+                        isCheckingUpdates: false,
+                        updateAvailable: updateAvailable
+                    )
+                )
+            )
+            GlassDivider()
         }
     }
 
@@ -4102,114 +4159,12 @@ struct ToolsDropdownContent: View {
             }
         )
     }
-
-    private var expandedBody: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            // Each row is a static status readout now -- no per-tool click
-            // target. Checking/updating happens in exactly one place, the
-            // single button below, so there's no ambiguity about whether
-            // clicking a specific row's chip silently kicked off its own
-            // separate check.
-            // Chips show no per-row spinner now -- yt-dlp's download,
-            // ffmpeg's download, the local re-verify pass, and Sparkle's own
-            // network check are four independent async operations that were
-            // never going to start/stop in visual sync with each other, so
-            // three separately-flickering spinners just read as broken. The
-            // shared button's single "Checking…" state below covers the
-            // whole operation; each chip simply updates to its new value in
-            // place once its own piece finishes.
-            // Each row (paired with its own trailing divider, so the divider
-            // shrinks with the row it belongs to rather than sitting there
-            // orphaned) is its own domino step and stays mounted -- see
-            // rowsHidden's declaration.
-            VStack(alignment: .leading, spacing: 2) {
-                ToolStatusRow(
-                    name: "yt-dlp",
-                    installed: manager.toolsReady,
-                    installing: false,
-                    installAction: {},
-                    versionChip: AnyView(
-                        VersionChip(
-                            version: manager.ytdlpVersion,
-                            isUpdating: false,
-                            isCheckingUpdates: false,
-                            updateAvailable: manager.updateAvailable
-                        )
-                    ),
-                    updateAvailable: manager.updateAvailable,
-                    isUpdating: false
-                )
-                GlassDivider()
-            }
-            .dominoVisibility(hidden: rowsHidden, index: baseIndex)
-            VStack(alignment: .leading, spacing: 2) {
-                ToolStatusRow(
-                    name: "ffmpeg",
-                    installed: manager.toolsReady,
-                    installing: false,
-                    installAction: {},
-                    versionChip: AnyView(
-                        VersionChip(
-                            version: manager.ffmpegVersion,
-                            isUpdating: false,
-                            isCheckingUpdates: false,
-                            updateAvailable: manager.ffmpegUpdateAvailable
-                        )
-                    ),
-                    updateAvailable: manager.ffmpegUpdateAvailable,
-                    isUpdating: false
-                )
-                GlassDivider()
-            }
-            .dominoVisibility(hidden: rowsHidden, index: baseIndex + 1)
-            VStack(alignment: .leading, spacing: 2) {
-                ToolStatusRow(
-                    name: "Drop",
-                    installed: true,
-                    installing: false,
-                    installAction: {},
-                    versionChip: AnyView(
-                        VersionChip(
-                            version: manager.currentAppVersion,
-                            isUpdating: false,
-                            isCheckingUpdates: false,
-                            updateAvailable: dropDriver.hasActionableUpdate
-                        )
-                    ),
-                    updateAvailable: dropDriver.hasActionableUpdate,
-                    isUpdating: false
-                )
-                GlassDivider()
-            }
-            .dominoVisibility(hidden: rowsHidden, index: baseIndex + 2)
-            checkForUpdatesButton
-                .padding(.horizontal, embedded ? 0 : 12)
-                .padding(.top, 4)
-                .padding(.bottom, embedded ? 0 : 10)
-                .dominoVisibility(hidden: rowsHidden, index: baseIndex + 3)
-        }
-        .frame(minWidth: embedded ? 0 : 220, alignment: .leading)
-        .padding(.top, 4)
-        .modifier(OptionalGlassCard(active: !embedded))
-    }
-}
-
-/// Applies `.glassCard()` only when `active` -- lets ToolsDropdownContent
-/// share one body between the standalone-popover look (its own card) and
-/// the inline-in-sidebar look (no card, just sits inside the rail's card).
-struct OptionalGlassCard: ViewModifier {
-    let active: Bool
-    func body(content: Content) -> some View {
-        if active {
-            content.glassCard(cornerRadius: DesignTokens.Radius.medium)
-        } else {
-            content
-        }
-    }
 }
 
 /// Single button below the tool rows that triggers a version/update check
-/// for both bundled tools at once.
+/// for both bundled tools at once. One view at every sidebar width: a capsule
+/// that fills the row, its icon fixed on the rail (where the tab icons are) and
+/// its label revealed beside it as the sidebar widens.
 struct CheckForUpdatesButton: View {
     let isChecking: Bool
     let hasUpdate: Bool
@@ -4219,13 +4174,15 @@ struct CheckForUpdatesButton: View {
     var isUpToDate: Bool = false
     var disabledUntilSetup: Bool = false
     let action: () -> Void
-    @State private var hovering = false
     @Environment(\.isCompactSidebar) private var compact
 
     private var accentColor: Color {
         if hasUpdate { return .orange }
         if isUpToDate { return DesignTokens.Accent.success }
         return .white
+    }
+    private var tint: Color {
+        disabledUntilSetup ? Color.white.opacity(DesignTokens.Text.secondary) : accentColor
     }
     private var isDisabled: Bool { isChecking || disabledUntilSetup }
     private var labelText: String {
@@ -4236,26 +4193,41 @@ struct CheckForUpdatesButton: View {
     }
 
     var body: some View {
-        if compact {
-            // Icon-only in the collapsed sidebar; the label lives in the tooltip.
-            HoverIconButton(icon: iconName, size: 15,
-                            color: disabledUntilSetup ? Color.white.opacity(DesignTokens.Text.secondary) : accentColor,
-                            disabled: isDisabled, help: labelText, action: action)
-                .accessibilityLabel(labelText)
-                .frame(maxWidth: .infinity)
-        } else {
-            GlassButton(
-                label: labelText,
-                icon: iconName,
-                tint: disabledUntilSetup ? Color.white.opacity(DesignTokens.Text.secondary) : accentColor,
-                verticalPadding: 8,
-                isLoading: isChecking,
-                disabled: isDisabled,
-                showRimBeam: isChecking,
-                action: action
-            )
-            .help(disabledUntilSetup ? "Bundled yt-dlp/ffmpeg missing — reinstall Drop" : "")
+        GlassInteractive(shape: .capsule, tint: tint, isActive: false, disabled: isDisabled, action: action) {
+            HStack(spacing: 6) {
+                Group {
+                    if isChecking {
+                        // frame BEFORE scaleEffect so the layout box is set first
+                        // and the shrunk spinner can't bleed past it.
+                        ProgressView().frame(width: 10, height: 10).scaleEffect(0.55)
+                    } else {
+                        Image(systemName: iconName).font(.appMono(size: 11))
+                    }
+                }
+                .frame(width: WindowLayout.railIconSlot)
+                if !compact {
+                    Text(labelText)
+                        .font(.appMono(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .transition(.blurInLeading)
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.leading, WindowLayout.railIconInset)
+            .padding(.trailing, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
         }
+        // Same Tron-style light beam as the cards' rims while real work is in
+        // progress; RimBeam clamps its radius to min(width, height)/2, so a
+        // large constant traces a true capsule at any width.
+        .overlay {
+            if isChecking { RimBeam(cornerRadius: 999) }
+        }
+        .help(compact ? labelText : (disabledUntilSetup ? "Bundled yt-dlp/ffmpeg missing — reinstall Drop" : ""))
+        .accessibilityLabel(labelText)
     }
 }
 
@@ -4280,7 +4252,7 @@ extension Notification.Name {
     static let menuBarDownload = Notification.Name("dropMenuBarDownload")
     /// Fired once, from DropAppDelegate.windowDidEndLiveResize, when the user
     /// releases a window-edge drag. See ContentView's settledWindowSize /
-    /// settledMainAreaWidth for why this exists.
+    /// columnClass / settledWindowSize for why this exists.
     static let dropLiveResizeEnded = Notification.Name("dropLiveResizeEnded")
 }
 
@@ -4481,7 +4453,7 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // this to defer recomputing its layout breakpoints (compact sidebar/height,
     // content column width, chip wrapping) until the drag actually ends,
     // instead of re-deciding all of them on every one of the dozens of frames
-    // a drag produces -- see settledWindowSize/settledMainAreaWidth. Standard
+    // a drag produces -- see settledWindowSize. Standard
     // AppKit-recommended pattern for expensive live-resize content (Apple's
     // "Cocoa Live Window Resizing" guide): let the raw frame track the mouse,
     // defer real relayout to resize's end.
@@ -4754,18 +4726,21 @@ struct ContentView: View {
     /// Live window width is below WindowLayout.compactSidebarBreakpoint. Only
     /// flips at the threshold, so reading it in `body` costs nothing per tick.
     @State private var isNarrowWindow = false
-    // What every breakpoint below actually reads. Equal to windowSize/
-    // mainAreaWidth except while NSApp.keyWindow?.inLiveResize is true, during
-    // which they're pinned to their pre-drag values and only catch up once
-    // (via the .dropLiveResizeEnded notification, posted from
-    // DropAppDelegate.windowDidEndLiveResize) when the drag actually ends.
-    // Without this, live-resize was measurably the most expensive thing the
-    // app did: every layout decision derived from these two numbers --
-    // compact sidebar/height, content column width, chip wrapping, bottom bar
-    // stacking -- recomputed on every resize tick, stacking GPU/CPU work on
-    // top of AppKit's own per-frame relayout of the window itself.
+    // What the height breakpoints below read. Equal to windowSize except while
+    // NSApp.keyWindow?.inLiveResize is true, during which it is pinned to its
+    // pre-drag value and only catches up once (via the .dropLiveResizeEnded
+    // notification, posted from DropAppDelegate.windowDidEndLiveResize) when
+    // the drag ends -- height breakpoints recomputed on every resize tick were
+    // measurably one of the most expensive things the app did.
     @State private var settledWindowSize: CGSize = .zero
-    @State private var settledMainAreaWidth: CGFloat = 0
+    /// The content column's width reduced to which side of each breakpoint it
+    /// is on (WindowLayout.columnClass) -- the only column-width value views
+    /// read. It follows the space between the sidebar and the window's right
+    /// edge live, but only CHANGES at a breakpoint, so publishing it costs
+    /// nothing on the resize ticks in between. The column's real width is
+    /// worked out live inside ContentColumnLayout, so cards track the window
+    /// frame by frame; only decisions like "stack these chips" wait for this.
+    @State private var columnClass: CGFloat = 0
     /// The user's own collapse choice (the toggle in the sidebar header).
     @AppStorage("sidebarCollapsed") private var sidebarCollapsedByUser = false
     /// Which toggle animation to play -- switched from the View menu (see
@@ -4775,14 +4750,14 @@ struct ContentView: View {
     // The sidebar card's own width. A deliberate toggle tween it (rows blur
     // out, the card visibly shrinks/grows, rows pop back in one by one -- see
     // onChange(of: isCompactSidebar) below); a window-driven change snaps it.
-    // While it tweens, settledMainAreaWidth is held (sidebarWidthAnimating)
-    // so the main content doesn't reflow between side-by-side and stacked on
-    // every intermediate width. Seeded from the persisted preference so a
+    // While it tweens, columnClass is held (sidebarWidthAnimating) so the
+    // main content doesn't restack between side-by-side and stacked on every
+    // intermediate width. Seeded from the persisted preference so a
     // collapsed launch doesn't animate on first appearance.
     @State private var sidebarWidth: CGFloat =
         UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
     /// True from the moment a toggle starts the card's width tween until it
-    /// lands; pins settledMainAreaWidth so breakpoints don't flip mid-tween.
+    /// lands; pins columnClass so breakpoints don't flip mid-tween.
     @State private var sidebarWidthAnimating = false
     /// True for the whole toggle sequence (width tween AND the reveal after
     /// it). While it is, the live-resize rule that switches animations off
@@ -4839,7 +4814,6 @@ struct ContentView: View {
     private var isCompactSidebar: Bool { sidebarForcedCollapsed || sidebarCollapsedByUser }
     private var isCompactHeight: Bool { settledWindowSize.height > 0 && settledWindowSize.height < WindowLayout.compactHeightBreakpoint }
     private var isTinyHeight: Bool { settledWindowSize.height > 0 && settledWindowSize.height < WindowLayout.tinyHeightBreakpoint }
-    private var columnWidth: CGFloat { WindowLayout.columnWidth(mainWidth: settledMainAreaWidth) }
     @State private var convertStagingJobs: [ConvertJob] = []
     @State private var convertQueue: [ConvertJob] = []
     /// Lives here (not as local @State in ConvertView) because activeTab
@@ -5002,7 +4976,7 @@ struct ContentView: View {
                             // floating cards, so the equivalent of "cap the cards at
                             // the content column" here is capping the whole panel -- the
                             // same shared column width and centering as every other tab.
-                            .contentColumn(columnWidth)
+                            .contentColumn()
                             .transition(.pageSwap)
                         } else if activeTab == .convert {
                             ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
@@ -5018,7 +4992,7 @@ struct ContentView: View {
                             // against-the-window-glass structure and 60%-width
                             // convention as History, not a card floating on a page.
                             LogView(logs: manager.globalLogs)
-                                .contentColumn(columnWidth)
+                                .contentColumn()
                                 .transition(.pageSwap)
                         }
                     }
@@ -5050,7 +5024,7 @@ struct ContentView: View {
                         // change at activation from animating the page's size.
                         ActiveOnlyLayout(isActive: activeTab == .devRelease) {
                             DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
-                                .contentColumn(columnWidth)
+                                .contentColumn()
                                 .transaction(value: activeTab) { $0.animation = nil }
                         }
                             .modifier(FocusEffect(
@@ -5068,22 +5042,25 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity)
                 // The main column's own width (everything right of the
-                // sidebar) -- the one number WindowLayout.columnWidth derives
-                // every tab's content width from.
+                // sidebar). Every tab's content column is derived from the space
+                // it offers (ContentColumnLayout); this only feeds the breakpoint
+                // class views compare against.
                 .background(
                     GeometryReader { geo in
                         Color.clear
                             .onAppear {
                                 mainAreaWidth = geo.size.width
-                                settledMainAreaWidth = geo.size.width
+                                columnClass = WindowLayout.columnClass(mainWidth: geo.size.width)
                             }
                             .onChange(of: geo.size.width) { _, newWidth in
                                 mainAreaWidth = newWidth
-                                // See settledMainAreaWidth's declaration: only follow the
-                                // live value outside of a live-resize drag, and not while
-                                // the sidebar's own width tween is dragging it through
-                                // intermediate values (sidebarWidthAnimating).
-                                if NSApp.keyWindow?.inLiveResize != true, !sidebarWidthAnimating { settledMainAreaWidth = newWidth }
+                                // Held while the sidebar's own width tween is dragging
+                                // this through intermediate values
+                                // (sidebarWidthAnimating); caught up when it lands.
+                                if !sidebarWidthAnimating {
+                                    let cls = WindowLayout.columnClass(mainWidth: newWidth)
+                                    if cls != columnClass { columnClass = cls }
+                                }
                             }
                     }
                 )
@@ -5105,7 +5082,7 @@ struct ContentView: View {
                     }
             }
         )
-        .environment(\.contentColumnWidth, columnWidth)
+        .environment(\.contentColumnWidth, columnClass)
         .environment(\.isCompactSidebar, sidebarDisplayCompact)
         .environment(\.sidebarWidth, sidebarWidth)
         .onChange(of: isCompactSidebar) { _, compact in
@@ -5144,7 +5121,7 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarResizeDuration) {
                     guard sidebarToggleGeneration == generation else { return }
                     sidebarWidthAnimating = false
-                    withAnimation(.easeOut(duration: 0.2)) { settledMainAreaWidth = mainAreaWidth }
+                    withAnimation(.easeOut(duration: 0.2)) { columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth) }
                 }
                 // After the last label/tools transition (a flip at most
                 // 0.45 * duration in, plus its 0.2s) has finished.
@@ -5171,7 +5148,7 @@ struct ContentView: View {
                 // The width has landed: let the main content's breakpoints
                 // catch up (once, gently), then start the reveal.
                 sidebarWidthAnimating = false
-                withAnimation(.easeOut(duration: 0.2)) { settledMainAreaWidth = mainAreaWidth }
+                withAnimation(.easeOut(duration: 0.2)) { columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth) }
                 // The ambient wrapper's OWN duration must span the full
                 // staggered reveal, not just one row's animation -- each
                 // row's transition bakes its own delay+curve (see
@@ -5219,10 +5196,10 @@ struct ContentView: View {
             // the Download page itself.
             // A live-resize drag just ended -- catch the settled breakpoint
             // snapshot up to wherever the raw geometry actually landed. See
-            // settledWindowSize/settledMainAreaWidth's declaration.
+            // settledWindowSize's declaration.
             NotificationCenter.default.addObserver(forName: .dropLiveResizeEnded, object: nil, queue: .main) { _ in
                 settledWindowSize = windowSize
-                settledMainAreaWidth = mainAreaWidth
+                columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth)
             }
             NotificationCenter.default.addObserver(forName: .menuBarDownload, object: nil, queue: .main) { note in
                 guard let raw = note.userInfo?["url"] as? String else { return }
@@ -5456,24 +5433,22 @@ struct ContentView: View {
 
             // Tools section -- integrated directly into the rail as an
             // always-visible block (no popover, no toggle), pinned to
-            // the bottom via the Spacer() above. The log toggle that
-            // used to live here is gone -- Log is now its own full
-            // sidebar tab (see nav items above) instead of a floating
-            // side panel triggered from this row. Continues the domino from
+            // the bottom via the Spacer() above. Continues the domino from
             // index 7 -- its OWN rows (yt-dlp/ffmpeg/Drop/Check for Updates)
-            // each carry their own dominoPop transition (see baseIndex),
-            // rather than this whole block popping as one piece. Its
-            // internal compact/expanded switch is unchanged (it already only
-            // fully switches once sidebarRowsHidden has gone back to false,
-            // so isCompactSidebar has already settled by then). Passed
-            // through as rowsHidden rather than gated with an outer
-            // `if !sidebarRowsHidden` here -- gating the WHOLE pill from
+            // are each a separate step (see baseIndex), rather than this whole
+            // block popping as one piece. The block is ONE set of views at
+            // every sidebar width (its icons sit on the rail exactly where
+            // the tab icons do; the text appears beside them as the card
+            // widens), so opening the sidebar widens it in place. It's
+            // inset by the same railContentInset as the nav pills so the two
+            // line up. Passed through as rowsHidden rather than gated with an
+            // outer `if !sidebarRowsHidden` here -- gating the WHOLE pill from
             // outside would remove all of its rows in one shot, and even
             // per-row removal changes this bottom-pinned block's height,
             // sliding it; ToolsStatusPill instead keeps every row mounted and
             // shrinks/blurs each one in place (see DominoVisibility).
             ToolsStatusPill(manager: manager, baseIndex: 7, rowsHidden: sidebarRowsHidden)
-                .padding(.horizontal, 6 + 10 * WindowLayout.sidebarExpansion(sidebarWidth))
+                .padding(.horizontal, WindowLayout.railContentInset)
                 .padding(.bottom, isTinyHeight ? 8 : 16)
         }
         // maxHeight: .infinity guards against the card collapsing to the lone
@@ -5669,7 +5644,7 @@ struct ContentView: View {
                 // Same shared content column as the paste bar, the card queue
                 // below and the bottom bar (see WindowLayout.columnWidth), so
                 // every row in this tab is pixel-identical in width.
-                .contentColumn(columnWidth)
+                .contentColumn()
                 .transition(.glassBar(anchor: .top))
             }
 
@@ -5710,7 +5685,7 @@ struct ContentView: View {
                     // containerRelativeFrame, which resolves against the
                     // NEAREST container -- and this VStack sits inside a
                     // ScrollView, which has its own.
-                    .contentColumn(columnWidth)
+                    .contentColumn()
                     .padding(.top, 20)
                     .padding(.bottom, 8)
     }
@@ -6169,7 +6144,7 @@ struct ContentView: View {
         // Same content column as everything beneath it (it used to be a
         // separate fixed 864pt cap, which left it narrower than the cards on
         // big windows and wider than them on small ones).
-        .contentColumn(columnWidth)
+        .contentColumn()
         .onChange(of: urlText) {
             analyzeResult = nil
             duplicateURLDetected = false

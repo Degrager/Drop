@@ -2804,14 +2804,15 @@ struct FocusEffect: ViewModifier {
 }
 
 extension Animation {
-    /// Per-row domino curves, shared by `AnyTransition.dominoPop` (rows that
-    /// mount/unmount) and `DominoVisibility` (rows that stay mounted).
+    /// Domino curves, shared by `AnyTransition.dominoPop` (rows that mount/
+    /// unmount) and `DominoVisibility` (rows that stay mounted). Only the
+    /// reveal is staggered by `index`; every row leaves together, at once.
     static func dominoEnter(index: Int) -> Animation {
         .spring(response: 0.15, dampingFraction: 0.62).delay(Double(index) * AnyTransition.dominoStagger)
     }
 
-    static func dominoExit(index: Int) -> Animation {
-        .easeIn(duration: AnyTransition.dominoRowDuration).delay(Double(index) * AnyTransition.dominoStagger)
+    static var dominoExit: Animation {
+        .easeIn(duration: AnyTransition.dominoExitDuration)
     }
 }
 
@@ -2829,8 +2830,8 @@ struct DominoVisibility: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .modifier(FocusEffect(blur: hidden ? 8 : 0, scale: hidden ? 0.001 : 1))
-            .animation(hidden ? Animation.dominoExit(index: index) : Animation.dominoEnter(index: index), value: hidden)
+            .modifier(FocusEffect(blur: hidden ? AnyTransition.dominoBlur : 0, scale: hidden ? 0.001 : 1))
+            .animation(hidden ? Animation.dominoExit : Animation.dominoEnter(index: index), value: hidden)
             .allowsHitTesting(!hidden)
             .accessibilityHidden(hidden)
     }
@@ -2917,45 +2918,38 @@ extension AnyTransition {
         )
     }
 
-    /// Gap between one sidebar row's domino step and the next. Kept ≥
-    /// dominoRowDuration (see there) so each row's own motion has finished,
-    /// or very nearly has, before the next row's starts -- at equal or
-    /// larger per-row duration than the gap, rows spend most of their time
-    /// overlapping mid-motion with their neighbors, which reads as "several
-    /// things fading together" instead of a visible one-by-one march. Over
-    /// 11 rows: 10 gaps * 70ms + one row's own 70ms shrink = 0.77s exit;
-    /// enter adds its own settle buffer (see ContentView.sidebarEnterTotal)
-    /// for a ~1.75s round trip well inside a 2s ceiling. Single source of
-    /// truth -- ContentView's own sequencing (how long to wait before
-    /// snapping sidebarWidth) reads this same constant so the two stay in
-    /// lockstep.
-    static let dominoStagger: Double = 0.07
+    /// Gap between one sidebar row's reveal step and the next. Only the
+    /// reveal is staggered (every row leaves together -- see
+    /// dominoExitDuration). 40ms is the tightest that still reads as a march
+    /// rather than one wave: over 11 rows that's 10 gaps = 0.4s, plus the
+    /// last row's settle (ContentView.sidebarEnterTotal), for a whole toggle
+    /// of about 0.8s. Single source of truth -- ContentView reads this too,
+    /// so the sequencing stays in lockstep.
+    static let dominoStagger: Double = 0.04
 
-    /// Per-row animation duration, both directions. Equal to dominoStagger
-    /// (not shorter, not longer) is the deliberate choice -- see
-    /// dominoStagger's own comment for why. ContentView reads this too (see
-    /// sidebarExitDuration) so the ambient withAnimation wrapping the whole
-    /// exit sequence covers exactly the last row's own animation.
-    static let dominoRowDuration: Double = 0.07
+    /// How long all rows take to shrink/blur out together when the sidebar is
+    /// toggled. ContentView reads this to know when they're gone.
+    static let dominoExitDuration: Double = 0.14
 
-    /// Sidebar collapse/expand: a row vanishes (blur + shrink toward nothing,
-    /// no opacity -- these rows are GlassInteractive pills with their own
-    /// VisualEffectBlur, and fading opacity on a glass surface dilutes its
-    /// tint and flashes it grey, see FocusEffect/glassPop) then pops back in
-    /// growing from near-zero scale with a springy overshoot, staggered
-    /// top-to-bottom by `index` -- the TOP row starts first, each following
-    /// row starts a beat later (the stagger is when each row's own pop
-    /// BEGINS, not where it scales from -- every row still grows from its
-    /// own center/top, matching its own anchor). Each row's own pop is kept
-    /// short and snappy (a fast spring response, not a lingering one) so
-    /// rows read as distinct quick pops marching down the list rather than
-    /// a smooth wave of overlapping motion.
+    /// Blur radius rows carry while hidden -- large enough that the focus
+    /// pull is clearly visible on the way out and in.
+    static let dominoBlur: CGFloat = 12
+
+    /// Sidebar collapse/expand: every row vanishes AT ONCE (blur + shrink
+    /// toward nothing, no opacity -- these rows are GlassInteractive pills
+    /// with their own VisualEffectBlur, and fading opacity on a glass surface
+    /// dilutes its tint and flashes it grey, see FocusEffect/glassPop), then
+    /// pops back in one by one, growing from near-zero scale with a springy
+    /// overshoot and staggered top-to-bottom by `index` -- the TOP row
+    /// starts first, each following row a beat later (the stagger is when
+    /// each row's own pop BEGINS, not where it scales from -- every row
+    /// still grows from its own center).
     static func dominoPop(index: Int) -> AnyTransition {
         .asymmetric(
-            insertion: focus(blur: 10, scale: 0.05)
+            insertion: focus(blur: dominoBlur, scale: 0.05)
                 .animation(Animation.dominoEnter(index: index)),
-            removal: focus(blur: 8, scale: 0.05)
-                .animation(Animation.dominoExit(index: index))
+            removal: focus(blur: dominoBlur, scale: 0.05)
+                .animation(Animation.dominoExit)
         )
     }
 
@@ -4353,11 +4347,7 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if let window = NSApplication.shared.windows.first(where: { !($0 is NSPanel) }) {
                 window.delegate = self
                 self.applyMinimumSize(to: window)
-                NotificationCenter.default.addObserver(
-                    forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
-                ) { [weak self, weak window] _ in
-                    if let window { self?.applyMinimumSize(to: window) }
-                }
+                self.applyLaunchSize(to: window)
                 window.collectionBehavior = [.managed, .fullScreenPrimary]
                 // Standard AppKit window -- no NonFullscreenWindow subclass
                 // override anymore, so both double-click-title-bar-to-zoom
@@ -4446,28 +4436,25 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    /// The window minimum is a quarter of the screen the window is on, so it
-    /// follows the window to a different display (windowDidChangeScreen) and
-    /// a change of resolution. minSize only constrains drags, so a first-launch
-    /// or restored frame below it is grown to fit as well.
-    private func applyMinimumSize(to window: NSWindow) {
-        let minimum = WindowLayout.minimumSize(for: window.screen)
-        window.minSize = minimum
+    /// Every launch opens at WindowLayout.defaultSize, whatever size the last
+    /// session ended at. Keeps the window's top-left corner where it was, then
+    /// pulls the frame back on-screen if the new size pushed it off the edge.
+    private func applyLaunchSize(to window: NSWindow) {
         var frame = window.frame
-        let clamped = NSSize(width: max(frame.width, minimum.width), height: max(frame.height, minimum.height))
-        if clamped != frame.size {
-            frame.origin.y -= clamped.height - frame.height
-            frame.size = clamped
-            window.setFrame(frame, display: true)
-        }
+        let size = WindowLayout.defaultSize
+        frame.origin.y -= size.height - frame.height
+        frame.size = size
+        window.setFrame(window.constrainFrameRect(frame, to: window.screen), display: true)
     }
 
-    func windowDidChangeScreen(_ notification: Notification) {
-        if let window = notification.object as? NSWindow { applyMinimumSize(to: window) }
+    /// minSize only constrains drags (and SwiftUI can rewrite it from its own
+    /// content minimum), so windowWillResize below enforces the same floor.
+    private func applyMinimumSize(to window: NSWindow) {
+        window.minSize = WindowLayout.minimumSize
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        let minimum = WindowLayout.minimumSize(for: sender.screen)
+        let minimum = WindowLayout.minimumSize
         return NSSize(width: max(frameSize.width, minimum.width), height: max(frameSize.height, minimum.height))
     }
 
@@ -4486,19 +4473,39 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 }
 
+/// The two sidebar collapse/expand animations, kept side by side (View menu >
+/// Sidebar Animation) until one is picked.
+enum SidebarAnimationStyle: String {
+    /// Rows blur out together, the card resizes, rows pop back in one by one.
+    case pop
+    /// The card resizes and its tabs and icons resize with it; nothing leaves.
+    case resize
+
+    static let storageKey = "sidebarAnimationStyle"
+}
+
 struct DropApp: App {
     @NSApplicationDelegateAdaptor(DropAppDelegate.self) var appDelegate
+    @AppStorage(SidebarAnimationStyle.storageKey) private var sidebarAnimationStyle = SidebarAnimationStyle.pop.rawValue
 
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
+        .commands {
+            CommandGroup(after: .sidebar) {
+                Picker("Sidebar Animation", selection: $sidebarAnimationStyle) {
+                    Text("Pop In").tag(SidebarAnimationStyle.pop.rawValue)
+                    Text("Resize").tag(SidebarAnimationStyle.resize.rawValue)
+                }
+            }
+        }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
-        // First-launch size only (AppKit restores the user's own size after
-        // that). 620x520 opened cramped -- the bottom bar sat on top of the
-        // first preview card -- and was below the window's own minimum size.
-        .defaultSize(width: WindowLayout.firstLaunchSize.width, height: WindowLayout.firstLaunchSize.height)
+        // The delegate then pins the exact frame at every launch
+        // (applyLaunchSize); this just keeps the window from first appearing
+        // at some other size before that runs.
+        .defaultSize(width: WindowLayout.defaultSize.width, height: WindowLayout.defaultSize.height)
     }
 }
 
@@ -4727,26 +4734,35 @@ struct ContentView: View {
     @State private var settledMainAreaWidth: CGFloat = 0
     /// The user's own collapse choice (the toggle in the sidebar header).
     @AppStorage("sidebarCollapsed") private var sidebarCollapsedByUser = false
-    // The sidebar card's own width. Snapped, not animated -- see
-    // onChange(of: isCompactSidebar) below, which sequences a staggered
-    // "rows pop out, width snaps, rows pop back in" instead of tweening this
-    // smoothly, because a smooth tween dragged mainAreaWidth (and everything
-    // derived from it) through every intermediate width, causing the main
-    // content to repeatedly reflow between side-by-side and stacked mid-
-    // animation. Seeded from the persisted preference so a collapsed launch
-    // doesn't animate on first appearance.
+    /// Which toggle animation to play -- switched from the View menu (see
+    /// DropApp.commands) so the two can be compared side by side.
+    @AppStorage(SidebarAnimationStyle.storageKey) private var sidebarAnimationStyleRaw = SidebarAnimationStyle.pop.rawValue
+    private var sidebarAnimationStyle: SidebarAnimationStyle { SidebarAnimationStyle(rawValue: sidebarAnimationStyleRaw) ?? .pop }
+    // The sidebar card's own width. A deliberate toggle tween it (rows blur
+    // out, the card visibly shrinks/grows, rows pop back in one by one -- see
+    // onChange(of: isCompactSidebar) below); a window-driven change snaps it.
+    // While it tweens, settledMainAreaWidth is held (sidebarWidthAnimating)
+    // so the main content doesn't reflow between side-by-side and stacked on
+    // every intermediate width. Seeded from the persisted preference so a
+    // collapsed launch doesn't animate on first appearance.
     @State private var sidebarWidth: CGFloat =
         UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
+    /// True from the moment a toggle starts the card's width tween until it
+    /// lands; pins settledMainAreaWidth so breakpoints don't flip mid-tween.
+    @State private var sidebarWidthAnimating = false
+    /// True for the whole toggle sequence (width tween AND the reveal after
+    /// it). While it is, the live-resize rule that switches animations off
+    /// stands aside, so the sidebar can animate during a window drag.
+    @State private var sidebarSequencePlaying = false
     // What every ROW actually renders as (icon+label vs icon-only) -- this,
     // not isCompactSidebar directly, is what's published to the
     // \.isCompactSidebar environment SidebarTabItem/ToolsDropdownContent/
-    // CheckForUpdatesButton read. It only changes at the same moment
-    // sidebarWidth snaps. Without this split, those views saw the NEW mode
-    // the instant the toggle was tapped -- their own hard-cut content swap
-    // (e.g. SidebarTabItem's `if !compact { Text(label) }`) fired
-    // immediately, so labels vanished/reflowed well before the domino's
-    // staggered exit even got to that row, instead of staying full-content
-    // through the whole exit and only changing together with the width snap.
+    // CheckForUpdatesButton read. It only changes once every row has left
+    // (mid-tween), so nothing visibly reflows into the new mode early.
+    // Without this split, those views saw the NEW mode the instant the
+    // toggle was tapped -- their own hard-cut content swap (e.g.
+    // SidebarTabItem's `if !compact { Text(label) }`) fired immediately,
+    // instead of staying full-content until the rows were gone.
     @State private var sidebarDisplayCompact: Bool =
         UserDefaults.standard.bool(forKey: "sidebarCollapsed")
     /// True while the sidebar's rows (header, tab pills, tools block) are
@@ -4758,38 +4774,33 @@ struct ContentView: View {
     /// can recognize it's no longer current and no-op instead of clobbering
     /// a newer sequence's width/visibility.
     @State private var sidebarToggleGeneration = 0
-    /// Set true by sidebarToggleButton's action right before it flips
-    /// sidebarCollapsedByUser, and consumed (read + cleared) by the very next
-    /// onChange(of: isCompactSidebar). Distinguishes a deliberate tap -- which
-    /// gets the domino pop -- from isCompactSidebar changing because the
-    /// window's width crossed sidebarForcedCollapsed's threshold, which can
-    /// happen repeatedly during any resize (a live drag, but also a
-    /// programmatic one: Stage Manager, an external display, tiling) and
-    /// should always be the cheap instant snap, never the multi-row spring
-    /// sequence.
-    @State private var sidebarUserInitiatedToggle = false
-    // label(1) + toggle button(1) + 5 tab pills + 4 tool rows (yt-dlp/ffmpeg/
-    // Drop/Check for Updates, see ToolsStatusPill's baseIndex: 7) = indices
-    // 0-10, 11 total. Kept at the worst-case count even when Dev is absent --
-    // an unused index just means the wait before the width snap is a touch
-    // more generous than strictly needed, never too short.
+    // toggle(1) + label(1) + 5 tab pills + 4 tool rows (yt-dlp/ffmpeg/Drop/
+    // Check for Updates, see ToolsStatusPill's baseIndex: 7) = indices 0-10,
+    // 11 total. Kept at the worst-case count even when Dev is absent -- an
+    // unused index just means the reveal's ambient duration is a touch more
+    // generous than strictly needed, never too short.
     private static let sidebarRowCount = 11
-    // Must match dominoPop's own removal duration (AnyTransition.
-    // dominoRowDuration) -- see there for why the gap, not this, carries most
-    // of the budget. 10 gaps * dominoStagger + one row's own shrink.
-    private static var sidebarExitDuration: Double { AnyTransition.dominoRowDuration }
-    private static var sidebarExitTotal: Double { AnyTransition.dominoStagger * Double(sidebarRowCount - 1) + sidebarExitDuration }
-    // How long the enter sequence's last row takes to read as fully settled:
-    // its own delay plus a little slack for its spring's overshoot to
-    // visibly damp out (a spring doesn't stop dead at `response`, it keeps
-    // interpolating past it). Must stay ≥ dominoPop's insertion animation
-    // (response + delay) or the last rows get cut off before their pop plays
-    // -- see the ambient-wrapper comment below.
-    private static var sidebarEnterTotal: Double { AnyTransition.dominoStagger * Double(sidebarRowCount - 1) + 0.28 }
+    /// Pop-in style: how long the card takes to shrink/grow. The rows blur out
+    /// together over the first dominoExitDuration of it; the reveal starts
+    /// once it lands.
+    private static let sidebarWidthDuration: Double = 0.22
+    /// Resize style: how long the card takes to shrink/grow, with its tabs and
+    /// icons resizing along with it instead of leaving and popping back.
+    private static let sidebarResizeDuration: Double = 0.3
+    // How long the reveal's last row takes to read as fully settled: its own
+    // delay plus a little slack for its spring's overshoot to visibly damp
+    // out (a spring doesn't stop dead at `response`, it keeps interpolating
+    // past it). Must stay ≥ dominoPop's insertion animation (response +
+    // delay) or the last rows get cut off before their pop plays -- see the
+    // ambient-wrapper comment below.
+    private static var sidebarEnterTotal: Double { AnyTransition.dominoStagger * Double(sidebarRowCount - 1) + 0.2 }
     /// Below this window width the sidebar is ALWAYS icons-only, to free the
     /// room -- the toggle is disabled there rather than letting the sidebar
     /// swallow a third of a narrow window.
-    private var sidebarForcedCollapsed: Bool { settledWindowSize.width > 0 && settledWindowSize.width < WindowLayout.compactSidebarBreakpoint }
+    /// Reads the LIVE window width, not the settled snapshot the other
+    /// breakpoints use, so the sidebar collapses/expands the moment a drag
+    /// crosses the threshold rather than when the mouse is released.
+    private var sidebarForcedCollapsed: Bool { windowSize.width > 0 && windowSize.width < WindowLayout.compactSidebarBreakpoint }
     private var isCompactSidebar: Bool { sidebarForcedCollapsed || sidebarCollapsedByUser }
     private var isCompactHeight: Bool { settledWindowSize.height > 0 && settledWindowSize.height < WindowLayout.compactHeightBreakpoint }
     private var isTinyHeight: Bool { settledWindowSize.height > 0 && settledWindowSize.height < WindowLayout.tinyHeightBreakpoint }
@@ -5023,8 +5034,10 @@ struct ContentView: View {
                             .onChange(of: geo.size.width) { _, newWidth in
                                 mainAreaWidth = newWidth
                                 // See settledMainAreaWidth's declaration: only follow the
-                                // live value outside of a live-resize drag.
-                                if NSApp.keyWindow?.inLiveResize != true { settledMainAreaWidth = newWidth }
+                                // live value outside of a live-resize drag, and not while
+                                // the sidebar's own width tween is dragging it through
+                                // intermediate values (sidebarWidthAnimating).
+                                if NSApp.keyWindow?.inLiveResize != true, !sidebarWidthAnimating { settledMainAreaWidth = newWidth }
                             }
                     }
                 )
@@ -5047,52 +5060,84 @@ struct ContentView: View {
         .environment(\.isCompactSidebar, sidebarDisplayCompact)
         .environment(\.sidebarWidth, sidebarWidth)
         .onChange(of: isCompactSidebar) { _, compact in
-            // Domino sequence, per request: rows pop OUT top-to-bottom, the
-            // card's width snaps (not tweens) once they're gone, then the new
-            // row set pops IN top-to-bottom. See AnyTransition.dominoPop and
-            // sidebarRowsHidden's declaration for why this replaced a smooth
-            // width tween -- that tween dragged mainAreaWidth through every
-            // intermediate width, and every breakpoint derived from it
-            // (bottom bar stacking, chip wrapping) reflowed several times
-            // mid-animation.
+            // Toggle sequence, per request: every row blurs/shrinks out AT
+            // ONCE while the card visibly shrinks/grows; once the width lands
+            // the new row set pops IN one by one, top-to-bottom. See
+            // AnyTransition.dominoPop. While the width tweens, the main
+            // content's breakpoints are held (sidebarWidthAnimating) and
+            // catch up once, when it lands -- otherwise the bottom bar and
+            // chip rows would flip between side-by-side and stacked on
+            // every intermediate width.
             let target = compact ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
             sidebarToggleGeneration += 1
             let generation = sidebarToggleGeneration
-            // Consume the intent flag: only a genuine tap on the toggle button
-            // gets the domino. A change caused by the window's width crossing
-            // sidebarForcedCollapsed's threshold -- whether from a live mouse
-            // drag or a programmatic resize (Stage Manager, an external
-            // display, tiling) -- always gets the cheap instant snap, since
-            // that can happen repeatedly in quick succession and isn't a
-            // deliberate action worth a multi-row spring show.
-            let userInitiated = sidebarUserInitiatedToggle
-            sidebarUserInitiatedToggle = false
-            guard userInitiated, NSApp.keyWindow?.inLiveResize != true else {
-                sidebarWidth = target
-                sidebarDisplayCompact = compact
-                sidebarRowsHidden = false
+            // The toggle button and the window's width crossing
+            // sidebarForcedCollapsed's threshold -- including mid-drag, live
+            // -- get the same animated sequence. sidebarSequencePlaying
+            // exempts it from the live-resize rule below that switches
+            // animations off.
+            sidebarWidthAnimating = true
+            sidebarSequencePlaying = true
+            if sidebarAnimationStyle == .resize {
+                // Resize style: nothing leaves. The card's width tweens and
+                // the tabs, icons and labels resize with it (SidebarTabItem
+                // reads the animated width). The content that has to switch
+                // layout -- labels, the tools block -- switches through its
+                // own transitions: right away when collapsing, partway
+                // through when expanding, so a label never shows up inside
+                // a pill that's still too narrow for it.
+                withAnimation(.easeInOut(duration: Self.sidebarResizeDuration)) { sidebarWidth = target }
+                let flipDelay = compact ? 0 : Self.sidebarResizeDuration * 0.45
+                DispatchQueue.main.asyncAfter(deadline: .now() + flipDelay) {
+                    guard sidebarToggleGeneration == generation else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) { sidebarDisplayCompact = compact }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarResizeDuration) {
+                    guard sidebarToggleGeneration == generation else { return }
+                    sidebarWidthAnimating = false
+                    withAnimation(.easeOut(duration: 0.2)) { settledMainAreaWidth = mainAreaWidth }
+                }
+                // After the last label/tools transition (a flip at most
+                // 0.45 * duration in, plus its 0.2s) has finished.
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarResizeDuration + 0.25) {
+                    if sidebarToggleGeneration == generation { sidebarSequencePlaying = false }
+                }
                 return
             }
-            // The ambient wrapper's OWN duration must span the full staggered
-            // sequence, not just one row's animation -- each row's transition
-            // bakes its own delay+curve (see AnyTransition.dominoPop) which
-            // overrides this ambient one for HOW it animates, but SwiftUI
-            // still uses the ambient transaction's duration to decide WHEN a
-            // removal is "done" and the subtree can be torn down. A short
-            // ambient duration here was cutting every row past the first one
-            // or two off mid-delay, before their own animation ever started --
-            // which is why only the top couple of rows visibly animated and
-            // the rest just vanished/appeared instantly.
-            withAnimation(.linear(duration: Self.sidebarExitTotal)) { sidebarRowsHidden = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarExitTotal) {
-                // A second toggle landed while this one's exit was still playing --
-                // that newer onChange already owns sidebarWidth/sidebarRowsHidden.
+            // Pop style. Both start together. The row exit's ambient
+            // duration only needs to cover the (unstaggered) exit itself.
+            withAnimation(.linear(duration: AnyTransition.dominoExitDuration)) { sidebarRowsHidden = true }
+            withAnimation(.easeInOut(duration: Self.sidebarWidthDuration)) { sidebarWidth = target }
+            // A second toggle landing mid-sequence supersedes both callbacks
+            // below (the newer onChange owns sidebarWidth/sidebarRowsHidden),
+            // hence the generation check in each.
+            DispatchQueue.main.asyncAfter(deadline: .now() + AnyTransition.dominoExitDuration) {
                 guard sidebarToggleGeneration == generation else { return }
-                sidebarWidth = target
-                // Rows only learn about the new mode right as they're about to
-                // pop back in -- see sidebarDisplayCompact's declaration.
+                // Every row is gone by now, so it's safe for them to learn
+                // the new mode -- see sidebarDisplayCompact's declaration.
                 sidebarDisplayCompact = compact
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarWidthDuration) {
+                guard sidebarToggleGeneration == generation else { return }
+                // The width has landed: let the main content's breakpoints
+                // catch up (once, gently), then start the reveal.
+                sidebarWidthAnimating = false
+                withAnimation(.easeOut(duration: 0.2)) { settledMainAreaWidth = mainAreaWidth }
+                // The ambient wrapper's OWN duration must span the full
+                // staggered reveal, not just one row's animation -- each
+                // row's transition bakes its own delay+curve (see
+                // AnyTransition.dominoPop) which overrides this ambient one
+                // for HOW it animates, but SwiftUI still uses the ambient
+                // transaction's duration to decide WHEN an insertion is
+                // "done". A short ambient duration cut every row past the
+                // first couple off mid-delay, before their own animation ever
+                // started.
                 withAnimation(.linear(duration: Self.sidebarEnterTotal)) { sidebarRowsHidden = false }
+                // The reveal is the last thing to play; once it has, animations
+                // go back to being switched off for the rest of a live drag.
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarEnterTotal) {
+                    if sidebarToggleGeneration == generation { sidebarSequencePlaying = false }
+                }
             }
         }
         .environment(\.isCompactHeight, isCompactHeight)
@@ -5102,9 +5147,11 @@ struct ContentView: View {
         // height, a section appearing or disappearing) used to start its own
         // animation mid-drag, stacking GPU work on top of the per-frame relayout
         // and making resizing feel sluggish. Scoped to live resize only, so
-        // every other animation in the app is unaffected.
+        // every other animation in the app is unaffected -- and the sidebar's
+        // own collapse/expand sequence is exempt (sidebarSequencePlaying), so
+        // it plays live as the drag crosses its threshold.
         .transaction { t in
-            if NSApp.keyWindow?.inLiveResize == true {
+            if NSApp.keyWindow?.inLiveResize == true, !sidebarSequencePlaying {
                 t.animation = nil
                 t.disablesAnimations = true
             }
@@ -5213,80 +5260,66 @@ struct ContentView: View {
     /// sitting as a flush edge-to-edge panel. Same three destinations and
     /// the same Tools pill / log toggle controls as the old horizontal tab
     /// bar, just re-flowed top-to-bottom.
-    /// Logo (and name when expanded) plus the collapse/expand toggle. The
-    /// toggle is hidden while the window is too narrow to expand at all.
-    // Split into two pieces (was one combined view) so the label and the
-    // toggle button can be independently staggered in the domino sequence
-    // (indices 0 and 1) -- per request, "label" and "collapse button" are
-    // two separate steps, not one. Each piece keeps its own compact/
-    // expanded look (icon-only vs icon+"Drop") via the SAME isCompactSidebar
-    // ZStack-mode-switch pattern used elsewhere, just applied to a smaller
-    // view now.
-    @ViewBuilder
-    private var sidebarLabel: some View {
-        ZStack(alignment: .top) {
-            if isCompactSidebar {
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.appMono(size: 14, weight: .semibold))
-                    .foregroundColor(DesignTokens.Accent.primary)
-                    .frame(maxWidth: .infinity)
-                    .transition(.blurIn)
+    /// Header: the collapse/expand toggle lives in a slot exactly as wide as
+    /// the collapsed rail, at the card's leading edge, so it sits in the same
+    /// spot whether the sidebar is open or closed. Open, the logo and "Drop"
+    /// sit beside it; closed there's nothing else on the row, so it never
+    /// crowds the narrow rail. While the window is too narrow to expand at all
+    /// the toggle has no job, so the logo takes its slot instead.
+    private var sidebarToggleSlot: some View {
+        ZStack {
+            if sidebarForcedCollapsed {
+                sidebarLogo
             } else {
-                HStack(spacing: 7) {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.appMono(size: 14, weight: .semibold))
-                        .foregroundColor(DesignTokens.Accent.primary)
-                    Text("Drop")
-                        .font(.appMono(size: 14, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                    Spacer()
+                HoverIconButton(
+                    icon: "sidebar.left", size: 13,
+                    help: isCompactSidebar ? "Expand sidebar" : "Collapse sidebar"
+                ) {
+                    sidebarCollapsedByUser.toggle()
                 }
-                .padding(.horizontal, 14)
-                .transition(.blurIn)
+                .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
             }
         }
+        .frame(width: WindowLayout.compactSidebarWidth)
     }
 
-    @ViewBuilder
-    private var sidebarToggleButton: some View {
-        // Hidden entirely while the window's too narrow to expand at all --
-        // matches the old `if !sidebarForcedCollapsed { toggle }` gating.
-        if !sidebarForcedCollapsed {
-            HoverIconButton(
-                icon: "sidebar.left", size: 13,
-                help: isCompactSidebar ? "Expand sidebar" : "Collapse sidebar"
-            ) {
-                // Marks the resulting isCompactSidebar change as user-initiated
-                // -- see sidebarUserInitiatedToggle's declaration and the
-                // onChange handler below for why this matters (only a
-                // deliberate tap gets the domino pop; the window merely
-                // crossing the width threshold never should).
-                sidebarUserInitiatedToggle = true
-                sidebarCollapsedByUser.toggle()
-            }
-            .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
-            .frame(maxWidth: isCompactSidebar ? .infinity : nil)
+    private var sidebarLogo: some View {
+        Image(systemName: "arrow.down.circle.fill")
+            .font(.appMono(size: 14, weight: .semibold))
+            .foregroundColor(DesignTokens.Accent.primary)
+    }
+
+    private var sidebarLabel: some View {
+        HStack(spacing: 7) {
+            sidebarLogo
+            Text("Drop")
+                .font(.appMono(size: 14, weight: .semibold))
+                .foregroundColor(.white.opacity(DesignTokens.Text.primary))
         }
     }
 
     var sidebar: some View {
         VStack(spacing: 0) {
-            // Header is two independent domino steps, not one: the label
-            // (icon + "Drop") is index 0, the collapse/expand button is
-            // index 1 -- each in its OWN `if !sidebarRowsHidden { ... }` so
-            // SwiftUI tracks them as separate insertions/removals (see the
-            // note on the nav items below for why shared conditionals don't
-            // stagger).
-            VStack(spacing: isTinyHeight ? 4 : 8) {
+            // Header is two independent reveal steps: the toggle slot is
+            // index 0 (leftmost, so it leads), the label (icon + "Drop", open
+            // only) is index 1 -- each in its OWN `if !sidebarRowsHidden`
+            // so SwiftUI tracks them as separate insertions/removals (see
+            // the note on the nav items below for why shared conditionals
+            // don't stagger). The label follows sidebarDisplayCompact, which
+            // only changes while every row is hidden.
+            HStack(spacing: 0) {
                 if !sidebarRowsHidden {
-                    sidebarLabel
+                    sidebarToggleSlot
                         .transition(.dominoPop(index: 0))
                 }
-                if !sidebarRowsHidden {
-                    sidebarToggleButton
-                        .transition(.dominoPop(index: 1))
+                if !sidebarRowsHidden, !sidebarDisplayCompact {
+                    sidebarLabel
+                        .padding(.leading, -8)
+                        .transition(sidebarAnimationStyle == .resize ? AnyTransition.blurInLeading : AnyTransition.dominoPop(index: 1))
                 }
+                Spacer(minLength: 0)
             }
+            .frame(height: 27)
             .padding(.top, isTinyHeight ? 8 : 16)
             .padding(.bottom, isTinyHeight ? 6 : 18)
 
@@ -5305,14 +5338,16 @@ struct ContentView: View {
             // the header above and ToolsStatusPill below also use).
             VStack(spacing: 6) {
                 if !sidebarRowsHidden {
-                SidebarTabItem(label: "Download", icon: "arrow.down.circle", isSelected: activeTab == .download) {
+                SidebarTabItem(label: "Download", icon: "arrow.down.circle", isSelected: activeTab == .download,
+                        badge: linkPreviews.isEmpty ? nil : "\(linkPreviews.count)") {
                     withAnimation(.spring(response: 0.25)) { activeTab = .download }
                 }
                 .accessibilityIdentifier("tab_download")
                 .transition(.dominoPop(index: 2))
                 }
                 if !sidebarRowsHidden {
-                SidebarTabItem(label: "Convert", icon: "arrow.triangle.2.circlepath", isSelected: activeTab == .convert) {
+                SidebarTabItem(label: "Convert", icon: "arrow.triangle.2.circlepath", isSelected: activeTab == .convert,
+                        badge: convertQueue.isEmpty ? nil : "\(convertQueue.count)") {
                     withAnimation(.spring(response: 0.25)) { activeTab = .convert }
                 }
                 .accessibilityIdentifier("tab_convert")

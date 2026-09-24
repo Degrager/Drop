@@ -2982,13 +2982,14 @@ extension AnyTransition {
             .animation(.easeIn(duration: 0.12))
     )
 
-    /// Same as `blurIn`, but growing from the leading edge -- for text that
-    /// appears beside an icon (sidebar labels) so it unfolds out of the icon
-    /// instead of scaling from its own centre.
+    /// Same as `blurIn`, but for text that appears beside an icon (sidebar
+    /// labels): a blur and a light fade only, with NO scale -- the pill around
+    /// it is what grows and shrinks (clipping the label as it goes), and a
+    /// scaling label made rows look like they were resizing vertically.
     static let blurInLeading = AnyTransition.asymmetric(
-        insertion: focus(blur: 4, scale: 0.85, opacity: 0.3, anchor: .leading)
+        insertion: focus(blur: 4, scale: 1, opacity: 0.3, anchor: .leading)
             .animation(.easeOut(duration: 0.2).delay(0.06)),
-        removal: focus(blur: 4, scale: 0.85, opacity: 0.3, anchor: .leading)
+        removal: focus(blur: 4, scale: 1, opacity: 0.3, anchor: .leading)
             .animation(.easeIn(duration: 0.1))
     )
 
@@ -3438,6 +3439,88 @@ final class GlassRimView: NSView {
 
     // Purely decorative: never takes a click or a hover.
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// The window's own background: the concept's soft radial glow, lightest near the
+/// top-left and falling off to near-black at the far corner. A Core Animation
+/// gradient layer (like GlassRim), so it is composited on the GPU and simply
+/// resizes with the window instead of being re-shaded on the CPU every frame.
+struct WindowBackdrop: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowBackdropView { WindowBackdropView() }
+    func updateNSView(_ nsView: WindowBackdropView, context: Context) {}
+}
+
+final class WindowBackdropView: NSView {
+    private let gradient = CAGradientLayer()
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        gradient.type = .radial
+        // CSS: radial-gradient(120% 90% at 18% 0%, #1b1b1b 0%, #101010 60%, #0c0c0c 100%).
+        // Unit space here has y pointing up, so the glow's centre (18% across, the
+        // top edge) is (0.18, 1); the end point sets the ellipse's radii, 120% of
+        // the width across and 90% of the height down.
+        gradient.startPoint = CGPoint(x: 0.18, y: 1)
+        gradient.endPoint = CGPoint(x: 0.18 + 1.2, y: 1 - 0.9)
+        gradient.colors = [
+            NSColor(srgbRed: 0x1b / 255, green: 0x1b / 255, blue: 0x1b / 255, alpha: 1).cgColor,
+            NSColor(srgbRed: 0x10 / 255, green: 0x10 / 255, blue: 0x10 / 255, alpha: 1).cgColor,
+            NSColor(srgbRed: 0x0c / 255, green: 0x0c / 255, blue: 0x0c / 255, alpha: 1).cgColor,
+        ]
+        gradient.locations = [0, 0.6, 1]
+        layer?.addSublayer(gradient)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = bounds
+        CATransaction.commit()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        gradient.contentsScale = window?.backingScaleFactor ?? 2
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// Zero-mean dither for the window background: each pixel of a small tile is
+/// white or black at 0-2/255 alpha, so it nudges the gradient's 8-bit steps by
+/// a level either way without shifting its average brightness (DitherNoise's
+/// overlay-blended tile lifts what it sits on by several levels, which would
+/// have washed the backdrop out past the concept's colours).
+struct WindowDither: View {
+    private static let tile: CGImage = {
+        let size = 64
+        var rng = SystemRandomNumberGenerator()
+        var pixels = [UInt8](repeating: 0, count: size * size * 4)
+        for i in 0..<(size * size) {
+            let alpha = UInt8.random(in: 0...2, using: &rng)
+            let white = Bool.random(using: &rng)
+            let o = i * 4
+            // Premultiplied: a white pixel's colour equals its alpha.
+            let v: UInt8 = white ? alpha : 0
+            pixels[o] = v; pixels[o + 1] = v; pixels[o + 2] = v; pixels[o + 3] = alpha
+        }
+        let ctx = CGContext(
+            data: &pixels, width: size, height: size, bitsPerComponent: 8,
+            bytesPerRow: size * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        return ctx.makeImage()!
+    }()
+
+    var body: some View {
+        Image(decorative: Self.tile, scale: 2, orientation: .up)
+            .resizable(resizingMode: .tile)
+            .allowsHitTesting(false)
+    }
 }
 
 struct GlassCard: ViewModifier {
@@ -4122,10 +4205,9 @@ struct SidebarToolRow: View {
                 .frame(minWidth: compact ? 0 : 58, minHeight: compact ? 0 : 22)
                 .padding(.horizontal, compact ? 0 : 6)
                 .background(accent.opacity(compact ? 0 : 0.1))
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
+                .clipShape(Capsule())
                 .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                        .stroke(accent.opacity(compact ? 0 : (updateAvailable ? 0.45 : 0.14)), lineWidth: 0.5)
+                    Capsule().stroke(accent.opacity(compact ? 0 : (updateAvailable ? 0.45 : 0.14)), lineWidth: 0.5)
                 )
         }
         // Open: room on the left for the status glyph, which sits on the rail
@@ -4221,7 +4303,9 @@ struct ToolsDropdownContent: View {
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex + 3)
             }
             .padding(WindowLayout.updateCardInset)
-            .innerCard()
+            // Large radius: the capsule button inside has a ~15pt radius and sits
+            // 4pt in, so 20 keeps its corners concentric with the card's.
+            .innerCard(cornerRadius: DesignTokens.Radius.large)
             .padding(.top, 4)
         }
     }
@@ -4287,7 +4371,8 @@ struct CheckForUpdatesButton: View {
     }
 
     var body: some View {
-        GlassInteractive(shape: .capsule, tint: tint, isActive: false, disabled: isDisabled, action: action) {
+        GlassInteractive(shape: .capsule, tint: tint, isActive: false, disabled: isDisabled,
+                         scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress), action: action) {
             HStack(spacing: 6) {
                 Group {
                     if isChecking {
@@ -5000,23 +5085,14 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // Window-wide black-frosted glass base. The window itself is
-            // non-opaque (see DropAppDelegate) so this NSVisualEffectView
-            // genuinely refracts real desktop/window content behind Drop
-            // via .behindWindow blending. NSVisualEffectView has no
-            // exposed blur-radius knob (its diffusion amount is fixed by
-            // material), so an extra SwiftUI .blur() pass is layered on
-            // top of the material to push the refracted content softer/
-            // more diffused -- real content is still genuinely showing
-            // through, just less sharply resolved, which reads as heavier
-            // frosting. Black tint raised (0.55 -> 0.74, close to the
-            // per-card 0.72) for a darker base per zanderriley's request,
-            // while cards stay a hair above that so they still read as a
-            // slightly deeper layer floating on top.
-            VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                .blur(radius: 18)
+            // Window-wide base: the concept's soft radial glow (see
+            // WindowBackdrop) -- a touch lighter than the flat black frosting it
+            // replaces. The tiny dither tile breaks up 8-bit banding across
+            // such a dark, slow ramp; the cards above still carry their own
+            // black-frosted glass.
+            WindowBackdrop()
                 .ignoresSafeArea()
-            Color.black.opacity(0.74)
+            WindowDither()
                 .ignoresSafeArea()
 
             // Main layout — sidebar on the left, active tab's content on the
@@ -5031,17 +5107,13 @@ struct ContentView: View {
 
                 VStack(spacing: 0) {
                     // Active tab content -- structurally unrelated pages, so
-                    // they swap with `.pageSwap`: the outgoing page blurs
-                    // away quickly while the incoming one focuses in a beat
-                    // later. The stagger matters -- the old cross-fade laid
-                    // both pages' headers over each other, which is why this
-                    // used to be a hard cut. Blur (not opacity) also keeps
-                    // the glass cards from greying out mid-switch.
+                    // they swap instantly: no fade, blur or scale between them
+                    // (see the transaction override on the Group below).
                     ZStack(alignment: .top) {
                     Group {
                         if activeTab == .download {
                             mainPanel
-                                .transition(.pageSwap)
+                                .transition(.identity)
                         } else if activeTab == .history {
                             HistoryView(history: manager.history, activeTab: $activeTab, urlText: $urlText, hasInvalidURLs: $hasInvalidURLs, linkPreviews: $linkPreviews, config: config, onAnalyze: { urls, ids in analyzeURL(urls: urls, ids: ids) }, onReconvert: { fileURL in
                                 // Treat Reconvert exactly like freshly dropping/importing the original
@@ -5071,10 +5143,10 @@ struct ContentView: View {
                             // the content column" here is capping the whole panel -- the
                             // same shared column width and centering as every other tab.
                             .contentColumn()
-                            .transition(.pageSwap)
+                            .transition(.identity)
                         } else if activeTab == .convert {
                             ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
-                                .transition(.pageSwap)
+                                .transition(.identity)
                         } else if activeTab == .devRelease {
                             // Real content is devReleaseOverlay below, kept
                             // permanently mounted instead of created fresh
@@ -5087,13 +5159,19 @@ struct ContentView: View {
                             // convention as History, not a card floating on a page.
                             LogView(logs: manager.globalLogs)
                                 .contentColumn()
-                                .transition(.pageSwap)
+                                .transition(.identity)
                         }
                     }
-                    // Scoped to `activeTab` so only the page swap picks up this
-                    // spring; other state changes inside the subtree (card
-                    // spawns, thumbnail loads) keep their own animations.
-                    .animation(.easeOut(duration: 0.2), value: activeTab)
+                    // A tab click runs inside withAnimation (the sidebar's
+                    // highlight uses it), and an animated transaction would
+                    // cross-fade the outgoing and incoming pages -- and let the
+                    // cards' own removal transitions play as a ghost of the old
+                    // page; `.transition(.identity)` on each page root is what
+                    // takes the whole page out in one piece. Scoped to
+                    // `activeTab` so ONLY the page swap is made instant; card
+                    // spawns, thumbnail loads and the rest of the subtree keep
+                    // their own animations.
+                    .transaction(value: activeTab) { $0.animation = nil }
 
                     // Dev tab, unlike the others above, keeps essentially
                     // all of its own state locally (pipeline, typed-in
@@ -5107,8 +5185,7 @@ struct ContentView: View {
                     // toggling opacity/hit-testing preserves its state for
                     // as long as the app runs, matching every other tab's
                     // actual persistence even though the mechanism here is
-                    // different. It gets the same focus effect as `.pageSwap`
-                    // so it moves like the other pages.
+                    // different. It switches instantly like the other pages.
                     #if DEV_BUILD
                     if DevKeychain.isDevMachine {
                         // ActiveOnlyLayout keeps it mounted (state survives) but
@@ -5121,14 +5198,9 @@ struct ContentView: View {
                                 .contentColumn()
                                 .transaction(value: activeTab) { $0.animation = nil }
                         }
-                            .modifier(FocusEffect(
-                                blur: activeTab == .devRelease ? 0 : 4,
-                                scale: activeTab == .devRelease ? 1 : 0.985,
-                                opacity: activeTab == .devRelease ? 1 : 0,
-                                anchor: .top
-                            ))
+                            .opacity(activeTab == .devRelease ? 1 : 0)
                             .allowsHitTesting(activeTab == .devRelease)
-                            .animation(.easeOut(duration: 0.2), value: activeTab)
+                            .transaction(value: activeTab) { $0.animation = nil }
                     }
                     #endif
                     }
@@ -5634,6 +5706,7 @@ struct ContentView: View {
                         label: isBatchMode ? "Done" : "Select",
                         icon: isBatchMode ? "xmark.circle" : "checkmark.circle",
                         tint: DesignTokens.Accent.primary,
+                        verticalPadding: 2,
                         fitContent: true
                     ) {
                         withAnimation(.spring(response: 0.25)) {
@@ -5651,6 +5724,7 @@ struct ContentView: View {
                             label: allEligibleLinksSelected ? "Deselect All" : "Select All",
                             icon: allEligibleLinksSelected ? "circle" : "checkmark.circle",
                             tint: .white,
+                            verticalPadding: 2,
                             fitContent: true
                         ) {
                             withAnimation(.spring(response: 0.25)) {
@@ -5668,6 +5742,7 @@ struct ContentView: View {
                             label: allLinksCollapsed ? "Expand All" : "Collapse All",
                             icon: allLinksCollapsed ? "chevron.down" : "chevron.up",
                             tint: .white,
+                            verticalPadding: 2,
                             fitContent: true,
                             disabled: !hasExpandableLinks
                         ) {
@@ -5680,6 +5755,7 @@ struct ContentView: View {
                         label: isBatchMode ? "Clear Selected" : "Clear All",
                         icon: "trash",
                         tint: .red,
+                        verticalPadding: 2,
                         fitContent: true,
                         disabled: isBatchMode && !linkPreviews.contains { $0.isSelected }
                     ) {
@@ -5869,21 +5945,10 @@ struct ContentView: View {
             } batchDirectoryControl: {
                 // The destination, on the same row as the Auto-Open Folder toggle:
                 // the folder as a capsule (editable path, with the estimated total
-                // size at its trailing end), Browse as a capsule, and Reveal.
+                // size at its trailing end), then Browse and Reveal as icon buttons.
                 // No SAVE TO label -- the folder itself says what it is.
                 HStack(spacing: DropGrid.rowSpacing) {
                     FieldCapsule {
-                        FieldBrowseButton {
-                            let panel = NSOpenPanel()
-                            panel.canChooseFiles = false
-                            panel.canChooseDirectories = true
-                            panel.canCreateDirectories = true
-                            panel.allowsMultipleSelection = false
-                            panel.prompt = "Select"
-                            if panel.runModal() == .OK, let url = panel.url {
-                                config.outputDir = url.path
-                            }
-                        }
                         TextField("", text: $config.outputDir)
                             .textFieldStyle(.plain)
                             .font(.appMono(size: DropGrid.fieldFontSize))
@@ -5892,13 +5957,7 @@ struct ContentView: View {
                     }
                     .help("Save to this folder" + (totalEstimatedSizeLabel.map { " · est. \($0)" } ?? ""))
 
-                    // Always-available Reveal -- same control Convert's folder
-                    // row has, opening the shared output directory in Finder
-                    // any time, not tied to any single download.
-                    HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Open the save folder in Finder") {
-                        NSWorkspace.shared.open(URL(fileURLWithPath: config.outputDir))
-                    }
-                    .frame(height: DropGrid.controlHeight)
+                    FolderActionButtons(path: config.outputDir) { config.outputDir = $0 }
                 }
                 .frame(maxWidth: .infinity)
             }

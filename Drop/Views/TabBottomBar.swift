@@ -124,30 +124,20 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
 
     private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.barStackBreakpoint }
 
-    /// Auto-open Folder as one compact chip: lit blue when on, plain when off.
-    /// (It used to be an icon, "AUTO-OPEN", "On"/"Off" and a switch -- about
-    /// 200pt for one setting.) The tooltip says what it does.
+    /// Auto-open Folder as an icon button like Browse and Reveal: lit blue when
+    /// on, plain when off. Its hover caption says what it does and whether it is
+    /// on.
     private var autoOpenToggle: some View {
-        GlassInteractive(
-            shape: .capsule,
-            tint: config.autoOpenFolder ? DesignTokens.Accent.primary : .white,
+        HoverIconButton(
+            icon: "folder.badge.gearshape", size: 13,
+            activeColor: DesignTokens.Accent.primary,
             isActive: config.autoOpenFolder,
-            action: { config.autoOpenFolder.toggle() }
+            help: config.autoOpenFolder ? "Auto-open folder: On" : "Auto-open folder: Off",
+            expandable: true
         ) {
-            HStack(spacing: 5) {
-                Image(systemName: "folder.badge.gearshape")
-                    .font(.appMono(size: 11, weight: .semibold))
-                Text("Auto-open")
-                    .font(.appMono(size: 10.5, weight: .semibold))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 11)
-            .frame(height: DropGrid.controlHeight)
+            config.autoOpenFolder.toggle()
         }
-        .fixedSize()
-        .help(config.autoOpenFolder
-              ? "Auto-open is on: the save folder opens when a run finishes"
-              : "Auto-open is off: click to open the save folder when a run finishes")
+        .frame(height: DropGrid.controlHeight)
     }
 
     var body: some View {
@@ -179,8 +169,10 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                             VStack(alignment: .leading, spacing: 8) {
                                 leftControls()
                                     .frame(height: DropGrid.controlHeight)
-                                batchDirectoryControl()
-                                autoOpenToggle
+                                HStack(spacing: DropGrid.rowSpacing) {
+                                    batchDirectoryControl()
+                                    autoOpenToggle
+                                }
                                 if showClearAll {
                                     GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
                                         .frame(height: DropGrid.controlHeight)
@@ -189,8 +181,8 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                             .frame(maxWidth: .infinity, alignment: .leading)
                         } else {
                             // The destination (folder, Browse, Reveal), a divider,
-                            // then the Auto-Open Folder toggle. All controls in the
-                            // row share DropGrid.controlHeight so nothing sits a
+                            // then the Auto-Open Folder icon button. All controls in
+                            // the row share DropGrid.controlHeight so nothing sits a
                             // pixel off from its neighbor.
                             HStack(alignment: .center, spacing: DropGrid.rowSpacing + 4) {
                                 leftControls()

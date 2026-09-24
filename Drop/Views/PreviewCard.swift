@@ -55,6 +55,9 @@ struct PreviewCard<Settings: View>: View {
     /// A control for the header's trailing edge, beside the collapse and remove
     /// buttons (Convert's list of staged files).
     var headerAccessory: AnyView? = nil
+    /// Buttons along the bottom of the card, below the settings (Convert's
+    /// Add to Queue).
+    var footer: AnyView? = nil
 
     /// Extra always-visible row rendered below the header but OUTSIDE
     /// cardHeader's own HStack -- e.g. Download's Video+Audio/Audio Only
@@ -146,6 +149,7 @@ struct PreviewCard<Settings: View>: View {
                     GlassDivider().transition(.blurInTop)
                     settings().transition(.blurInTop)
                 }
+                if let footer { footer }
             }
         }
         // De-emphasise unselected cards in batch-select mode by dimming the
@@ -187,15 +191,15 @@ struct PreviewCard<Settings: View>: View {
     private var cardHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             cardHeaderRow
-            if narrow, !isAnalyzing {
-                if !secondaryTitle.isEmpty {
-                    Text(secondaryTitle)
-                        .font(.appMono(size: 10))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                        .lineLimit(1).truncationMode(.middle)
-                        .transition(.blurIn)
-                }
-                if let sub = subtitle { sub.transition(.blurIn) }
+            if narrow, !isAnalyzing, let sub = subtitle { sub.transition(.blurIn) }
+            // The link / file path lives on its own line, and only while the
+            // card is expanded -- collapsed cards stay a single compact row.
+            if expanded, !isAnalyzing, !secondaryTitle.isEmpty {
+                Text(secondaryTitle)
+                    .font(.appMono(size: 10))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                    .lineLimit(1).truncationMode(.middle)
+                    .transition(.blurInTop)
             }
         }
     }
@@ -327,16 +331,6 @@ struct PreviewCard<Settings: View>: View {
                 .animation(.easeInOut(duration: 0.3), value: canRevealAnalyzed)
                 .animation(.easeInOut(duration: 0.35), value: isAnalyzing)
                 .layoutPriority(1)
-                // The link / file path, dim, on the title's own line. In a narrow
-                // column it moves down with the metadata (see cardHeader).
-                if !isAnalyzing, !secondaryTitle.isEmpty, !narrow {
-                    Text(secondaryTitle)
-                        .font(.appMono(size: 10))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .transition(.blurIn)
-                }
                 }
 
                 if isAnalyzing {
@@ -493,6 +487,9 @@ struct CompletedCard<Status: View>: View {
     var isSelected: Bool
     var onToggleSelect: () -> Void
     var onRemove: () -> Void
+    /// When set, the red Remove button becomes an orange Cancel running this
+    /// (a Convert queue row whose job is converting).
+    var onCancel: (() -> Void)? = nil
     /// Hides the selection checkbox entirely when false. Defaults to true so
     /// existing call sites (Download tab) keep the always-visible checkbox.
     var showCheckbox: Bool = true
@@ -583,6 +580,20 @@ struct CompletedCard<Status: View>: View {
         }
     }
 
+    /// Remove, or Cancel while the row's work is in flight.
+    @ViewBuilder
+    private var removeOrCancelButton: some View {
+        if let onCancel {
+            HoverIconButton(icon: "stop.circle.fill", size: 16, color: .orange, help: "Cancel", expandable: true) {
+                onCancel()
+            }
+        } else {
+            HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: true) {
+                onRemove()
+            }
+        }
+    }
+
     @ViewBuilder
     private var cardHeaderRow: some View {
         HStack(spacing: compact ? 8 : 12) {
@@ -637,9 +648,7 @@ struct CompletedCard<Status: View>: View {
             // remove control, so "this deletes the item" reads identically
             // everywhere in the app. trailingAccessory (e.g. Edit) stacks
             // directly beneath it rather than living in its own row/section.
-            let removeButton = HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: true) {
-                onRemove()
-            }
+            let removeButton = removeOrCancelButton
             if flat {
                 // Beside each other, so the row stays one line tall.
                 HStack(spacing: 6) {

@@ -512,6 +512,11 @@ struct SidebarTabItem: View {
                     }
                 }
             }
+            // One fixed content height, so a pill is exactly as tall collapsed
+            // (icon only) as open (label + count badge, which is a point taller
+            // than the label alone) -- the rows never grow or shrink
+            // vertically while the sidebar changes width.
+            .frame(height: 17)
             .padding(.leading, Self.iconInset)
             .padding(.trailing, 14)
             .foregroundColor(isSelected ? Self.accent : .white.opacity(DesignTokens.Text.secondary))
@@ -922,26 +927,29 @@ struct FieldCapsule<Content: View>: View {
     }
 }
 
-/// The folder capsule's leading icon, doubling as the Browse button: a tinted
-/// folder in a soft circle that lights up under the pointer.
-struct FieldBrowseButton: View {
-    var help: String = "Browse…"
-    let action: () -> Void
-    @State private var hovering = false
+/// Browse and Reveal, side by side next to a folder capsule: the same icon
+/// buttons as everywhere else, each with a hover caption saying what it does.
+struct FolderActionButtons: View {
+    let path: String
+    let onChoose: (String) -> Void
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: "folder.fill")
-                .font(.appMono(size: DropGrid.fieldFontSize))
-                .foregroundColor(hovering ? DesignTokens.Accent.primaryLight : DesignTokens.Accent.primary)
-                .frame(width: 22, height: 22)
-                .background(Circle().fill(DesignTokens.Accent.primary.opacity(hovering ? 0.22 : 0.12)))
-                .overlay(Circle().stroke(DesignTokens.Accent.primary.opacity(hovering ? 0.6 : 0.3), lineWidth: 0.75))
+        HStack(spacing: DropGrid.rowSpacing) {
+            HoverIconButton(icon: "folder", size: 13, help: "Choose folder", expandable: true) {
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = false
+                panel.canChooseDirectories = true
+                panel.canCreateDirectories = true
+                panel.allowsMultipleSelection = false
+                panel.prompt = "Select"
+                panel.directoryURL = URL(fileURLWithPath: path)
+                if panel.runModal() == .OK, let url = panel.url { onChoose(url.path) }
+            }
+            HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Reveal in Finder", expandable: true) {
+                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            }
         }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovering)
-        .help(help)
+        .frame(height: DropGrid.controlHeight)
     }
 }
 
@@ -969,7 +977,7 @@ extension View {
     /// sidebar's update block): the same recipe the bottom bar's SAVE TO
     /// section has always used, so utility zones read as separate from the
     /// black content cards around them.
-    func innerCard() -> some View {
-        glassCard(cornerRadius: DesignTokens.Radius.medium, opacity: 0.35)
+    func innerCard(cornerRadius: CGFloat = DesignTokens.Radius.medium) -> some View {
+        glassCard(cornerRadius: cornerRadius, opacity: 0.35)
     }
 }

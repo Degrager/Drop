@@ -11,21 +11,12 @@ import QuickLookThumbnailing
 enum WindowLayout {
     // MARK: Window size
 
-    /// The smallest the window may ever be, whatever the screen: the point
-    /// below which even the collapsed layout (icon sidebar, cards at their
-    /// minimum width, everything scrolling) stops working.
-    static let absoluteMinimumSize = NSSize(width: 488, height: 320)
-    /// The window minimum is a quarter of the screen it's on (see
-    /// minimumSize(for:)), so it scales with the display instead of being one
-    /// fixed number.
-    static let minimumScreenFraction: CGFloat = 0.25
-    static let firstLaunchSize = NSSize(width: 1000, height: 720)
-
-    static func minimumSize(for screen: NSScreen?) -> NSSize {
-        let visible = (screen ?? NSScreen.main)?.visibleFrame.size ?? NSSize(width: 1440, height: 900)
-        return NSSize(width: max(absoluteMinimumSize.width, (visible.width * minimumScreenFraction).rounded()),
-                      height: max(absoluteMinimumSize.height, (visible.height * minimumScreenFraction).rounded()))
-    }
+    /// Hard window minimum. Both numbers are the WHOLE window frame (title bar
+    /// included) -- what Accessibility Inspector reports and NSWindow.minSize
+    /// takes -- not the content area.
+    static let minimumSize = NSSize(width: 800, height: 800)
+    /// Every launch opens at this frame size (see DropAppDelegate).
+    static let defaultSize = NSSize(width: 1050, height: 800)
 
     // MARK: Sidebar
 
@@ -122,6 +113,31 @@ extension EnvironmentValues {
     }
 }
 
+/// Gives its one child exactly `width` when there's room, but never REPORTS
+/// `width` as a minimum: it reports whatever it's proposed, capped at `width`.
+/// A plain `.frame(width:)` reports `width` as a hard minimum, and since the
+/// column width is derived from the last settled window width, the window's
+/// own minimum size was propped up by the size it had a moment ago -- a drag
+/// (or programmatic resize) toward the real minimum stalled well above it and
+/// only crept down a step at a time.
+private struct ContentColumnLayout: Layout {
+    var width: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let w = min(width, proposal.width ?? width)
+        let size = child.sizeThatFits(ProposedViewSize(width: w, height: proposal.height))
+        return CGSize(width: w, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        let w = min(width, bounds.width)
+        child.place(at: CGPoint(x: bounds.midX, y: bounds.minY), anchor: .top,
+                    proposal: ProposedViewSize(width: w, height: bounds.height))
+    }
+}
+
 extension View {
     /// Fixes a view to the shared content column, centered in its container.
     /// The column already leaves the side padding, so callers add none of
@@ -130,7 +146,7 @@ extension View {
     @ViewBuilder
     func contentColumn(_ width: CGFloat) -> some View {
         if width > 0 {
-            self.frame(width: width).frame(maxWidth: .infinity)
+            ContentColumnLayout(width: width) { self }.frame(maxWidth: .infinity)
         } else {
             self.padding(.horizontal, WindowLayout.minSidePadding)
         }
@@ -296,7 +312,6 @@ struct SidebarTabItem: View {
     var badge: String? = nil
     let action: () -> Void
     @Environment(\.isCompactSidebar) private var compact
-    @Environment(\.sidebarWidth) private var sidebarWidth
     @Environment(\.isTinyHeight) private var tiny
 
     private static let accent = DesignTokens.Accent.primary
@@ -307,6 +322,10 @@ struct SidebarTabItem: View {
     // Only the selected tab should carry the accent color; unselected
     // tabs get a plain white/grey rim instead.
     private static let neutral = Color.white
+    private static let iconSlot: CGFloat = 18
+    /// Leading inset that centers the icon slot in the COLLAPSED pill
+    /// (compactSidebarWidth - the 24pt of side room the pill leaves).
+    private static let iconInset: CGFloat = (WindowLayout.compactSidebarWidth - 24 - iconSlot) / 2
 
     var body: some View {
         GlassInteractive(
@@ -324,33 +343,48 @@ struct SidebarTabItem: View {
             action: action
         ) {
             HStack(spacing: 7) {
+                // The icon sits in a fixed slot at a fixed inset, so it stays
+                // exactly where it is whether the pill is wide (icon + label)
+                // or collapsed to an icon -- there it happens to be centered
+                // (see iconInset), and the label just appears to its right.
                 Image(systemName: icon)
-                    .font(.appMono(size: compact ? 15 : 13))
+                    .font(.appMono(size: 14))
+                    .frame(width: Self.iconSlot)
                 if !compact {
-                Text(label)
-                    .font(.appMono(size: 13, weight: isSelected ? .semibold : .medium))
-                    .lineLimit(1)
-                    .transition(.blurInLeading)
-                }
-                if let badge = badge, !compact {
-                    // Same accent-tinted glass badge language as TabChip and
-                    // every other badge/chip in the app.
-                    Text(badge)
-                        .font(.appMono(size: 9, weight: .semibold))
-                        .foregroundColor(isSelected ? Self.accent : .white.opacity(DesignTokens.Text.secondary))
-                        .padding(.horizontal, 6).padding(.vertical, 3)
-                        .background(Self.accent.opacity(isSelected ? 0.18 : 0.12))
-                        .clipShape(Capsule())
+                    Text(label)
+                        .font(.appMono(size: 13, weight: isSelected ? .semibold : .medium))
+                        .lineLimit(1)
                         .transition(.blurInLeading)
+                    // Pushes the count to the pill's trailing edge; the label
+                    // and icon stay leading-aligned.
+                    Spacer(minLength: 0)
+                    if let badge = badge {
+                        // Same accent-tinted glass badge language as TabChip and
+                        // every other badge/chip in the app.
+                        Text(badge)
+                            .font(.appMono(size: 9, weight: .semibold))
+                            .foregroundColor(isSelected ? Self.accent : .white.opacity(DesignTokens.Text.secondary))
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(Self.accent.opacity(isSelected ? 0.18 : 0.12))
+                            .clipShape(Capsule())
+                            .transition(.blurInLeading)
+                    }
                 }
             }
-            // Centered, fixed consistent width instead of stretching full
-            // sidebar width -- all tabs now the same size regardless of
-            // label length. Sidebar is 240pt wide, so 216 = 90% of that.
+            .padding(.leading, Self.iconInset)
+            .padding(.trailing, 14)
             .foregroundColor(isSelected ? Self.accent : .white.opacity(DesignTokens.Text.secondary))
-            // From the card's animated width, so the pill shrinks to an icon WITH the
-            // sidebar rather than snapping to icon size the instant the flag flips.
-            .frame(width: max(sidebarWidth - 24, 0), alignment: .center)
+            // Fills whatever width the card gives it (the card's own frame, less
+            // the row's side padding, is 24pt narrower) rather than reading the
+            // width itself: a per-pill `.frame(width:)` from an environment
+            // value gave each pill its own animated attribute, and different
+            // tabs picked up different animation curves mid-collapse, so some
+            // shrank well before others. Sized by layout from ONE animated
+            // frame, every pill is in lock-step by construction.
+            // Leading-aligned; clipped so a label that's still on its way out can't
+            // spill past a pill that's already narrower than it.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
             .padding(.vertical, tiny ? 6 : 11)
             // Scoped to isSelected specifically -- without this, the label/
             // icon color change riding along with GlassInteractive's own

@@ -835,7 +835,6 @@ struct ConvertView: View {
     /// Shared content column and vertical density (see WindowLayout) -- the
     /// Analyze panel, drop zone and bottom bar all use the same width as
     /// Download's rows.
-    @Environment(\.contentColumnWidth) private var columnWidth
     @Environment(\.isCompactHeight) private var compactHeight
     @Environment(\.isTinyHeight) private var tinyHeight
 
@@ -852,6 +851,10 @@ struct ConvertView: View {
     /// Custom file-switcher popup open state (Analyze panel) -- a plain
     /// Bool, not a native Menu, so the popup can be fully custom-styled.
     @State private var isFileSwitcherOpen = false
+    /// The Analyze card's live width, measured only while the file-switcher
+    /// popup is open (it caps the popup at ~65% of the card). Not the
+    /// environment's contentColumnWidth: that is only a breakpoint class now.
+    @State private var switcherCardWidth: CGFloat = 0
     /// Row currently hovered inside fileSwitcherPopup -- drives its hover
     /// highlight, the same interactive-fill-on-hover language every other
     /// button/row in the app uses (DesignTokens.Interactive.fillHover),
@@ -1005,7 +1008,7 @@ struct ConvertView: View {
         .overlay {
             HoverGlowRim(isActive: isDropZoneHovering || isDragging)
         }
-        .contentColumn(columnWidth)
+        .contentColumn()
         // No blanket .onTapGesture here -- tap-to-browse is scoped to the
         // leading label area above; the embedded Browse button handles
         // its own hit area. Hover/drag feedback still applies to the
@@ -1199,7 +1202,7 @@ struct ConvertView: View {
         // filenames need room to grow past the trigger pill's width, but
         // still shouldn't be free to blow out to an arbitrary width for a
         // very long name.
-        .frame(maxWidth: columnWidth > 0 ? columnWidth * 0.65 : nil, alignment: .leading)
+        .frame(maxWidth: switcherCardWidth > 0 ? switcherCardWidth * 0.65 : nil, alignment: .leading)
         .background(
             ZStack {
                 VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
@@ -1340,7 +1343,16 @@ struct ConvertView: View {
             // glassCard, and two stacked full-strength layers read as muddy.
             .glassCard(cornerRadius: DesignTokens.Radius.xlarge, opacity: 0.35)
             .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
-            .contentColumn(columnWidth)
+            .background {
+                if isFileSwitcherOpen {
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { switcherCardWidth = geo.size.width }
+                            .onChange(of: geo.size.width) { _, w in switcherCardWidth = w }
+                    }
+                }
+            }
+            .contentColumn()
             // Both branches of this if/else take layout space, so the outgoing
             // one must leave instantly -- see AnyTransition.glassPopInOnly.
             .transition(.glassPopInOnly)

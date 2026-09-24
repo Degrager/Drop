@@ -130,7 +130,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                                 .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
                                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                                 .frame(width: 14, alignment: .center)
-                            Text(columnWidth > 0 && columnWidth < 720 ? "AUTO-OPEN" : "AUTO-OPEN FOLDER")
+                            Text(columnWidth > 0 && columnWidth < WindowLayout.barLabelBreakpoint ? "AUTO-OPEN" : "AUTO-OPEN FOLDER")
                                 .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
                                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                             Text(config.autoOpenFolder ? "On" : "Off")
@@ -305,7 +305,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                 .padding(.vertical, compactHeight ? 10 : 16)
                 .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
-                .contentColumn(columnWidth)
+                .contentColumn()
                 .padding(.bottom, compactHeight ? 8 : 14)
                 .transition(.glassBar(anchor: .bottom))
             }

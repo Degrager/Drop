@@ -130,7 +130,9 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                                 .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
                                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                                 .frame(width: 14, alignment: .center)
-                            Text(columnWidth > 0 && columnWidth < WindowLayout.barLabelBreakpoint ? "AUTO-OPEN" : "AUTO-OPEN FOLDER")
+                            // Short label always: the destination shares this row now,
+                            // and the toggle's own On/Off text says the rest.
+                            Text("AUTO-OPEN")
                                 .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
                                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                             Text(config.autoOpenFolder ? "On" : "Off")
@@ -156,63 +158,61 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
             if hasItems {
                 VStack(spacing: compactHeight ? 8 : 12) {
 
-                    // Extra controls (e.g. Convert's Queue drawer) — rendered
-                    // ABOVE the directory/toggle row and the rest of this
-                    // bar's chrome, with its own divider, so a tab that uses
-                    // this slot for something substantial (a whole card) reads
-                    // as "queue, then destination" top to bottom. Download
-                    // never populates this slot, so this reorder is a no-op there.
-                    let extra = extraControls()
-                    if showExtraControls && !(extra is EmptyView) {
-                        extra
-                        GlassDivider()
-                    }
+                    // The grey inner card: everything that isn't the primary
+                    // action. Convert's queue sits at the top (its slot is
+                    // `extraControls`), a divider line separates it from the
+                    // destination row below -- so it reads as "queue, then
+                    // destination" top to bottom. Download never populates the
+                    // queue slot, so its card is just the destination row.
+                    VStack(alignment: .leading, spacing: compactHeight ? 8 : 10) {
+                        let extra = extraControls()
+                        if showExtraControls && !(extra is EmptyView) {
+                            extra
+                            GlassDivider()
+                        }
 
-                    // In a narrow column the toggle and the folder field can't share
-                    // one row without the field collapsing, so they stack.
-                    if narrow {
-                        VStack(alignment: .leading, spacing: 8) {
-                            leftControls()
-                                .frame(height: DropGrid.controlHeight)
-                            autoOpenToggle
-                            batchDirectoryControl()
-                            if showClearAll {
-                                GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                        // In a narrow column the toggle and the folder field can't share
+                        // one row without the field collapsing, so they stack.
+                        if narrow {
+                            VStack(alignment: .leading, spacing: 8) {
+                                leftControls()
                                     .frame(height: DropGrid.controlHeight)
+                                batchDirectoryControl()
+                                autoOpenToggle
+                                if showClearAll {
+                                    GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                                        .frame(height: DropGrid.controlHeight)
+                                }
                             }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        // Top row — Cookies picker (leftControls) + Auto-Open Folder toggle, aligned with Clear All.
-                        // All controls in this row share DropGrid.controlHeight so nothing sits a pixel off from its neighbor.
-                        HStack(alignment: .center, spacing: DropGrid.sectionSpacing) {
-                            leftControls()
-                                .frame(height: DropGrid.controlHeight)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            // The destination (folder, Browse, Reveal), a divider,
+                            // then the Auto-Open Folder toggle. All controls in the
+                            // row share DropGrid.controlHeight so nothing sits a
+                            // pixel off from its neighbor.
+                            HStack(alignment: .center, spacing: DropGrid.rowSpacing + 4) {
+                                leftControls()
+                                    .frame(height: DropGrid.controlHeight)
 
-                            autoOpenToggle
+                                batchDirectoryControl()
+                                    .layoutPriority(1)
 
-                            batchDirectoryControl()
-                                .layoutPriority(1)
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.14))
+                                    .frame(width: 0.75, height: DropGrid.controlHeight - 8)
 
-                            // Only add a trailing Spacer when there's nothing else
-                            // to fill the row (batchDirectoryControl is empty and
-                            // Clear All is hidden) — otherwise leading controls
-                            // (leftControls / Auto-Open Folder toggle) would get
-                            // centered instead of staying pinned left. When
-                            // batchDirectoryControl IS present, it already expands
-                            // to fill all remaining width itself, so no Spacer is
-                            // needed and none is added — avoids the dead gap on
-                            // the right that a competing Spacer would create.
-                            if !hasBatchDirectoryControl && !showClearAll {
-                                Spacer(minLength: 0)
-                            }
-                            if showClearAll {
-                                Spacer(minLength: 0)
-                                GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
-                                    .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
+                                autoOpenToggle
+
+                                if showClearAll {
+                                    Spacer(minLength: 0)
+                                    GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                                        .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
+                                }
                             }
                         }
                     }
+                    .padding(10)
+                    .innerCard()
 
                     // Primary action button.
                     // Deliberately the ONE control in the entire app that isn't glass --

@@ -36,6 +36,7 @@ enum DropGrid {
     static let sectionSpacing: CGFloat = 16        // gap between major row groups (leftControls / toggle / Clear All)
     static let labelSpacing: CGFloat = 6           // gap between a micro-label and its control
     static let buttonColumnWidth: CGFloat = 120    // fixed width for Browse / Clear All / Paste & Analyze columns
+    static let browseWidth: CGFloat = 96           // Browse next to a folder capsule
     static let microLabelSize: CGFloat = 10
     static let fieldFontSize: CGFloat = 12
 }
@@ -3372,6 +3373,67 @@ struct DitherNoise: View {
     }
 }
 
+/// A card's rim: a 0.75pt ring with a diagonal gradient (white 0.30 at the
+/// top-leading corner down to 0.05 at the bottom-trailing one). A CAGradientLayer
+/// masked by a border-only layer, so the GPU composites it and a resize is just a
+/// frame change -- no CPU shading. The mask layer uses the continuous corner
+/// curve so it follows the card's SwiftUI `.continuous` rounded rectangle.
+struct GlassRim: NSViewRepresentable {
+    var cornerRadius: CGFloat
+
+    func makeNSView(context: Context) -> GlassRimView { GlassRimView(cornerRadius: cornerRadius) }
+    func updateNSView(_ view: GlassRimView, context: Context) { view.cornerRadius = cornerRadius }
+}
+
+final class GlassRimView: NSView {
+    private let gradient = CAGradientLayer()
+    private let ring = CALayer()
+
+    var cornerRadius: CGFloat {
+        didSet { if cornerRadius != oldValue { needsLayout = true } }
+    }
+
+    init(cornerRadius: CGFloat) {
+        self.cornerRadius = cornerRadius
+        super.init(frame: .zero)
+        wantsLayer = true
+        gradient.colors = [NSColor.white.withAlphaComponent(0.30).cgColor,
+                           NSColor.white.withAlphaComponent(0.05).cgColor]
+        // A layer's unit space has y pointing up here, so (0, 1) is top-leading.
+        gradient.startPoint = CGPoint(x: 0, y: 1)
+        gradient.endPoint = CGPoint(x: 1, y: 0)
+        ring.borderColor = NSColor.black.cgColor
+        ring.borderWidth = 0.75
+        ring.cornerCurve = .continuous
+        gradient.mask = ring
+        layer?.addSublayer(gradient)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func layout() {
+        super.layout()
+        // No implicit animation: the rim must track the card's edge exactly
+        // while it resizes.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = bounds
+        ring.frame = bounds
+        ring.cornerRadius = cornerRadius
+        CATransaction.commit()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        let scale = window?.backingScaleFactor ?? 2
+        gradient.contentsScale = scale
+        ring.contentsScale = scale
+    }
+
+    // Purely decorative: never takes a click or a hover.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 struct GlassCard: ViewModifier {
     var cornerRadius: CGFloat = DesignTokens.Radius.large
     var opacity: Double = 0.55
@@ -3403,23 +3465,19 @@ struct GlassCard: ViewModifier {
             )
             .overlay(
                 // Static, quiet rim running the full perimeter: bright at the
-                // top-leading corner, dimmest at the bottom-trailing one, and
-                // half-way (0.175) at the other two corners, so it reads as a
-                // diagonal specular catch rather than a flat uniform ring.
-                // This is the resting state for every card, active or not.
+                // top-leading corner, dimmest at the bottom-trailing one -- a
+                // diagonal specular catch rather than a flat uniform ring. This
+                // is the resting state for every card, active or not.
                 //
-                // A diagonal LinearGradient, not an AngularGradient (which had
-                // the same corner values): CoreGraphics rasterizes a conic
-                // gradient pixel-by-pixel on the CPU (atan2 per pixel)
-                // whenever the card's size changes -- the sidebar collapse
-                // tween, cards appearing -- while a linear one is cheap.
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.3), Color.white.opacity(0.05)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        ), lineWidth: 0.75
-                    )
+                // Drawn by Core Animation (see GlassRim), not by SwiftUI: a
+                // SwiftUI gradient stroke is shaded by CoreGraphics on the CPU
+                // over the card's whole bounds every time the card's size
+                // changes (window drag, sidebar collapse, cards appearing) --
+                // about a fifth of the main thread's time during a drag with
+                // several cards on screen. A gradient layer is composited on the
+                // GPU and just resizes.
+                GlassRim(cornerRadius: cornerRadius)
+                    .allowsHitTesting(false)
             )
             .overlay {
                 if isActive {
@@ -3845,7 +3903,7 @@ struct VersionChip: View {
     // meaningful to a user glancing at the row, so only the YYYY.MM.DD
     // date is shown. ffmpeg's plain "7.1"-style versions pass through
     // unchanged since they don't match this pattern.
-    private static func simplify(_ raw: String) -> String {
+    static func simplify(_ raw: String) -> String {
         let parts = raw.split(separator: ".")
         if parts.count == 4, parts[0].count == 4 {
             return parts[0...2].joined(separator: ".")
@@ -4001,19 +4059,20 @@ struct ToolsStatusPill: View {
     }
 }
 
-/// One row of the sidebar's update block -- the SAME view whether the rail is
-/// collapsed or open. The status glyph sits on the rail exactly where the tab
-/// icons do (WindowLayout.railIconInset), and the tool's name and version chip
-/// are revealed beside it as the sidebar widens, the way a tab's label is.
-/// Nothing is swapped for a separate collapsed version, so widening the sidebar
-/// never cross-fades one layout into another; the row just gets wider.
+/// One row of the sidebar's update block -- the SAME views whether the rail is
+/// collapsed or open. Open, it reads across: status glyph on the rail (where the
+/// tab icons sit), the tool's name, its version chip at the trailing edge.
+/// Collapsed, the very same name and version re-lay-out as a short stack
+/// (name over a short version) with the status shrunk to a dot in the corner --
+/// so a collapsed rail still says which tool is which, what version it is on and
+/// whether it needs an update, and widening the sidebar moves those views
+/// instead of swapping in a different set.
 struct SidebarToolRow: View {
     let name: String
     let installed: Bool
     let updateAvailable: Bool
-    /// Raw version string, for the collapsed tooltip.
+    /// Raw version string.
     let version: String
-    let versionChip: AnyView
     @Environment(\.isCompactSidebar) private var compact
 
     private var iconName: String {
@@ -4026,35 +4085,67 @@ struct SidebarToolRow: View {
         if updateAvailable { return .yellow.opacity(0.9) }
         return .green.opacity(0.85)
     }
+    private var accent: Color { updateAvailable ? .orange : .white }
+
+    /// "2026.09.16" in the open row; "26.09.16" (year shortened) when collapsed --
+    /// versions like ffmpeg's "8.0" are already short and pass through.
+    private var shownVersion: String {
+        guard !version.isEmpty else { return "—" }
+        let simple = VersionChip.simplify(version)
+        if compact, simple.count > 8, simple.hasPrefix("20") { return String(simple.dropFirst(2)) }
+        return simple
+    }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: iconName)
-                .font(.appMono(size: 12))
-                .foregroundColor(iconColor)
-                .frame(width: WindowLayout.railIconSlot)
-            if !compact {
-                Text(name)
-                    .font(.appMono(size: 11.5, weight: .medium))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .transition(.blurInLeading)
-                Spacer(minLength: 8)
-                versionChip
-                    .transition(.blurInLeading)
-            }
+        let arrangement = compact
+            ? AnyLayout(VStackLayout(alignment: .center, spacing: 1))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 8))
+        arrangement {
+            Text(name)
+                .font(.appMono(size: compact ? 9 : 11.5, weight: .medium))
+                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(maxWidth: compact ? nil : CGFloat.infinity, alignment: .leading)
+            Text(shownVersion)
+                .font(.appMono(size: compact ? 8 : 9.5))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .fixedSize(horizontal: true, vertical: false)
+                .foregroundColor(updateAvailable && compact ? .orange : .white.opacity(compact ? DesignTokens.Text.tertiary : DesignTokens.Text.secondary))
+                .frame(minWidth: compact ? 0 : 58, minHeight: compact ? 0 : 22)
+                .padding(.horizontal, compact ? 0 : 6)
+                .background(accent.opacity(compact ? 0 : 0.1))
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                        .stroke(accent.opacity(compact ? 0 : (updateAvailable ? 0.45 : 0.14)), lineWidth: 0.5)
+                )
         }
-        .padding(.leading, WindowLayout.railIconInset)
-        .padding(.trailing, 6)
-        .padding(.vertical, 8)
-        // The open row is as tall as its version chip (22pt) plus padding; the
-        // collapsed row has no chip. Holding the collapsed row to the same
-        // height means the block doesn't move up and down as the sidebar
-        // opens and closes.
-        .frame(maxWidth: .infinity, minHeight: 22 + 16, alignment: .leading)
+        // Open: room on the left for the status glyph, which sits on the rail
+        // exactly where the tab icons do. Collapsed: the stack is centered.
+        .padding(.leading, compact ? 0 : WindowLayout.railIconInset - WindowLayout.updateCardInset + WindowLayout.railIconSlot + 8)
+        .padding(.trailing, compact ? 0 : 6)
+        .padding(.vertical, compact ? 5 : 8)
+        // Holding both states to the same minimum height means the block
+        // doesn't move up and down as the sidebar opens and closes.
+        .frame(maxWidth: .infinity, minHeight: 38, alignment: compact ? .center : .leading)
+        .overlay(alignment: compact ? .topTrailing : .leading) {
+            // The glyph changes place and size between the two layouts. Keyed on
+            // `compact` so it CROSSFADES between them instead of sliding across
+            // the name and version while those re-arrange.
+            Image(systemName: iconName)
+                .font(.appMono(size: compact ? 6 : 12))
+                .foregroundColor(iconColor)
+                .frame(width: compact ? nil : WindowLayout.railIconSlot)
+                .padding(.leading, compact ? 0 : WindowLayout.railIconInset - WindowLayout.updateCardInset)
+                .padding(.top, compact ? 5 : 0)
+                .padding(.trailing, compact ? 1 : 0)
+                .id(compact)
+                .transition(.opacity)
+        }
         .clipped()
-        .help(compact ? (version.isEmpty ? name : "\(name) \(version)") : "")
+        .help(version.isEmpty ? name : "\(name) \(version)\(updateAvailable ? " — update available" : "")")
         .accessibilityElement(children: .combine)
     }
 }
@@ -4106,6 +4197,9 @@ struct ToolsDropdownContent: View {
             // piece finishes.
             // Each row is paired with its own trailing divider so the divider
             // shrinks with the row it belongs to, and is its own domino step.
+            // One grey inner card holds the rows and the button, at every
+            // sidebar width, so the whole block is a single object that
+            // widens and narrows in place.
             VStack(alignment: .leading, spacing: 2) {
                 toolRow("yt-dlp", installed: manager.toolsReady, updateAvailable: manager.updateAvailable,
                         version: manager.ytdlpVersion)
@@ -4120,6 +4214,8 @@ struct ToolsDropdownContent: View {
                     .padding(.top, 4)
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex + 3)
             }
+            .padding(WindowLayout.updateCardInset)
+            .innerCard()
             .padding(.top, 4)
         }
     }
@@ -4130,15 +4226,7 @@ struct ToolsDropdownContent: View {
                 name: name,
                 installed: installed,
                 updateAvailable: updateAvailable,
-                version: version,
-                versionChip: AnyView(
-                    VersionChip(
-                        version: version,
-                        isUpdating: false,
-                        isCheckingUpdates: false,
-                        updateAvailable: updateAvailable
-                    )
-                )
+                version: version
             )
             GlassDivider()
         }
@@ -4214,7 +4302,7 @@ struct CheckForUpdatesButton: View {
                     Spacer(minLength: 0)
                 }
             }
-            .padding(.leading, WindowLayout.railIconInset)
+            .padding(.leading, WindowLayout.railIconInset - WindowLayout.updateCardInset)
             .padding(.trailing, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -5526,11 +5614,16 @@ struct ContentView: View {
 
     @ViewBuilder
     private var mainPanelToolbar: some View {
-            // ── List header — Select/Done + Select All/Deselect All on the
-            // left, Clear All on the right. Mirrors Convert's header exactly.
-            // Floats as its own bubble card, separate from the input area.
+            // ── List header — link count, then Select/Done + Select All/
+            // Deselect All, with Collapse/Clear All on the right. The buttons
+            // are capsules sitting directly on the page, not inside a glass
+            // bar of their own.
             if hasAnyLinkItems {
-                HStack {
+                HStack(spacing: 8) {
+                    Text(linkPreviews.count == 1 ? "1 link" : "\(linkPreviews.count) links")
+                        .font(.appMono(size: 11, weight: .medium))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                        .padding(.trailing, 4)
                     GlassButton(
                         label: isBatchMode ? "Done" : "Select",
                         icon: isBatchMode ? "xmark.circle" : "checkmark.circle",
@@ -5637,10 +5730,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
-                .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
-                .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
+                .padding(.horizontal, 4)
                 // Same shared content column as the paste bar, the card queue
                 // below and the bottom bar (see WindowLayout.columnWidth), so
                 // every row in this tab is pixel-identical in width.
@@ -5771,87 +5861,44 @@ struct ContentView: View {
                 } extraControls: {
                     EmptyView()  // extraControls: unused now that SAVE TO lives in batchDirectoryControl
             } batchDirectoryControl: {
-                // SAVE TO — now rendered in the same top row as the Auto-Open
-                // Folder toggle, always visible (matching Convert's Select-mode
-                // layout, but permanent here since Download has only one
-                // destination). Fills the remaining bar width.
-                VStack(alignment: .leading, spacing: DropGrid.labelSpacing) {
-                    // In a short window the label row (and the total-size chip
-                    // on it) is dropped to give the card list the room -- the
-                    // folder field below says the same thing, and the total
-                    // moves into its tooltip.
-                    if !isCompactHeight {
-                    HStack(spacing: DropGrid.labelSpacing) {
-                        Image(systemName: "folder")
-                            .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                            .frame(width: 14, alignment: .center)
-                        Text("SAVE TO")
-                            .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        if let sizeLabel = totalEstimatedSizeLabel {
-                            Spacer()
-                            HStack(spacing: 4) {
-                                Image(systemName: "internaldrive")
-                                    .font(.appMono(size: 9))
-                                Text(sizeLabel)
-                                    .font(.appMono(size: 10, weight: .semibold))
-                            }
+                // The destination, on the same row as the Auto-Open Folder toggle:
+                // the folder as a capsule (editable path, with the estimated total
+                // size at its trailing end), Browse as a capsule, and Reveal.
+                // No SAVE TO label -- the folder itself says what it is.
+                HStack(spacing: DropGrid.rowSpacing) {
+                    FieldCapsule {
+                        Image(systemName: "folder.fill")
                             .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.white.opacity(DesignTokens.Interactive.fillRest))
-                            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
-                        }
+                            .font(.appMono(size: DropGrid.fieldFontSize))
+                        TextField("", text: $config.outputDir)
+                            .textFieldStyle(.plain)
+                            .font(.appMono(size: DropGrid.fieldFontSize))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                        FolderSizeLabel(label: totalEstimatedSizeLabel)
                     }
-                    }
-                    HStack(spacing: DropGrid.rowSpacing) {
-                        HStack(spacing: DropGrid.rowSpacing) {
-                            Image(systemName: "folder.fill")
-                                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                                .font(.appMono(size: DropGrid.fieldFontSize))
-                            TextField("", text: $config.outputDir)
-                                .textFieldStyle(.plain)
-                                .font(.appMono(size: DropGrid.fieldFontSize))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: DropGrid.controlHeight)
-                        .padding(.horizontal, 8)
-                        .background(Color.white.opacity(DropGrid.fieldFillOpacity))
-                        .clipShape(RoundedRectangle(cornerRadius: DropGrid.fieldCorner, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: DropGrid.fieldCorner, style: .continuous)
-                            .stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth))
-                        .help(isCompactHeight ? "Save to this folder" + (totalEstimatedSizeLabel.map { " · est. \($0)" } ?? "") : "")
+                    .help("Save to this folder" + (totalEstimatedSizeLabel.map { " · est. \($0)" } ?? ""))
 
-                        GlassButton(label: "Browse", icon: "folder", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
-                            let panel = NSOpenPanel()
-                            panel.canChooseFiles = false
-                            panel.canChooseDirectories = true
-                            panel.canCreateDirectories = true
-                            panel.allowsMultipleSelection = false
-                            panel.prompt = "Select"
-                            if panel.runModal() == .OK, let url = panel.url {
-                                config.outputDir = url.path
-                            }
+                    GlassButton(label: "Browse", icon: "folder", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
+                        let panel = NSOpenPanel()
+                        panel.canChooseFiles = false
+                        panel.canChooseDirectories = true
+                        panel.canCreateDirectories = true
+                        panel.allowsMultipleSelection = false
+                        panel.prompt = "Select"
+                        if panel.runModal() == .OK, let url = panel.url {
+                            config.outputDir = url.path
                         }
-                        .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
-                        // Always-available Reveal -- same control Convert's
-                        // SAVE TO field has, opening the shared output
-                        // directory in Finder any time, not tied to any
-                        // single download.
-                        HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Open the SAVE TO folder in Finder") {
-                            NSWorkspace.shared.open(URL(fileURLWithPath: config.outputDir))
-                        }
-                        .frame(height: DropGrid.controlHeight)
                     }
+                    .frame(width: DropGrid.browseWidth, height: DropGrid.controlHeight)
+                    // Always-available Reveal -- same control Convert's folder
+                    // row has, opening the shared output directory in Finder
+                    // any time, not tied to any single download.
+                    HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Open the save folder in Finder") {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: config.outputDir))
+                    }
+                    .frame(height: DropGrid.controlHeight)
                 }
                 .frame(maxWidth: .infinity)
-                // Card within a card -- same nested-glass treatment as
-                // Convert's Queue drawer, so both tabs' bottom-bar sections
-                // read as one shared system even though what's inside differs.
-                .padding(10)
-                .glassCard(cornerRadius: DesignTokens.Radius.medium, opacity: 0.35)
             }
     }
 
@@ -6196,7 +6243,7 @@ struct ContentView: View {
                             .transition(.blurIn)
                     }
                 }
-                .frame(width: 80, height: 52)
+                .frame(width: CardMetrics.thumbWidth, height: CardMetrics.thumbHeight)
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
             }
             .animation(.easeOut(duration: 0.2), value: urlString)
@@ -6211,69 +6258,14 @@ struct ContentView: View {
 
         let thumbView = thumbnailView(urlString: p.thumbnailURL)
 
-        // Simple mode -- always visible whether the card is collapsed or
-        // expanded: URL, then input->output chip pairing (same visual
-        // language as the in-progress/completed card's InputOutputRow, so
-        // a card reads identically before and after the download starts),
-        // then the Video+Audio / Audio Only mode toggle. Only the deeper
-        // per-format/quality picker rows are gated behind expand (see
-        // settings() below) -- switching mediaMode here never touches the
-        // input side, it only changes what outputChips reports.
-        let modeRow = AnyView(
-            HStack(spacing: 6) {
-                if p.hasVideo {
-                    CompactModeChip(label: "Video + Audio", icon: "video.badge.waveform", isSelected: p.mediaMode == .videoAndAudio,
-                             tint: DesignTokens.Accent.primary) {
-                        withAnimation(.spring(response: 0.25)) { preview.mediaMode.wrappedValue = .videoAndAudio }
-                    }
-                }
-                CompactModeChip(label: "Audio Only", icon: "waveform", isSelected: p.mediaMode == .audioOnly,
-                         tint: DesignTokens.Accent.success) {
-                    withAnimation(.spring(response: 0.25)) { preview.mediaMode.wrappedValue = .audioOnly }
-                }
-            }
-        )
-        // Only URL + input->output chips here now -- this is exactly the
-        // group the thumbnail centers against (see PreviewCard.cardHeader).
-        // modeRow moved to belowHeader below, outside this group, so the
-        // toggle's own height never pulls the thumbnail's centering down
-        // with it, and the thumbnail stays vertically centered against
-        // "everything but the format/mode controls" as requested.
-        let subtitleWithURL = AnyView(
-            VStack(alignment: .leading, spacing: 6) {
-                Text(p.url)
-                    .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    .lineLimit(1).truncationMode(.middle)
-                // Side by side (arrow centered against the chips' real height,
-                // including when they wrap) in a wide column; stacked in a
-                // narrow one -- see InputOutputChips.
-                InputOutputChips(input: p.inputChips, output: p.outputChips)
-                    .animation(nil, value: p.mediaMode)
-            }
-        )
-        // Below the header, full-width -- a thin divider first so the mode
-        // toggle reads as a clearly separate control/section from the
-        // input->output chip row above it, not a continuation of it. The
-        // collapse toggle now shares this same line (trailing edge) instead
-        // of sitting up in the header row -- it's grouped with the mode
-        // toggle here since collapseButtonInHeader is false for this call.
-        let collapseIsExpandedBinding = isBatchMode ? .constant(false) : Binding(
-            get: { preview.wrappedValue.isExpanded },
-            set: { preview.isExpanded.wrappedValue = $0 }
-        )
-        let belowHeaderRow = AnyView(
-            VStack(alignment: .leading, spacing: 9) {
-                GlassDivider()
-                HStack(spacing: 6) {
-                    modeRow
-                    Spacer()
-                    if !isBatchMode {
-                        CollapseToggleButton(isExpanded: collapseIsExpandedBinding.wrappedValue) {
-                            withAnimation(.easeOut(duration: 0.22)) { collapseIsExpandedBinding.wrappedValue.toggle() }
-                        }
-                    }
-                }
-            }
+        // The IN / OUT metadata (what you have -> what you'll get) sits in the
+        // header, always visible, collapsed or expanded. Switching the media
+        // mode never touches the input side, it only changes what outputChips
+        // reports. The mode toggle itself is the first row of the expanded
+        // settings below.
+        let subtitleWithMeta = AnyView(
+            MetaLines(input: p.inputChips, output: p.outputChips)
+                .animation(nil, value: p.mediaMode)
         )
 
         // State 1: Analyzing → State 2: PreviewCard (analyzed, waiting)
@@ -6321,16 +6313,13 @@ struct ContentView: View {
             showCheckbox: isBatchMode,
             thumbnail: thumbView,
             title: p.title,
-            subtitle: subtitleWithURL, // URL + input→output chip row -- always visible, even collapsed
-            belowHeader: belowHeaderRow, // divider + mode toggle + collapse button -- outside the thumbnail-centered group
+            secondaryTitle: p.url,
+            subtitle: subtitleWithMeta, // IN / OUT lines -- always visible, even collapsed
             isExpanded: isBatchMode ? .constant(false) : Binding(
                 get: { preview.wrappedValue.isExpanded },
                 set: { preview.isExpanded.wrappedValue = $0 }
             ),
             collapseLocked: isBatchMode,
-            // Collapse button now lives inside belowHeaderRow, on the same
-            // line as the mode toggle, instead of up in the header row.
-            collapseButtonInHeader: false,
             // While still analyzing, this same PreviewCard instance renders
             // the skeleton/spinner header instead of real content -- no more
             // separate AnalyzingCard view swapped in via if/else, so the
@@ -6360,126 +6349,158 @@ struct ContentView: View {
                 }
             }
         ) {
-            // Advanced mode -- format + quality pickers, only reachable
-            // once expanded. DOWNLOAD AS (the Video+Audio/Audio Only
-            // toggle) lives in the always-visible header now (modeRow
-            // above), not here -- this closure only renders the deeper
-            // per-format/quality choices.
+            // Expanded settings, as labelled rows shared with Convert's card:
+            // DOWNLOAD AS (the Video+Audio / Audio Only toggle), then FORMAT
+            // and QUALITY for whichever media mode is active.
             //
-            // Condensed into a single labeled section per media mode
-            // (previously two separate sections each with their own
-            // header/divider; the format row and quality row now share
-            // one header since they're really one decision -- "what exact
-            // file do I get").
-            //
-            // The Video-vs-Audio sections are structurally different content,
-            // so a mode change swaps the whole body via `.pageSwap` (outgoing
-            // blurs away first, incoming focuses in a beat later -- that
-            // stagger is what stops the two chip sets reading as overlapped,
-            // the reason this used to be a hard cut). The ZStack keeps both
-            // bodies overlaid during the swap instead of stacking their
-            // heights, so the card doesn't bounce. Individual chip picks
-            // within a mode aren't gated on mediaMode and keep their own
-            // spring feedback.
-            ZStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 11) {
-            if p.hasVideo && p.mediaMode != .audioOnly {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Label("VIDEO", systemImage: "video")
-                            .font(.appMono(size: 10, weight: .semibold))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        Spacer()
-                        nativeLegend()
-                    }
-                    OptionRow {
-                        ForEach(VideoFormat.allCases) { f in
-                            SelectorChip(label: f.label, note: f.note, isSelected: p.videoFormat == f,
-                                       tint: DesignTokens.Accent.primary, nativeBadge: f.isNative) {
-                                preview.videoFormat.wrappedValue = f
-                            }
-                        }
-                    }
-                    OptionRow {
-                        // Tiers above what the source actually has are hidden
-                        // (unknown height keeps the old up-to-1080p default).
-                        // A sub-480p source still shows the 480p floor tier --
-                        // the output chip reports the real resolution.
-                        ForEach(VideoQuality.allCases.filter { q in
-                            let h = p.sourceMaxHeight
-                            return h == 0 ? q.maxHeight <= 1080 : q.maxHeight <= VideoQuality.highest(for: h).maxHeight
-                        }) { q in
-                            SelectorChip(label: effectiveVideoResolutionLabel(q, sourceMaxHeight: p.sourceMaxHeight), isSelected: p.videoQuality == q) {
-                                preview.videoQuality.wrappedValue = q
-                            }
-                        }
-                    }
+            // The Video-vs-Audio rows are structurally different content, so a
+            // mode change swaps them via `.pageSwap` (outgoing blurs away
+            // first, incoming focuses in a beat later -- that stagger is what
+            // stops the two sets reading as overlapped). The ZStack keeps both
+            // overlaid during the swap instead of stacking their heights, so
+            // the card doesn't bounce. Picks within a mode aren't gated on
+            // mediaMode and keep their own feedback.
+            VStack(alignment: .leading, spacing: 9) {
+                FormRow(icon: "switch.2", label: "DOWNLOAD AS") {
+                    SegmentedCapsule(options: downloadModeOptions(preview: preview), fill: false)
                 }
-            }
-
-            if p.mediaMode == .audioOnly {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Label("AUDIO", systemImage: "waveform")
-                            .font(.appMono(size: 10, weight: .semibold))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        Spacer()
-                        nativeLegend()
-                    }
-                    OptionRow {
-                        ForEach(AudioFormat.allCases) { f in
-                            SelectorChip(label: f.label, note: f.note, isSelected: p.audioFormat == f,
-                                       tint: DesignTokens.Accent.success, nativeBadge: f.isNative) {
-                                preview.qualityByFormat.wrappedValue[p.audioFormat.rawValue] = p.audioQuality
-                                preview.audioFormat.wrappedValue = f
-                                let saved = preview.qualityByFormat.wrappedValue[f.rawValue] ?? .q320
-                                preview.audioQuality.wrappedValue = saved
+                ZStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 9) {
+                        if p.hasVideo && p.mediaMode != .audioOnly {
+                            FormRow(icon: "video", label: "FORMAT", showsNativeLegend: true) {
+                                SegmentedCapsule(options: downloadVideoFormatOptions(preview: preview))
+                            }
+                            FormRow(icon: "slider.horizontal.3", label: "QUALITY") {
+                                SegmentedCapsule(options: downloadVideoQualityOptions(preview: preview))
                             }
                         }
-                    }
-                    // M4A has no selectable quality/bitrate — it's a fixed
-                    // passthrough format, so there's no real choice to present
-                    // (mirrors Convert's handling of MP3/FLAC hiding the audio
-                    // codec row).
-                    if p.audioFormat != .m4a {
-                        OptionRow {
-                            ForEach(AudioQuality.allCases) { q in
-                                let chipLabel = p.audioFormat == .flac ? q.flacLabel : q.label
-                                let kbps: Int = { switch q {
-                                    case .q320: return 320
-                                    case .q256: return 256
-                                    case .q128: return 128
-                                }}()
-                                let asrHz: Int = { switch q {
-                                    case .q320: return 0
-                                    case .q256: return 96000
-                                    case .q128: return 44100
-                                }}()
-                                let hideKbps = p.audioFormat != .flac && p.sourceABR > 0 && kbps > p.sourceABR
-                                let effectiveASR: Int = {
-                                    if p.sourceASR > 0 { return p.sourceASR }
-                                    if p.sourceABR > 0 { return p.sourceABR >= 320 ? 96000 : 48000 }
-                                    return 48000
-                                }()
-                                let hideFLAC = p.audioFormat == .flac && asrHz > 0 && asrHz > effectiveASR
-                                if !hideKbps && !hideFLAC {
-                                    SelectorChip(label: chipLabel, isSelected: p.audioQuality == q) {
-                                        preview.audioQuality.wrappedValue = q
-                                    }
+                        if p.mediaMode == .audioOnly {
+                            FormRow(icon: "waveform", label: "FORMAT", showsNativeLegend: true) {
+                                SegmentedCapsule(options: downloadAudioFormatOptions(preview: preview))
+                            }
+                            // M4A has no selectable quality/bitrate -- it's a
+                            // fixed passthrough format, so there's no real
+                            // choice to present (mirrors Convert's handling of
+                            // MP3/FLAC hiding the audio codec row).
+                            if p.audioFormat != .m4a {
+                                FormRow(icon: "slider.horizontal.3", label: "QUALITY") {
+                                    SegmentedCapsule(options: downloadAudioQualityOptions(preview: preview))
                                 }
                             }
                         }
                     }
+                    .id(p.mediaMode)
+                    .transition(.pageSwap)
                 }
+                .animation(.easeOut(duration: 0.2), value: p.mediaMode)
             }
-            } // close wrapper VStack (spacing: 11)
-            .id(p.mediaMode)
-            .transition(.pageSwap)
-            }
-            .animation(.easeOut(duration: 0.2), value: p.mediaMode)
         }
         .transition(.glassPopInOnly)
         } // end else (not pending)
+    }
+
+    // MARK: Download — segmented option builders
+    //
+    // Pulled out of downloadPreviewCard's view tree: building these inline made
+    // the whole expression too complex for the type-checker.
+
+    private func downloadModeOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
+        let p = preview.wrappedValue
+        var options: [SegmentOption] = []
+        if p.hasVideo {
+            options.append(SegmentOption(
+                id: "videoAndAudio", label: "Video + Audio", icon: "video.badge.waveform",
+                isSelected: p.mediaMode == .videoAndAudio, tint: DesignTokens.Accent.primary
+            ) {
+                withAnimation(.spring(response: 0.25)) { preview.mediaMode.wrappedValue = .videoAndAudio }
+            })
+        }
+        options.append(SegmentOption(
+            id: "audioOnly", label: "Audio Only", icon: "waveform",
+            isSelected: p.mediaMode == .audioOnly, tint: DesignTokens.Accent.success
+        ) {
+            withAnimation(.spring(response: 0.25)) { preview.mediaMode.wrappedValue = .audioOnly }
+        })
+        return options
+    }
+
+    private func downloadVideoFormatOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
+        let p = preview.wrappedValue
+        return VideoFormat.allCases.map { f in
+            SegmentOption(
+                id: f.rawValue, label: f.label, nativeBadge: f.isNative, help: f.note,
+                isSelected: p.videoFormat == f, tint: DesignTokens.Accent.primary
+            ) {
+                preview.videoFormat.wrappedValue = f
+            }
+        }
+    }
+
+    private func downloadVideoQualityOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
+        let p = preview.wrappedValue
+        // Tiers above what the source actually has are hidden (unknown height
+        // keeps the old up-to-1080p default). A sub-480p source still shows
+        // the 480p floor tier -- the output line reports the real resolution.
+        return VideoQuality.allCases.filter { q in
+            let h = p.sourceMaxHeight
+            return h == 0 ? q.maxHeight <= 1080 : q.maxHeight <= VideoQuality.highest(for: h).maxHeight
+        }.map { q in
+            SegmentOption(
+                id: "\(q)", label: effectiveVideoResolutionLabel(q, sourceMaxHeight: p.sourceMaxHeight),
+                isSelected: p.videoQuality == q, tint: DesignTokens.Accent.primary
+            ) {
+                preview.videoQuality.wrappedValue = q
+            }
+        }
+    }
+
+    private func downloadAudioFormatOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
+        let p = preview.wrappedValue
+        return AudioFormat.allCases.map { f in
+            SegmentOption(
+                id: f.rawValue, label: f.label, nativeBadge: f.isNative, help: f.note,
+                isSelected: p.audioFormat == f, tint: DesignTokens.Accent.success
+            ) {
+                preview.qualityByFormat.wrappedValue[p.audioFormat.rawValue] = p.audioQuality
+                preview.audioFormat.wrappedValue = f
+                let saved = preview.qualityByFormat.wrappedValue[f.rawValue] ?? .q320
+                preview.audioQuality.wrappedValue = saved
+            }
+        }
+    }
+
+    private func downloadAudioQualityOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
+        let p = preview.wrappedValue
+        return AudioQuality.allCases.compactMap { q -> SegmentOption? in
+            let kbps: Int = {
+                switch q {
+                case .q320: return 320
+                case .q256: return 256
+                case .q128: return 128
+                }
+            }()
+            let asrHz: Int = {
+                switch q {
+                case .q320: return 0
+                case .q256: return 96000
+                case .q128: return 44100
+                }
+            }()
+            let hideKbps = p.audioFormat != .flac && p.sourceABR > 0 && kbps > p.sourceABR
+            let effectiveASR: Int = {
+                if p.sourceASR > 0 { return p.sourceASR }
+                if p.sourceABR > 0 { return p.sourceABR >= 320 ? 96000 : 48000 }
+                return 48000
+            }()
+            let hideFLAC = p.audioFormat == .flac && asrHz > 0 && asrHz > effectiveASR
+            if hideKbps || hideFLAC { return nil }
+            return SegmentOption(
+                id: "\(q)", label: p.audioFormat == .flac ? q.flacLabel : q.label,
+                isSelected: p.audioQuality == q, tint: DesignTokens.Accent.success
+            ) {
+                preview.audioQuality.wrappedValue = q
+            }
+        }
     }
 
     // MARK: Download — completed card (active/done/failed state)
@@ -6526,12 +6547,13 @@ struct ContentView: View {
         // same visual level, instead of output info being its own row
         // below the divider.
         let subtitleWithURL = AnyView(
-            InputOutputRow(
-                inputPath: p.url,
-                inputChips: originalInfoChips,
-                outputPath: outputPath,
-                outputChips: outputInfoChips
-            )
+            VStack(alignment: .leading, spacing: 4) {
+                MetaLines(input: originalInfoChips, output: outputInfoChips)
+                Text(outputPath)
+                    .font(.appMono(size: 10))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                    .lineLimit(1).truncationMode(.middle)
+            }
         )
 
         CompletedCard(
@@ -6552,6 +6574,7 @@ struct ContentView: View {
             showCheckbox: isBatchMode,
             thumbnail: thumbView,
             title: p.title,
+            secondaryTitle: p.url,
             subtitle: subtitleWithURL
         ) {
 
@@ -7955,16 +7978,18 @@ struct SelectorChip: View {
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                     .stroke(
                         isSelected
-                            ? tint.opacity(glowPhase ? DesignTokens.Interactive.strokeGlow : 0.6)
+                            ? tint.opacity(glowPhase ? DesignTokens.Interactive.strokeGlow : Self.restingStroke)
                             : Color.white.opacity(hovering ? (glowPhase ? DesignTokens.Interactive.strokeHover + 0.05 : DesignTokens.Interactive.strokeHover) : DesignTokens.Interactive.strokeRest),
                         lineWidth: (isSelected || hovering) ? 1.0 : 0.5
                     )
-                    // Selected chips carry a resting ambient glow, not just an
-                    // on-hover one -- Flighty/Siri-style liquid glass always
-                    // reads as lit from within, even when idle. Previously this
-                    // was .clear at rest, so a selected MP4/4K chip looked
-                    // identical whether the pointer was near it or not.
-                    .shadow(color: isSelected ? tint.opacity(glowPhase ? DesignTokens.Interactive.glowShadowHover : 0.32) : .clear, radius: isSelected ? 6 : 0)
+                    // Selected chips carry a steady ambient glow -- lit from
+                    // within even when idle, like Flighty/Siri-style liquid
+                    // glass. It is STILL at rest and only pulses while the
+                    // pointer is over the chip: a repeatForever animation on
+                    // something that sits on screen keeps SwiftUI re-running
+                    // layout and redraw for the whole window every frame, which
+                    // cost ~45% of a core with a single card open.
+                    .shadow(color: isSelected ? tint.opacity(glowPhase ? DesignTokens.Interactive.glowShadowHover : Self.restingGlow) : .clear, radius: isSelected ? 6 : 0)
             )
         }
         .buttonStyle(.plain)
@@ -7972,15 +7997,9 @@ struct SelectorChip: View {
             hovering = h
             if h {
                 withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) { glowPhase = true }
-            } else if !isSelected {
-                withAnimation(.easeOut(duration: 0.2)) { glowPhase = false }
-            }
-        }
-        .onAppear { if isSelected { startRestingGlow() } }
-        .onChange(of: isSelected) { selected in
-            if selected {
-                startRestingGlow()
-            } else if !hovering {
+            } else {
+                // A non-repeating animation to the resting value replaces the
+                // repeating one, so the pulse stops the moment the pointer leaves.
                 withAnimation(.easeOut(duration: 0.2)) { glowPhase = false }
             }
         }
@@ -7989,14 +8008,10 @@ struct SelectorChip: View {
         .help(!note.isEmpty && !showNote ? note : "")
     }
 
-    /// Slow ambient pulse for the selected state, independent of hover --
-    /// keeps a chosen chip reading as "lit" the whole time it's selected,
-    /// not just when the pointer happens to be over it.
-    private func startRestingGlow() {
-        withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
-            glowPhase = true
-        }
-    }
+    /// The steady selected-state rim and glow -- the midpoint of what the old
+    /// resting pulse swung between, so a selected chip reads the same at a glance.
+    private static let restingStroke: Double = 0.8
+    private static let restingGlow: Double = 0.4
 }
 
 // MARK: - Glass Button

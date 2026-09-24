@@ -1382,7 +1382,7 @@ struct ConvertView: View {
     /// desyncs the drag-swap point from where the row actually is on
     /// screen). Starts at a reasonable fallback before the first row has
     /// ever reported its real size.
-    @State private var queueRowStride: CGFloat = 76
+    @State private var queueRowStride: CGFloat = 66
 
     /// Fixed viewport height for the row list -- always this tall while
     /// expanded (about 2.5 rows), regardless of how many items are actually
@@ -1418,8 +1418,11 @@ struct ConvertView: View {
                 // scroll viewport are now sized off the exact same number.
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 6) {
+                        LazyVStack(spacing: 0) {
                             ForEach(Array(queue.enumerated()), id: \.element.id) { index, job in
+                                if index > 0 {
+                                    GlassDivider().padding(.vertical, 3)
+                                }
                                 QueueRowView(
                                     job: job, index: index, position: index + 1, queue: $queue, config: config,
                                     onSelectionChange: { selectionVersion += 1 },
@@ -1438,8 +1441,8 @@ struct ConvertView: View {
                                 .background(
                                     GeometryReader { geo in
                                         Color.clear
-                                            .onAppear { queueRowStride = geo.size.height + 6 }
-                                            .onChange(of: geo.size.height) { _, h in queueRowStride = h + 6 }
+                                            .onAppear { queueRowStride = geo.size.height + 7 }
+                                            .onChange(of: geo.size.height) { _, h in queueRowStride = h + 7 }
                                     }
                                 )
                             }
@@ -1500,8 +1503,6 @@ struct ConvertView: View {
                 }
             }
         }
-        .padding(12)
-        .glassCard(cornerRadius: DesignTokens.Radius.medium, opacity: 0.35)
     }
 
     private func openFilePicker() {
@@ -1602,87 +1603,46 @@ struct ConvertView: View {
     /// matching Download's own permanent SAVE TO field. Defaults to Downloads
     /// and remembers the last folder picked (persisted in config.convertOutputDir).
     private var batchDirectoryField: some View {
-        VStack(alignment: .leading, spacing: DropGrid.labelSpacing) {
-            // Dropped in a short window (see WindowLayout.compactHeightBreakpoint)
-            // to give the queue and Analyze panel the room.
-            if !compactHeight {
-            HStack(spacing: DropGrid.labelSpacing) {
-                Image(systemName: "folder")
-                    .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    .frame(width: 14, alignment: .center)
-                Text("SAVE TO")
-                    .font(.appMono(size: DropGrid.microLabelSize, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                // Always reserve the chip's slot in Select mode so the row
-                // doesn't shift/resize the moment something becomes selected —
-                // it just renders blank (no icon/text) until totalEstimatedSizeLabel
-                // has a value.
-                Spacer()
-                HStack(spacing: 4) {
-                    if let sizeLabel = totalEstimatedSizeLabel {
-                        Image(systemName: "internaldrive")
-                            .font(.appMono(size: 9))
-                        Text(sizeLabel)
-                            .font(.appMono(size: 10, weight: .semibold))
-                    }
-                }
-                .frame(minHeight: 10)
-                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.white.opacity(totalEstimatedSizeLabel == nil ? 0.0 : DesignTokens.Interactive.fillRest))
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
+        // The folder as a capsule (with the estimated total size at its trailing
+        // end), Browse as a capsule, and Reveal. No SAVE TO label -- the folder
+        // itself says what it is. Sits in the bottom bar's grey inner card.
+        HStack(spacing: DropGrid.rowSpacing) {
+            FieldCapsule {
+                Image(systemName: "folder.fill")
+                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                    .font(.appMono(size: DropGrid.fieldFontSize))
+                Text(config.convertOutputDir)
+                    .font(.appMono(size: DropGrid.fieldFontSize))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                FolderSizeLabel(label: totalEstimatedSizeLabel)
             }
-            }
-            HStack(spacing: DropGrid.rowSpacing) {
-                HStack(spacing: DropGrid.rowSpacing) {
-                    Image(systemName: "folder.fill")
-                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                        .font(.appMono(size: DropGrid.fieldFontSize))
-                    Text(config.convertOutputDir)
-                        .font(.appMono(size: DropGrid.fieldFontSize))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: DropGrid.controlHeight)
-                .padding(.horizontal, 8)
-                .background(Color.white.opacity(DropGrid.fieldFillOpacity))
-                .clipShape(RoundedRectangle(cornerRadius: DropGrid.fieldCorner, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: DropGrid.fieldCorner, style: .continuous)
-                    .stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth))
+            .help("Convert to this folder" + (totalEstimatedSizeLabel.map { " · est. \($0)" } ?? ""))
 
-                GlassButton(label: "Browse", icon: "folder", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
-                    let panel = NSOpenPanel()
-                    panel.canChooseFiles = false
-                    panel.canChooseDirectories = true
-                    panel.canCreateDirectories = true
-                    panel.allowsMultipleSelection = false
-                    panel.prompt = "Select"
-                    if panel.runModal() == .OK, let url = panel.url {
-                        config.convertOutputDir = url.path
-                    }
+            GlassButton(label: "Browse", icon: "folder", tint: DesignTokens.Accent.primary, verticalPadding: 4, fillHeight: true) {
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = false
+                panel.canChooseDirectories = true
+                panel.canCreateDirectories = true
+                panel.allowsMultipleSelection = false
+                panel.prompt = "Select"
+                if panel.runModal() == .OK, let url = panel.url {
+                    config.convertOutputDir = url.path
                 }
-                .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
-                // Always-available Reveal -- replaces the per-row "Reveal in
-                // Finder" button a completed job used to have. This one
-                // isn't tied to any single job: it just opens the shared
-                // SAVE TO destination, usable any time regardless of
-                // whether anything's finished converting yet.
-                HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Open the SAVE TO folder in Finder") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: config.convertOutputDir))
-                }
-                .frame(height: DropGrid.controlHeight)
             }
+            .frame(width: DropGrid.browseWidth, height: DropGrid.controlHeight)
+            // Always-available Reveal -- replaces the per-row "Reveal in
+            // Finder" button a completed job used to have. This one isn't tied
+            // to any single job: it just opens the shared destination, usable
+            // any time regardless of whether anything's finished converting yet.
+            HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Open the save folder in Finder") {
+                NSWorkspace.shared.open(URL(fileURLWithPath: config.convertOutputDir))
+            }
+            .frame(height: DropGrid.controlHeight)
         }
         .frame(maxWidth: .infinity)
-        // Card within a card -- same nested-glass treatment as Download's
-        // own SAVE TO section and Convert's Queue drawer above, so this
-        // slot reads consistently across both tabs.
-        .padding(10)
-        .glassCard(cornerRadius: DesignTokens.Radius.medium, opacity: 0.35)
     }
 
     private func runConversion(job: ConvertJob) {
@@ -2112,16 +2072,6 @@ struct ConvertPreviewCard: View {
     /// view just places whatever's given next to the checkbox.
     var leadingAccessory: AnyView? = nil
 
-    /// Fixed width for the "Same as Source" chip in both the VIDEO CODEC and
-    /// AUDIO CODEC rows -- comfortably wider than its own text, and shared by
-    /// both rows so the chip renders identically in each regardless of how
-    /// many real codec chips sit beside it. The real codec chips are NOT
-    /// pinned to this width -- they keep SelectorChip's own default
-    /// `.frame(maxWidth: .infinity)`, dynamically sharing whatever space is
-    /// left in the row exactly as they did before "Same as Source" got its
-    /// own fixed width.
-    private static let sameAsSourceChipWidth: CGFloat = 150
-
     var body: some View {
         if isQueueRow {
             // Every status (including queued-but-not-started) renders as the
@@ -2157,98 +2107,111 @@ struct ConvertPreviewCard: View {
                         .transition(.blurIn)
                 } else if !job.isVideoFile {
                     Image(systemName: "waveform")
-                        .font(.appMono(size: 18))
+                        .font(.appMono(size: 15))
                         .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 } else if job.thumbnailFailed {
                     Image(systemName: "video")
-                        .font(.appMono(size: 18))
+                        .font(.appMono(size: 15))
                         .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 } else {
                     ThumbnailSkeleton().clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
                 }
             }
-            .frame(width: 80, height: 52)
+            .frame(width: CardMetrics.thumbWidth, height: CardMetrics.thumbHeight)
             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
             .animation(.easeOut(duration: 0.2), value: job.thumbnail == nil)
         )
     }
 
 
-    /// Composite subtitle: plain-text file path (same visual language as
-    /// History's path subtext), then the input->output chip row -- same
-    /// visual language as Download's subtitleWithURL, so a queued Convert
-    /// card always shows "what you have" -> "what you'll get", matching
-    /// Download instead of only showing the source side. Always visible,
-    /// even collapsed -- mirrors Download exactly.
+    /// The IN / OUT metadata lines -- what you have -> what you'll get, in the
+    /// same aligned columns as Download's card. The file path sits dim on the
+    /// title line (see secondaryTitle). Always visible.
     private var subtitleView: AnyView {
         AnyView(
-            VStack(alignment: .leading, spacing: 6) {
-                Text(job.inputURL.path)
-                    .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    .lineLimit(1).truncationMode(.middle)
-                InputOutputChips(input: job.inputChips, output: job.outputChips)
-                    .animation(nil, value: job.mediaMode)
-            }
+            MetaLines(input: job.inputChips, output: job.outputChips)
+                .animation(nil, value: job.mediaMode)
         )
     }
 
-    /// CONVERT AS mode toggle -- same visual language as Download's modeRow
-    /// (Video+Audio/Audio Only), just with the extra Video Only case Convert
-    /// supports. Lives below the header, outside the thumbnail-centered
-    /// group, so switching modes never touches the input side of
-    /// subtitleView above.
-    private var modeRow: AnyView {
-        AnyView(
-            OptionRow(spacing: 6) {
-                ForEach(ConvertMediaMode.allCases.filter { job.isVideoFile || $0 == .audio }, id: \.rawValue) { mode in
-                    CompactModeChip(label: mode.label, icon: mode.icon, isSelected: job.mediaMode == mode, tint: mode.chipTint) {
-                        withAnimation(.spring(response: 0.25)) {
-                            job.mediaMode = mode
-                            if !job.availableFormats.contains(job.outputFormat) {
-                                job.outputFormat = job.availableFormats.first ?? job.outputFormat
-                            }
-                            job.ensureCodecsValidForFormat()
-                        }
+    // MARK: Settings rows (Analyze panel)
+    //
+    // The same labelled rows Download's expanded card uses (label and hint on
+    // the left, one segmented capsule on the right), so the two cards share one
+    // layout. Options are built here, outside the view tree, to keep the
+    // type-checker happy.
+
+    /// CONVERT AS -- Video + Audio / Audio Only, plus the Video Only case Convert
+    /// supports.
+    private var modeOptions: [SegmentOption] {
+        ConvertMediaMode.allCases.filter { job.isVideoFile || $0 == .audio }.map { mode in
+            SegmentOption(
+                id: mode.rawValue, label: mode.label, icon: mode.icon,
+                isSelected: job.mediaMode == mode, tint: mode.chipTint
+            ) {
+                withAnimation(.spring(response: 0.25)) {
+                    job.mediaMode = mode
+                    if !job.availableFormats.contains(job.outputFormat) {
+                        job.outputFormat = job.availableFormats.first ?? job.outputFormat
+                    }
+                    job.ensureCodecsValidForFormat()
+                }
+            }
+        }
+    }
+
+    /// VIDEO CODEC -- "Same as Source" is an option alongside the real codecs
+    /// rather than a separate checkbox: selecting it stream-copies the source
+    /// video untouched; selecting any other option transcodes with that codec.
+    /// Lets you change only the audio (or only the video) on a clip without
+    /// touching the other track.
+    private var videoCodecOptions: [SegmentOption] {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeVideo) {
+            withAnimation(.spring(response: 0.25)) { job.useSameAsSourceForVideo() }
+        }]
+        options += job.availableVideoCodecs.map { codec in
+            SegmentOption(id: codec.rawValue, label: codec.rawValue, isSelected: job.transcodeVideo && job.videoCodec == codec) {
+                withAnimation(.spring(response: 0.25)) {
+                    job.videoCodec = codec
+                    job.transcodeVideo = true
+                }
+            }
+        }
+        return options
+    }
+
+    /// AUDIO CODEC -- same shape as VIDEO CODEC. The real codec options are
+    /// hidden when the output format only has one possible audio codec (MP3/FLAC
+    /// are self-contained: codec == container, so there's no real choice besides
+    /// Same as Source vs. that one codec, and picking the format already implies
+    /// the latter).
+    private var audioCodecOptions: [SegmentOption] {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeAudio) {
+            withAnimation(.spring(response: 0.25)) { job.useSameAsSourceForAudio() }
+        }]
+        if job.availableAudioCodecs.count > 1 {
+            options += job.availableAudioCodecs.map { codec in
+                SegmentOption(id: codec.rawValue, label: codec.rawValue, isSelected: job.transcodeAudio && job.audioCodec == codec) {
+                    withAnimation(.spring(response: 0.25)) {
+                        job.audioCodec = codec
+                        job.transcodeAudio = true
                     }
                 }
             }
-        )
+        }
+        return options
     }
 
-    /// OUTPUT FORMAT chip row -- last of the four sections now (see
-    /// convertSettingsCard), after the codec choices are settled.
-    private var formatRow: AnyView {
-        AnyView(
-            OptionRow(spacing: 6) {
-                ForEach(job.availableFormats) { fmt in
-                    SelectorChip(
-                        label: fmt.rawValue,
-                        isSelected: job.outputFormat == fmt
-                    ) {
-                        withAnimation(.spring(response: 0.25)) {
-                            job.outputFormat = fmt
-                            job.ensureCodecsValidForFormat()
-                        }
-                    }
+    /// OUTPUT FORMAT -- last row, after both codec choices are settled.
+    private var formatOptions: [SegmentOption] {
+        job.availableFormats.map { fmt in
+            SegmentOption(id: fmt.rawValue, label: fmt.rawValue, isSelected: job.outputFormat == fmt) {
+                withAnimation(.spring(response: 0.25)) {
+                    job.outputFormat = fmt
+                    job.ensureCodecsValidForFormat()
                 }
             }
-        )
-    }
-
-    /// Below the header, full-width -- divider, then CONVERT AS (conversion
-    /// type) on its own, ahead of everything else. This card is only ever
-    /// used in the Analyze panel now (one file, always fully shown), so
-    /// there's no collapse toggle to share the line with.
-    private var belowHeaderRow: AnyView {
-        AnyView(
-            VStack(alignment: .leading, spacing: 9) {
-                GlassDivider()
-                Label("CONVERT AS", systemImage: "switch.2")
-                    .font(.appMono(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                modeRow
-            }
-        )
+        }
     }
 
     // MARK: Settings card (Analyze panel)
@@ -2262,120 +2225,32 @@ struct ConvertPreviewCard: View {
             thumbnail: thumbView,
             thumbnailPlaceholder: job.isVideoFile ? "video" : "waveform",
             title: job.inputURL.deletingPathExtension().lastPathComponent,
-            subtitle: subtitleView, // path + input->output chip row
-            belowHeader: belowHeaderRow // divider + CONVERT AS mode toggle, ahead of everything else
+            secondaryTitle: job.inputURL.path,
+            subtitle: subtitleView // IN / OUT lines
         ) {
-            // Four sections, each with its own label, top to bottom:
-            // CONVERT AS (above, in belowHeaderRow) -> VIDEO CODEC ->
-            // AUDIO CODEC -> OUTPUT FORMAT. OUTPUT FOLDER lives in the
+            // Four labelled rows, top to bottom: CONVERT AS -> VIDEO CODEC ->
+            // AUDIO CODEC -> OUTPUT FORMAT. The output folder lives in the
             // bottom bar (shared across every job), not here.
-            VStack(alignment: .leading, spacing: 11) {
-                // VIDEO CODEC — "Same as Source" is a chip alongside the real
-                // codec choices rather than a separate checkbox: selecting it
-                // stream-copies the source video untouched; selecting any other
-                // chip transcodes with that codec. Lets you change only the
-                // audio (or only the video) on a clip without touching the
-                // other track.
+            VStack(alignment: .leading, spacing: 9) {
+                FormRow(icon: "switch.2", label: "CONVERT AS") {
+                    SegmentedCapsule(options: modeOptions, fill: false)
+                }
                 if job.mediaMode.isVideo {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Label("VIDEO CODEC", systemImage: "video")
-                                .font(.appMono(size: 10, weight: .semibold))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                            if let source = job.videoSourceLabel {
-                                Spacer()
-                                Text("Original: \(source)")
-                                    .font(.appMono(size: 10))
-                                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                            }
-                        }
-                        OptionRow {
-                            let sameAsSourceChip = SelectorChip(label: "Same as Source", isSelected: !job.transcodeVideo) {
-                                withAnimation(.spring(response: 0.25)) {
-                                    job.useSameAsSourceForVideo()
-                                }
-                            }
-                            // Fixed width only when there's something else in
-                            // the row to sit beside -- with no real codec
-                            // chips at all, "Same as Source" is the only
-                            // control here and goes full width instead of
-                            // sitting narrow with dead space next to it.
-                            if job.availableVideoCodecs.isEmpty {
-                                sameAsSourceChip.frame(maxWidth: .infinity)
-                            } else {
-                                sameAsSourceChip.frame(width: Self.sameAsSourceChipWidth)
-                                ForEach(job.availableVideoCodecs) { codec in
-                                    SelectorChip(
-                                        label: codec.rawValue,
-                                        isSelected: job.transcodeVideo && job.videoCodec == codec
-                                    ) {
-                                        withAnimation(.spring(response: 0.25)) {
-                                            job.videoCodec = codec
-                                            job.transcodeVideo = true
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    FormRow(icon: "video", label: "VIDEO CODEC",
+                            hint: job.videoSourceLabel.map { "Original: \($0)" }) {
+                        SegmentedCapsule(options: videoCodecOptions)
                     }
                 }
-
-                // AUDIO CODEC — same shape as VIDEO CODEC above. Hidden
-                // entirely for video-only mode (no audio track in the
+                // Hidden entirely for video-only mode (no audio track in the
                 // output at all).
                 if job.mediaMode != .videoOnly {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Label("AUDIO CODEC", systemImage: "waveform")
-                                .font(.appMono(size: 10, weight: .semibold))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                            if let source = job.audioSourceLabel {
-                                Spacer()
-                                Text("Original: \(source)")
-                                    .font(.appMono(size: 10))
-                                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                            }
-                        }
-                        OptionRow {
-                            let sameAsSourceChip = SelectorChip(label: "Same as Source", isSelected: !job.transcodeAudio) {
-                                withAnimation(.spring(response: 0.25)) {
-                                    job.useSameAsSourceForAudio()
-                                }
-                            }
-                            // Real codec chips hidden when the output format only has
-                            // one possible audio codec (e.g. MP3/FLAC are self-contained
-                            // — codec == container, so there's no real choice besides
-                            // Same as Source vs. that one codec, and picking the format
-                            // above already implies the latter). In that case "Same as
-                            // Source" is the only control in the row and goes full width
-                            // -- see the matching comment on the VIDEO CODEC row above.
-                            if job.availableAudioCodecs.count > 1 {
-                                sameAsSourceChip.frame(width: Self.sameAsSourceChipWidth)
-                                ForEach(job.availableAudioCodecs) { codec in
-                                    SelectorChip(
-                                        label: codec.rawValue,
-                                        isSelected: job.transcodeAudio && job.audioCodec == codec
-                                    ) {
-                                        withAnimation(.spring(response: 0.25)) {
-                                            job.audioCodec = codec
-                                            job.transcodeAudio = true
-                                        }
-                                    }
-                                }
-                            } else {
-                                sameAsSourceChip.frame(maxWidth: .infinity)
-                            }
-                        }
+                    FormRow(icon: "waveform", label: "AUDIO CODEC",
+                            hint: job.audioSourceLabel.map { "Original: \($0)" }) {
+                        SegmentedCapsule(options: audioCodecOptions)
                     }
                 }
-
-                // OUTPUT FORMAT — last section, after both codec choices are
-                // settled.
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("OUTPUT FORMAT", systemImage: "doc.badge.arrow.up")
-                        .font(.appMono(size: 10, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    formatRow
+                FormRow(icon: "doc.badge.arrow.up", label: "OUTPUT FORMAT") {
+                    SegmentedCapsule(options: formatOptions)
                 }
             }
         }
@@ -2485,7 +2360,7 @@ struct ConvertPreviewCard: View {
     /// become," since the full input->output comparison (outputLayer) is
     /// still there in Analyze where settings are actually being decided.
     private var queueRowSubtitle: AnyView {
-        AnyView(ChipRow(chips: job.outputChips))
+        AnyView(MetaLine(chips: job.outputChips))
     }
 
     /// Edit control -- pulls this job back to the Analyze panel for
@@ -2526,7 +2401,10 @@ struct ConvertPreviewCard: View {
             title: job.inputURL.deletingPathExtension().lastPathComponent,
             subtitle: isQueueRow ? queueRowSubtitle : outputLayer,
             hasStatusContent: hasCompletedCardStatusContent,
-            compact: isQueueRow
+            compact: isQueueRow,
+            // Queue rows sit inside the bottom bar's grey card, told apart by
+            // the hairlines the drawer draws between them.
+            flat: isQueueRow
         ) {
             // Actions row — buttons stretch to fill the full card width (each
             // GlassButton defaults to maxWidth: .infinity), so this HStack

@@ -236,122 +236,145 @@ struct HistoryRow: View {
         }
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Thumbnail + title/date row
-            HStack(alignment: .top, spacing: 10) {
-                // Thumbnail (only when URL available)
-                if !entry.thumbnailURL.isEmpty, let thumbURL = URL(string: entry.thumbnailURL) {
-                    AsyncImage(url: thumbURL) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().aspectRatio(contentMode: .fill)
-                                .frame(width: 56, height: 36)
-                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                        case .failure, .empty:
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(Color.white.opacity(DesignTokens.Interactive.fillRest))
-                                .frame(width: 56, height: 36)
-                        @unknown default:
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(Color.white.opacity(DesignTokens.Interactive.fillRest))
-                                .frame(width: 56, height: 36)
-                        }
+    // MARK: Pieces
+
+    /// The download's own thumbnail when there is one; otherwise a same-size
+    /// placeholder, so every row has the same shape whatever it is.
+    private var thumbnail: some View {
+        Group {
+            if !entry.thumbnailURL.isEmpty, let thumbURL = URL(string: entry.thumbnailURL) {
+                AsyncImage(url: thumbURL) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img.resizable().aspectRatio(contentMode: .fill)
+                    default:
+                        placeholder
                     }
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Image(systemName: entry.failed ? "xmark.circle.fill" : "checkmark.circle.fill")
-                            .foregroundColor(entry.failed ? .red.opacity(0.6) : .green.opacity(0.55))
-                            .font(.appMono(size: 12))
-                        Text(entry.title)
-                            .font(.appMono(size: 13, weight: .medium))
-                            .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                            .lineLimit(narrow ? 2 : 1).truncationMode(.middle)
-                        Spacer()
-                        Text(formattedDate)
-                            .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        Button(action: onRemove) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                                .frame(width: 16, height: 16)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("Remove from History")
-                        .accessibilityLabel("Remove from History")
-                        // Faint at rest (so it's discoverable without hovering,
-                        // and reachable by accessibility/keyboard), full on hover.
-                        .opacity(hovering ? 1 : 0.3)
-                    }
-                    // For conversions, `url` is the ORIGINAL input file — show
-                    // the actual produced file's path instead when available.
-                    Text(entry.entryType == "conversion" && !entry.outputFilePath.isEmpty ? entry.outputFilePath : entry.url)
-                        .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                        .lineLimit(1).truncationMode(.middle)
-                }
-            }
-
-            // Error message for failed entries
-            if entry.failed, let err = entry.errorMessage, !err.isEmpty {
-                HStack(alignment: .top, spacing: 5) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.appMono(size: 10)).foregroundColor(.red.opacity(0.7))
-                    Text(err)
-                        .font(.appMono(size: 10))
-                        .foregroundColor(.red.opacity(0.65))
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(Color.red.opacity(0.07))
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                    .stroke(Color.red.opacity(0.15), lineWidth: 0.5))
-            }
-
-            // Metadata chips row — dynamic, color-grouped chips reflecting final output data
-            let actionButtons = Group {
-
-                if !entry.failed {
-                    // Reveal button — selects the actual finished file (not just
-                    // the containing folder) so it matches the Download/Convert
-                    // card behavior. Falls back to the output directory itself
-                    // if no specific file path was recorded (older entries).
-                    GlassButton(label: "Reveal", icon: "folder.fill", tint: .white, fitContent: true) {
-                        let target = !entry.outputFilePath.isEmpty ? entry.outputFilePath : entry.outputDir
-                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: target)])
-                    }
-                }
-
-                // Retry / Reconvert / Redownload button — same GlassButton style
-                // used on the Download/Convert tab cards. Conversion entries say
-                // "Reconvert" instead of "Redownload" to match their action.
-                GlassButton(
-                    label: entry.failed ? "Retry" : (entry.entryType == "conversion" ? "Reconvert" : "Redownload"),
-                    icon: entry.failed ? "arrow.counterclockwise" : "arrow.uturn.down",
-                    tint: entry.failed ? .red : DesignTokens.Accent.warning,
-                    fitContent: true,
-                    action: onRedownload
-                )
-            }
-            // In a narrow column the chips get their own full-width line and the
-            // buttons sit beneath, instead of both fighting for one row.
-            if narrow {
-                VStack(alignment: .leading, spacing: 8) {
-                    ChipRow(chips: entry.chips)
-                    HStack(spacing: 6) { Spacer(); actionButtons }
                 }
             } else {
-                HStack(spacing: 6) {
-                    ChipRow(chips: entry.chips)
-                    Spacer()
+                placeholder
+            }
+        }
+        .frame(width: 56, height: 36)
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+
+    private var placeholder: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color.white.opacity(DesignTokens.Interactive.fillRest))
+            Image(systemName: entry.entryType == "conversion" ? "arrow.triangle.2.circlepath" : "arrow.down.circle")
+                .font(.appMono(size: 13))
+                .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+        }
+    }
+
+    /// For conversions, `url` is the ORIGINAL input file -- show the actual
+    /// produced file's path instead when available.
+    private var secondaryLine: String {
+        entry.entryType == "conversion" && !entry.outputFilePath.isEmpty ? entry.outputFilePath : entry.url
+    }
+
+    /// Title, then the link dim beside it, then the date.
+    private var titleLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: entry.failed ? "xmark.circle.fill" : "checkmark.circle.fill")
+                .foregroundColor(entry.failed ? .red.opacity(0.6) : .green.opacity(0.55))
+                .font(.appMono(size: 12))
+            Text(entry.title)
+                .font(.appMono(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                .lineLimit(1).truncationMode(.middle)
+                .layoutPriority(1)
+            if !narrow {
+                Text(secondaryLine)
+                    .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                    .lineLimit(1).truncationMode(.middle)
+            } else {
+                Spacer(minLength: 0)
+            }
+            Text(formattedDate)
+                .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                .fixedSize()
+        }
+    }
+
+    /// Error message for failed entries, one quiet line under the metadata.
+    @ViewBuilder
+    private var errorLine: some View {
+        if entry.failed, let err = entry.errorMessage, !err.isEmpty {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.appMono(size: 10)).foregroundColor(.red.opacity(0.7))
+                Text(err)
+                    .font(.appMono(size: 10))
+                    .foregroundColor(.red.opacity(0.65))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 6) {
+            if !entry.failed {
+                // Reveal button -- selects the actual finished file (not just
+                // the containing folder) so it matches the Download/Convert
+                // card behavior. Falls back to the output directory itself
+                // if no specific file path was recorded (older entries).
+                GlassButton(label: "Reveal", icon: "folder.fill", tint: .white, fitContent: true) {
+                    let target = !entry.outputFilePath.isEmpty ? entry.outputFilePath : entry.outputDir
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: target)])
+                }
+            }
+
+            // Retry / Reconvert / Redownload button -- same GlassButton style
+            // used on the Download/Convert tab cards. Conversion entries say
+            // "Reconvert" instead of "Redownload" to match their action.
+            GlassButton(
+                label: entry.failed ? "Retry" : (entry.entryType == "conversion" ? "Reconvert" : "Redownload"),
+                icon: entry.failed ? "arrow.counterclockwise" : "arrow.uturn.down",
+                tint: entry.failed ? .red : DesignTokens.Accent.warning,
+                fitContent: true,
+                action: onRedownload
+            )
+
+            // Remove is an icon button, so it keeps its capsule.
+            HoverIconButton(icon: "xmark", size: 10, help: "Remove from History", action: onRemove)
+                .accessibilityLabel("Remove from History")
+        }
+    }
+
+    var body: some View {
+        // Two lines: title + link + date, then the symbols line -- with the
+        // actions on the trailing edge. In a narrow column the actions drop to
+        // their own line beneath instead of fighting the text for room.
+        Group {
+            if narrow {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .center, spacing: 12) {
+                        thumbnail
+                        VStack(alignment: .leading, spacing: 5) {
+                            titleLine
+                            MetaLine(chips: entry.chips)
+                            errorLine
+                        }
+                    }
+                    HStack(spacing: 6) { Spacer(minLength: 0); actionButtons }
+                }
+            } else {
+                HStack(alignment: .center, spacing: 12) {
+                    thumbnail
+                    VStack(alignment: .leading, spacing: 5) {
+                        titleLine
+                        MetaLine(chips: entry.chips)
+                        errorLine
+                    }
                     actionButtons
                 }
             }
         }
-        .padding(12)
+        .padding(.horizontal, 14).padding(.vertical, 10)
         // Same black-frosted glass material every other card in the app
         // uses (was previously flat white-on-black with no blur -- a gap
         // versus the rest of the design language). Mirrors GlassCard's

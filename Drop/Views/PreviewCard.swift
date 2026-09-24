@@ -12,6 +12,13 @@ private struct WidthPreferenceKey: PreferenceKey {
     }
 }
 
+/// Sizes shared by every card header so a card doesn't change shape as it moves
+/// between states (analyzing, queued, downloading, done).
+enum CardMetrics {
+    static let thumbWidth: CGFloat = 56
+    static let thumbHeight: CGFloat = 38
+}
+
 // MARK: - Shared card chrome
 //
 // Both PreviewCard and CompletedCard share the same header row:
@@ -42,7 +49,9 @@ struct PreviewCard<Settings: View>: View {
     var thumbnail: AnyView?
     var thumbnailPlaceholder: String = "doc"
     var title: String
-    var subtitle: AnyView?          // duration, size, video/audio badge…
+    /// The link or file path, shown dim on the same line as the title.
+    var secondaryTitle: String = ""
+    var subtitle: AnyView?          // the IN / OUT metadata lines
 
     /// Extra always-visible row rendered below the header but OUTSIDE
     /// cardHeader's own HStack -- e.g. Download's Video+Audio/Audio Only
@@ -137,7 +146,7 @@ struct PreviewCard<Settings: View>: View {
         // CONTENT only. Opacity on the card itself would dilute the glass tint
         // and turn the surface into a flat grey slab (see FocusEffect).
         .opacity((showCheckbox && !isSelected) ? 0.6 : 1.0)
-        .padding(16)
+        .padding(.horizontal, 14).padding(.vertical, 12)
         // Match the 60%-of-window proportional width every other row in
         // the queue (list header, bottom bar) explicitly stretches to --
         // without this the card just hugs its own content and reads
@@ -172,8 +181,15 @@ struct PreviewCard<Settings: View>: View {
     private var cardHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             cardHeaderRow
-            if narrow, !isAnalyzing, let sub = subtitle {
-                sub.transition(.blurIn)
+            if narrow, !isAnalyzing {
+                if !secondaryTitle.isEmpty {
+                    Text(secondaryTitle)
+                        .font(.appMono(size: 10))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                        .lineLimit(1).truncationMode(.middle)
+                        .transition(.blurIn)
+                }
+                if let sub = subtitle { sub.transition(.blurIn) }
             }
         }
     }
@@ -193,7 +209,7 @@ struct PreviewCard<Settings: View>: View {
         // fix for cards visually "popping in" as a replacement once analyze
         // finishes, instead of smoothly settling) rather than unmounting an
         // AnalyzingCard and mounting a fresh PreviewCard.
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
             if showCheckbox {
                 // Checkbox slot is simply absent while analyzing (nothing to
                 // select yet) -- matches AnalyzingCard, which never showed one.
@@ -226,11 +242,11 @@ struct PreviewCard<Settings: View>: View {
                         .opacity(canRevealAnalyzed ? 1 : 0)
                 } else if !isAnalyzing {
                     Image(systemName: thumbnailPlaceholder)
-                        .font(.system(size: 20, weight: .thin))
+                        .font(.system(size: 16, weight: .thin))
                         .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 }
             }
-            .frame(width: 80, height: 52)
+            .frame(width: CardMetrics.thumbWidth, height: CardMetrics.thumbHeight)
             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
             .animation(.easeInOut(duration: 0.5), value: canRevealAnalyzed)
 
@@ -244,6 +260,7 @@ struct PreviewCard<Settings: View>: View {
             // into the subtitle's old spot because that line's content
             // cross-fades in place rather than the whole block swapping.
             VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
                 ZStack(alignment: .leading) {
                     // Redacted placeholder bar with the same slow pulse the
                     // old standalone TitleSkeletonBar had, just inlined here
@@ -275,7 +292,7 @@ struct PreviewCard<Settings: View>: View {
                             (isAnalyzing ? DesignTokens.Text.secondary :
                                 ((showCheckbox && !isSelected) ? DesignTokens.Text.disabled : DesignTokens.Text.primary))
                         ))
-                        .lineLimit(isAnalyzing ? 1 : 2)
+                        .lineLimit(1)
                         .truncationMode(.middle)
                         .blur(radius: canRevealAnalyzed ? 0 : 6)
                         // Measures this Text's own intrinsic single-line
@@ -303,6 +320,18 @@ struct PreviewCard<Settings: View>: View {
                 }
                 .animation(.easeInOut(duration: 0.3), value: canRevealAnalyzed)
                 .animation(.easeInOut(duration: 0.35), value: isAnalyzing)
+                .layoutPriority(1)
+                // The link / file path, dim, on the title's own line. In a narrow
+                // column it moves down with the metadata (see cardHeader).
+                if !isAnalyzing, !secondaryTitle.isEmpty, !narrow {
+                    Text(secondaryTitle)
+                        .font(.appMono(size: 10))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .transition(.blurIn)
+                }
+                }
 
                 if isAnalyzing {
                     Text("Analyzing\u{2026}")
@@ -323,7 +352,10 @@ struct PreviewCard<Settings: View>: View {
                 SkeletonCancelButton(action: onCancelAnalyze)
             } else {
                 if collapseButtonInHeader, let isExpanded, !collapseLocked {
-                    CollapseToggleButton(isExpanded: isExpanded.wrappedValue) {
+                    HoverIconButton(
+                        icon: isExpanded.wrappedValue ? "chevron.up" : "chevron.down", size: 12,
+                        help: isExpanded.wrappedValue ? "Hide options" : "Show options"
+                    ) {
                         withAnimation(.easeOut(duration: 0.22)) { isExpanded.wrappedValue.toggle() }
                     }
                 }
@@ -468,6 +500,8 @@ struct CompletedCard<Status: View>: View {
     var thumbnail: AnyView?
     var thumbnailPlaceholder: String = "doc"
     var title: String
+    /// The link or file path, shown dim on the title's line.
+    var secondaryTitle: String = ""
     var subtitle: AnyView?
     /// False hides the divider + status() section entirely -- for rows
     /// where that section would otherwise render as an empty divider with
@@ -480,12 +514,16 @@ struct CompletedCard<Status: View>: View {
     /// scrollable drawer) -- false (default) keeps Download's cards at
     /// their original size.
     var compact: Bool = false
+    /// A plain row with no glass card of its own, for lists that already sit
+    /// inside a grey card (the Convert queue) -- rows are told apart by a
+    /// hairline the list draws between them.
+    var flat: Bool = false
 
     // Status content
     @ViewBuilder var status: () -> Status
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 10 : 14) {
+    private var rowContent: some View {
+        VStack(alignment: .leading, spacing: compact ? 10 : 12) {
             cardHeader
             if hasStatusContent {
                 GlassDivider()
@@ -494,13 +532,24 @@ struct CompletedCard<Status: View>: View {
         }
         // Content-only dim -- see PreviewCard.fullCard.
         .opacity((showCheckbox && !isSelected) ? 0.6 : 1.0)
-        .padding(compact ? 10 : 16)
+        .padding(flat ? 6 : (compact ? 10 : 14))
         // Same proportional-width fix as PreviewCard.fullCard above.
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard(cornerRadius: DesignTokens.Radius.large)
-        .animation(.easeOut(duration: 0.15), value: isSelected)
-        .animation(.easeOut(duration: 0.15), value: showCheckbox)
-        .transition(.glassPop)
+    }
+
+    var body: some View {
+        if flat {
+            rowContent
+                .animation(.easeOut(duration: 0.15), value: isSelected)
+                .animation(.easeOut(duration: 0.15), value: showCheckbox)
+                .transition(.blurIn)
+        } else {
+            rowContent
+                .glassCard(cornerRadius: DesignTokens.Radius.large)
+                .animation(.easeOut(duration: 0.15), value: isSelected)
+                .animation(.easeOut(duration: 0.15), value: showCheckbox)
+                .transition(.glassPop)
+        }
     }
 
     @Environment(\.contentColumnWidth) private var columnWidth
@@ -511,13 +560,21 @@ struct CompletedCard<Status: View>: View {
     private var cardHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             cardHeaderRow
-            if narrow, let sub = subtitle { sub }
+            if narrow {
+                if !secondaryTitle.isEmpty {
+                    Text(secondaryTitle)
+                        .font(.appMono(size: 10))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                if let sub = subtitle { sub }
+            }
         }
     }
 
     @ViewBuilder
     private var cardHeaderRow: some View {
-        HStack(spacing: compact ? 8 : 10) {
+        HStack(spacing: compact ? 8 : 12) {
             if showCheckbox {
                 HoverIconButton(
                     icon: isSelected ? "checkmark.circle.fill" : "circle",
@@ -535,18 +592,29 @@ struct CompletedCard<Status: View>: View {
                         .clipped()
                 } else {
                     Image(systemName: thumbnailPlaceholder)
-                        .font(.system(size: compact ? 16 : 20, weight: .thin))
+                        .font(.system(size: 16, weight: .thin))
                         .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 }
             }
-            .frame(width: compact ? 56 : 80, height: compact ? 38 : 52)
+            .frame(width: CardMetrics.thumbWidth, height: CardMetrics.thumbHeight)
             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: compact ? 12 : 13, weight: .semibold))
-                    .foregroundColor(.white.opacity((showCheckbox && !isSelected) ? DesignTokens.Text.disabled : DesignTokens.Text.primary))
-                    .lineLimit(2)
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(title)
+                        .font(.system(size: compact ? 12 : 13, weight: .semibold))
+                        .foregroundColor(.white.opacity((showCheckbox && !isSelected) ? DesignTokens.Text.disabled : DesignTokens.Text.primary))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
+                    if !secondaryTitle.isEmpty, !narrow {
+                        Text(secondaryTitle)
+                            .font(.appMono(size: 10))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
                 if let sub = subtitle, !narrow { sub }
             }
 
@@ -556,11 +624,20 @@ struct CompletedCard<Status: View>: View {
             // remove control, so "this deletes the item" reads identically
             // everywhere in the app. trailingAccessory (e.g. Edit) stacks
             // directly beneath it rather than living in its own row/section.
-            VStack(spacing: 6) {
-                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: true) {
-                    onRemove()
+            let removeButton = HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: true) {
+                onRemove()
+            }
+            if flat {
+                // Beside each other, so the row stays one line tall.
+                HStack(spacing: 6) {
+                    if let trailingAccessory { trailingAccessory }
+                    removeButton
                 }
-                if let trailingAccessory { trailingAccessory }
+            } else {
+                VStack(spacing: 6) {
+                    removeButton
+                    if let trailingAccessory { trailingAccessory }
+                }
             }
         }
     }

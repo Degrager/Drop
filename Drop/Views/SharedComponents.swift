@@ -32,6 +32,10 @@ enum WindowLayout {
     /// the text beside it is what appears and disappears.
     static let railIconSlot: CGFloat = 18
     static let railIconInset: CGFloat = (compactSidebarWidth - 2 * railContentInset - railIconSlot) / 2
+    /// Padding inside the sidebar's grey update card. The rows and the button
+    /// inside it take this off their rail inset, so their icons still line up
+    /// with the tab icons above.
+    static let updateCardInset: CGFloat = 4
     /// 0 = fully collapsed, 1 = fully expanded, for an in-flight sidebar width.
     static func sidebarExpansion(_ width: CGFloat) -> CGFloat {
         min(max((width - compactSidebarWidth) / (sidebarWidth - compactSidebarWidth), 0), 1)
@@ -345,17 +349,13 @@ struct LogView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(logs.enumerated()), id: \.offset) { i, line in
-                                Text(line)
-                                    .font(.appMono(size: 11, design: .monospaced))
-                                    .foregroundColor(logColor(line))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                LogRow(line: line, color: logColor(line), tinted: i % 2 == 0)
                                     .id(i)
                             }
                         }
-                        .padding(.horizontal, 20).padding(.vertical, 16)
+                        .padding(.horizontal, 12).padding(.vertical, 14)
                     }
                     .onChange(of: logs.count) {
                         if autoScroll, let last = logs.indices.last {
@@ -372,6 +372,71 @@ struct LogView: View {
         if line.contains("WARNING") { return .orange.opacity(0.85) }
         if line.contains("✓") { return .green.opacity(0.85) }
         return .white.opacity(DesignTokens.Text.tertiary)
+    }
+}
+
+/// One log line, split into a quiet timestamp column, a status symbol and the
+/// message. Errors and warnings wrap in full so nothing is hidden; everything
+/// else stays on one line (middle-truncated -- the full text is the tooltip and
+/// what Copy/Export write out).
+private struct LogRow: View {
+    let line: String
+    let color: Color
+    let tinted: Bool
+
+    private var parts: (time: String, message: String) {
+        // Lines are "[4:06:37.774 AM] message".
+        guard line.hasPrefix("["), let close = line.firstIndex(of: "]") else { return ("", line) }
+        let time = String(line[line.index(after: line.startIndex)..<close])
+        let message = line[line.index(after: close)...].trimmingCharacters(in: .whitespaces)
+        return (time, message)
+    }
+
+    private var isError: Bool { line.contains("ERROR") }
+    private var isWarning: Bool { line.contains("WARNING") }
+    private var isSuccess: Bool { line.contains("✓") }
+
+    private var symbol: String {
+        if isError { return "xmark" }
+        if isWarning { return "exclamationmark.triangle.fill" }
+        if isSuccess { return "checkmark" }
+        return "terminal"
+    }
+
+    /// The ✓ already says it in the symbol column.
+    private var message: String {
+        var text = parts.message
+        if isSuccess, let range = text.range(of: "✓") {
+            text.removeSubrange(range)
+            text = text.trimmingCharacters(in: .whitespaces)
+        }
+        return text
+    }
+
+    var body: some View {
+        let wraps = isError || isWarning
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(parts.time)
+                .font(.appMono(size: 10, design: .monospaced))
+                .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                .lineLimit(1)
+                .frame(width: 112, alignment: .leading)
+            Image(systemName: symbol)
+                .font(.appMono(size: 9.5, weight: .bold))
+                .foregroundColor(isError || isWarning || isSuccess ? color : .white.opacity(DesignTokens.Text.disabled))
+                .frame(width: 14)
+            Text(message)
+                .font(.appMono(size: 11, design: .monospaced))
+                .foregroundColor(color)
+                .textSelection(.enabled)
+                .lineLimit(wraps ? nil : 1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Color.white.opacity(tinted ? 0.025 : 0))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .help(line)
     }
 }
 
@@ -475,6 +540,19 @@ struct SidebarTabItem: View {
             // before settling to the accent blue.
             .animation(.easeOut(duration: 0.12), value: isSelected)
         }
+        // Collapsed, the count is gone with the label -- a small dot on the icon
+        // says there's something in it (the count is in the tooltip).
+        .overlay(alignment: .topTrailing) {
+            if compact, badge != nil {
+                Circle()
+                    .fill(DesignTokens.Accent.primaryLight)
+                    .frame(width: 8, height: 8)
+                    .overlay(Circle().stroke(Color.black, lineWidth: 2))
+                    .padding(.top, 4).padding(.trailing, 10)
+                    .transition(.blurIn)
+                    .allowsHitTesting(false)
+            }
+        }
         // Small horizontal room around the pill so its hover/press scale-
         // grow still has a little breathing space before the sidebar's
         // own edge -- kept tight since the pill itself is now 90% wide.
@@ -486,3 +564,389 @@ struct SidebarTabItem: View {
     }
 }
 
+
+// MARK: - Card design kit
+//
+// The shared pieces the redesigned cards, bottom bars and history rows are
+// built from, so Download, Convert and History can't drift apart:
+//  - MetaLines / MetaLine: compact metadata with colored symbols
+//  - SegmentedCapsule / FormRow: labelled "choose one" rows
+//  - FieldCapsule: a path/text field in a capsule
+//  - innerCard(): the grey card nested inside a glass card
+
+extension ChipData {
+    enum MetaColumn { case time, video, audio, other }
+
+    /// Which column of the aligned IN / OUT grid this chip belongs in.
+    var metaColumn: MetaColumn {
+        switch icon {
+        case "clock", "internaldrive": return .time
+        case "waveform": return .audio
+        case "video", "video.badge.waveform": return .video
+        default: return .other
+        }
+    }
+
+    /// The symbol's color: blue video, green audio, warm for conversions,
+    /// red for failures, quiet white for length/size.
+    var metaIconColor: Color {
+        if color == .blue { return DesignTokens.Accent.primaryLight }
+        if color == .green { return DesignTokens.Accent.success }
+        if color == .orange { return DesignTokens.Accent.warning }
+        if color == .red { return DesignTokens.Accent.danger }
+        return .white.opacity(0.5)
+    }
+}
+
+/// One metadata item as text with its symbol: no capsule of its own.
+struct MetaCell: View {
+    let chip: ChipData
+
+    private var primary: Color { .white.opacity(0.88) }
+    private var dim: Color { .white.opacity(DesignTokens.Text.tertiary) }
+
+    /// "AAC · 2.0 · 128kbps" reads as "AAC" bright and "2.0 128kbps" quiet;
+    /// video and length keep everything bright.
+    private func text(_ raw: String, dimTail: Bool) -> Text {
+        let tokens = raw.components(separatedBy: " · ")
+        guard dimTail, tokens.count > 1 else { return Text(tokens.joined(separator: " ")) }
+        return Text(tokens[0] + " ") + Text(tokens.dropFirst().joined(separator: " ")).foregroundColor(dim)
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let icon = chip.icon {
+                Image(systemName: icon)
+                    .font(.appMono(size: 10, weight: .bold))
+                    .foregroundColor(chip.metaIconColor)
+            }
+            if !chip.label.isEmpty {
+                Text(chip.label)
+                    .font(.appMono(size: 10, weight: .bold))
+                    .foregroundColor(chip.metaIconColor)
+            }
+            text(chip.value, dimTail: chip.metaColumn == .audio)
+                .font(.appMono(size: 10.5, weight: .medium))
+                .foregroundColor(primary)
+            if let icon2 = chip.icon2, let value2 = chip.value2 {
+                Image(systemName: icon2)
+                    .font(.appMono(size: 10, weight: .bold))
+                    .foregroundColor(chip.metaIconColor)
+                    .padding(.leading, 3)
+                Text(value2)
+                    .font(.appMono(size: 10.5, weight: .medium))
+                    .foregroundColor(primary)
+            }
+        }
+        .lineLimit(1)
+        .fixedSize()
+    }
+}
+
+/// "IN" and "OUT" lines for a card header: what you have, then what you'll
+/// get, in fixed columns (time and size, video, audio) so the eye can read
+/// straight down from source to result. Falls back to wrapping lines when the
+/// column is too narrow for the grid.
+struct MetaLines: View {
+    let input: [ChipData]
+    let output: [ChipData]
+
+    private func tag(_ text: String, out: Bool) -> some View {
+        Text(text)
+            .font(.appMono(size: 8.5, weight: .bold))
+            .tracking(0.8)
+            .foregroundColor(out ? DesignTokens.Accent.primaryLight : .white.opacity(0.34))
+            .frame(minWidth: 22, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func cell(_ chips: [ChipData], _ column: ChipData.MetaColumn) -> some View {
+        if let chip = chips.first(where: { $0.metaColumn == column }) {
+            MetaCell(chip: chip)
+        } else {
+            Color.clear.frame(width: 0, height: 0)
+        }
+    }
+
+    private func wrapped(_ chips: [ChipData], _ label: String, out: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            tag(label, out: out)
+            FlowLayout(spacing: 4) {
+                ForEach(chips, id: \.self) { MetaCell(chip: $0) }
+            }
+        }
+    }
+
+    var body: some View {
+        if input.isEmpty && output.isEmpty {
+            EmptyView()
+        } else {
+            ViewThatFits(in: .horizontal) {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
+                    if !input.isEmpty {
+                        GridRow {
+                            tag("IN", out: false)
+                            cell(input, .time)
+                            cell(input, .video)
+                            cell(input, .audio)
+                        }
+                    }
+                    if !output.isEmpty {
+                        GridRow {
+                            tag("OUT", out: true)
+                            cell(output, .time)
+                            cell(output, .video)
+                            cell(output, .audio)
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    if !input.isEmpty { wrapped(input, "IN", out: false) }
+                    if !output.isEmpty { wrapped(output, "OUT", out: true) }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// A single line of metadata (History rows, Convert queue rows): the same
+/// symbols and text as MetaLines, separated by thin dividers.
+struct MetaLine: View {
+    let chips: [ChipData]
+
+    private var separator: some View {
+        Rectangle().fill(Color.white.opacity(0.2)).frame(width: 0.75, height: 10)
+    }
+
+    var body: some View {
+        if chips.isEmpty {
+            EmptyView()
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 9) {
+                    ForEach(Array(chips.enumerated()), id: \.offset) { index, chip in
+                        if index > 0 { separator }
+                        MetaCell(chip: chip)
+                    }
+                }
+                FlowLayout(spacing: 8) {
+                    ForEach(chips, id: \.self) { MetaCell(chip: $0) }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: Segmented capsule
+
+struct SegmentOption: Identifiable {
+    let id: String
+    let label: String
+    var icon: String? = nil
+    /// nil = no badge. true = "Native" (green dot), false = "Re-encodes" (amber dot).
+    var nativeBadge: Bool? = nil
+    var help: String = ""
+    var isSelected: Bool
+    var tint: Color = DesignTokens.Accent.primary
+    let action: () -> Void
+}
+
+/// "Choose one" as a single capsule holding every option, the selected one
+/// lit. When the options don't fit on one line they wrap as separate capsules.
+struct SegmentedCapsule: View {
+    let options: [SegmentOption]
+    /// true: the segments share the capsule's full width. false: they hug
+    /// their labels (mode toggles with two or three short options).
+    var fill: Bool = true
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 2) {
+                ForEach(options) { SegmentButton(option: $0, fill: fill, standalone: false) }
+            }
+            .padding(3)
+            .background(Color.white.opacity(0.04), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
+            FlowLayout(spacing: 6) {
+                ForEach(options) { SegmentButton(option: $0, fill: false, standalone: true) }
+            }
+        }
+        .frame(maxWidth: fill ? .infinity : nil, alignment: .leading)
+    }
+}
+
+private struct SegmentButton: View {
+    let option: SegmentOption
+    let fill: Bool
+    /// True when wrapped onto its own line: draws its own capsule border.
+    let standalone: Bool
+    @State private var hovering = false
+    @State private var glowPhase = false
+
+    private static let restingStroke: Double = 0.8
+    private static let restingGlow: Double = 0.4
+
+    var body: some View {
+        let T = DesignTokens.Interactive.self
+        let selected = option.isSelected
+        Button(action: option.action) {
+            HStack(spacing: 5) {
+                if let icon = option.icon {
+                    Image(systemName: icon)
+                        .font(.appMono(size: 11, weight: .semibold))
+                }
+                if let native = option.nativeBadge {
+                    Circle()
+                        .fill(native ? DesignTokens.Accent.success : DesignTokens.Accent.warning)
+                        .frame(width: 5, height: 5)
+                }
+                Text(option.label)
+                    .font(.appMono(size: 11.5, weight: .semibold))
+                    .lineLimit(1)
+                    // A segment is never narrower than its label: the row wraps
+                    // (see SegmentedCapsule) before a label would be cut.
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .foregroundColor(selected ? option.tint : .white.opacity(hovering ? DesignTokens.Text.primary : DesignTokens.Text.tertiary))
+            .padding(.horizontal, 12)
+            .frame(maxWidth: fill ? .infinity : nil)
+            .frame(height: 26)
+            .background(
+                Capsule().fill(
+                    selected ? option.tint.opacity(0.14)
+                        : Color.white.opacity(hovering ? T.fillHover * 0.4 : (standalone ? T.fillRest : 0))
+                )
+            )
+            .overlay(
+                Capsule().stroke(
+                    selected ? option.tint.opacity(glowPhase ? T.strokeGlow : Self.restingStroke)
+                        : (standalone ? Color.white.opacity(hovering ? T.strokeHover : T.strokeRest) : Color.clear),
+                    lineWidth: selected ? 1.0 : 0.5
+                )
+            )
+            // The selected glow is steady; it pulses only under the pointer
+            // (a repeatForever animation on something sitting on screen keeps
+            // the whole window redrawing every frame -- see SelectorChip).
+            .shadow(color: selected ? option.tint.opacity(glowPhase ? T.glowShadowHover : Self.restingGlow) : .clear,
+                    radius: selected ? 6 : 0)
+        }
+        .buttonStyle(.plain)
+        .onHover { h in
+            hovering = h
+            if h && selected {
+                withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) { glowPhase = true }
+            } else {
+                withAnimation(.easeOut(duration: 0.2)) { glowPhase = false }
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .animation(.spring(response: 0.2), value: selected)
+        .help(option.help)
+    }
+}
+
+// MARK: Form row
+
+/// A settings row: the label (and a small hint) on the left, one control on the
+/// right. In a narrow column the label sits above the control instead.
+struct FormRow<Content: View>: View {
+    let icon: String
+    let label: String
+    /// Small text under the label ("Original: ProRes").
+    var hint: String? = nil
+    /// Shows the Native / Re-encodes legend under the label instead.
+    var showsNativeLegend: Bool = false
+    @ViewBuilder let content: () -> Content
+    @Environment(\.contentColumnWidth) private var columnWidth
+    private var stacked: Bool { columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint }
+
+    private var labelBlock: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.appMono(size: 10, weight: .semibold))
+                    .frame(width: 14, alignment: .center)
+                Text(label)
+                    .font(.appMono(size: 10, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+            if showsNativeLegend {
+                nativeLegend()
+                    .padding(.leading, 20)
+            } else if let hint, !hint.isEmpty {
+                Text(hint)
+                    .font(.appMono(size: 9))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                    .lineLimit(1)
+                    .padding(.leading, 20)
+            }
+        }
+    }
+
+    var body: some View {
+        if stacked {
+            VStack(alignment: .leading, spacing: 6) {
+                labelBlock
+                content()
+            }
+        } else {
+            HStack(alignment: .center, spacing: 12) {
+                labelBlock
+                    .frame(width: 150, alignment: .leading)
+                content()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+// MARK: Field capsule + inner card
+
+/// A folder path or text field drawn as a capsule.
+struct FieldCapsule<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(spacing: DropGrid.rowSpacing) { content() }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: DropGrid.controlHeight)
+            .padding(.horizontal, 14)
+            .background(Color.white.opacity(DropGrid.fieldFillOpacity))
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth))
+    }
+}
+
+/// The estimated total size, at the trailing end of a folder capsule. Shown only
+/// when the bar is wide enough for it not to squeeze the folder path (the
+/// capsule's tooltip carries it otherwise).
+struct FolderSizeLabel: View {
+    let label: String?
+    @Environment(\.contentColumnWidth) private var columnWidth
+
+    var body: some View {
+        if let label, columnWidth >= WindowLayout.barLabelBreakpoint {
+            HStack(spacing: 4) {
+                Image(systemName: "internaldrive")
+                    .font(.appMono(size: 9))
+                Text(label)
+                    .font(.appMono(size: 10, weight: .semibold))
+            }
+            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+            .fixedSize()
+        }
+    }
+}
+
+extension View {
+    /// The grey card nested inside a glass card (the bottom bar's controls, the
+    /// sidebar's update block): the same recipe the bottom bar's SAVE TO
+    /// section has always used, so utility zones read as separate from the
+    /// black content cards around them.
+    func innerCard() -> some View {
+        glassCard(cornerRadius: DesignTokens.Radius.medium, opacity: 0.35)
+    }
+}

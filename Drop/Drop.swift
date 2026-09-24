@@ -4473,8 +4473,8 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 }
 
-/// The two sidebar collapse/expand animations, kept side by side (View menu >
-/// Sidebar Animation) until one is picked.
+/// The two sidebar collapse/expand animations, switchable from the View menu >
+/// Sidebar Animation. Resize is the default.
 enum SidebarAnimationStyle: String {
     /// Rows blur out together, the card resizes, rows pop back in one by one.
     case pop
@@ -4486,7 +4486,7 @@ enum SidebarAnimationStyle: String {
 
 struct DropApp: App {
     @NSApplicationDelegateAdaptor(DropAppDelegate.self) var appDelegate
-    @AppStorage(SidebarAnimationStyle.storageKey) private var sidebarAnimationStyle = SidebarAnimationStyle.pop.rawValue
+    @AppStorage(SidebarAnimationStyle.storageKey) private var sidebarAnimationStyle = SidebarAnimationStyle.resize.rawValue
 
     var body: some Scene {
         WindowGroup {
@@ -4736,8 +4736,8 @@ struct ContentView: View {
     @AppStorage("sidebarCollapsed") private var sidebarCollapsedByUser = false
     /// Which toggle animation to play -- switched from the View menu (see
     /// DropApp.commands) so the two can be compared side by side.
-    @AppStorage(SidebarAnimationStyle.storageKey) private var sidebarAnimationStyleRaw = SidebarAnimationStyle.pop.rawValue
-    private var sidebarAnimationStyle: SidebarAnimationStyle { SidebarAnimationStyle(rawValue: sidebarAnimationStyleRaw) ?? .pop }
+    @AppStorage(SidebarAnimationStyle.storageKey) private var sidebarAnimationStyleRaw = SidebarAnimationStyle.resize.rawValue
+    private var sidebarAnimationStyle: SidebarAnimationStyle { SidebarAnimationStyle(rawValue: sidebarAnimationStyleRaw) ?? .resize }
     // The sidebar card's own width. A deliberate toggle tween it (rows blur
     // out, the card visibly shrinks/grows, rows pop back in one by one -- see
     // onChange(of: isCompactSidebar) below); a window-driven change snaps it.

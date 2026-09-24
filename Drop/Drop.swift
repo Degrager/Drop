@@ -3402,30 +3402,22 @@ struct GlassCard: ViewModifier {
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             )
             .overlay(
-                // Static, quiet rim running the full perimeter -- a linear
-                // top-leading-to-bottom-trailing gradient made the glow look
-                // like it only existed on the left/top edge before, with the
-                // right/bottom edge going nearly invisible. An AngularGradient
-                // keeps the same bright-top-leading, dim-bottom-trailing
-                // character (so it still reads as a diagonal specular catch,
-                // not a flat uniform ring) but wraps continuously around
-                // every edge and corner. This is the resting state for every
-                // card, active or not.
+                // Static, quiet rim running the full perimeter: bright at the
+                // top-leading corner, dimmest at the bottom-trailing one, and
+                // half-way (0.175) at the other two corners, so it reads as a
+                // diagonal specular catch rather than a flat uniform ring.
+                // This is the resting state for every card, active or not.
+                //
+                // A diagonal LinearGradient, not an AngularGradient (which had
+                // the same corner values): CoreGraphics rasterizes a conic
+                // gradient pixel-by-pixel on the CPU (atan2 per pixel)
+                // whenever the card's size changes -- the sidebar collapse
+                // tween, cards appearing -- while a linear one is cheap.
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(
-                        AngularGradient(
-                            // SwiftUI angles run clockwise from 3 o'clock (0deg).
-                            // Top-leading (top-left) sits at ~225deg,
-                            // bottom-trailing (bottom-right) at ~45deg -- so
-                            // the brightest stop is placed at 225deg and the
-                            // dimmest at 45deg, wrapping smoothly through
-                            // both remaining corners back to bright again.
-                            colors: [
-                                Color.white.opacity(0.3),   // 225deg: top-leading, brightest
-                                Color.white.opacity(0.05),  // 45deg: bottom-trailing, dimmest
-                                Color.white.opacity(0.3)    // 225deg + 360: back to top-leading
-                            ],
-                            center: .center, startAngle: .degrees(225), endAngle: .degrees(585)
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.3), Color.white.opacity(0.05)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
                         ), lineWidth: 0.75
                     )
             )
@@ -3596,12 +3588,15 @@ struct RimBeam: View {
     }
 
     @State private var start: Date = Date()
+    /// The beam holds still while the window is being dragged (see
+    /// LiveResizeState) and resumes from the current time when it ends.
+    @ObservedObject private var liveResize = LiveResizeState.shared
 
     var body: some View {
         GeometryReader { geo in
             let rim = Self.rimPoints(size: geo.size, cornerRadius: cornerRadius)
             let perimeter = max(rim.last?.distance ?? 1, 1)
-            TimelineView(.animation) { timeline in
+            TimelineView(.animation(paused: liveResize.isActive)) { timeline in
                 let elapsed = timeline.date.timeIntervalSince(start)
                 let phase = CGFloat((elapsed * cyclesPerSecond).truncatingRemainder(dividingBy: 1.0))
                 trail(rim: rim, perimeter: perimeter, headPhase: phase)
@@ -3773,13 +3768,18 @@ struct HoverIconButton: View {
                 .font(.appMono(size: size))
                 .padding(6)
         }
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { buttonWidth = geo.size.width }
-                    .onChange(of: geo.size.width) { _, w in buttonWidth = w }
+        // Only the hover caption needs the width, and only `expandable` buttons
+        // have one -- every other button skipped a GeometryReader + @State
+        // that was re-laid-out on every window resize for nothing.
+        .background {
+            if expandable {
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { buttonWidth = geo.size.width }
+                        .onChange(of: geo.size.width) { _, w in buttonWidth = w }
+                }
             }
-        )
+        }
         // The caption renders as a non-interactive .overlay positioned by
         // a raw offset, NOT laid out inline inside the button's own
         // HStack. Growing something inline would grow the button's actual
@@ -4284,6 +4284,21 @@ extension Notification.Name {
     static let dropLiveResizeEnded = Notification.Name("dropLiveResizeEnded")
 }
 
+/// True while the user is dragging a window edge (from
+/// windowWillStartLiveResize to windowDidEndLiveResize). Flips twice per drag,
+/// so a view observing it costs nothing per resize tick. Used to pause
+/// continuously-running animations (a TimelineView driving a Canvas at the
+/// display's refresh rate keeps SwiftUI re-laying-out on macOS), which would
+/// otherwise stack on top of the per-frame relayout the drag itself causes.
+final class LiveResizeState: ObservableObject {
+    static let shared = LiveResizeState()
+    @Published private(set) var isActive = false
+
+    func set(_ active: Bool) {
+        if active != isActive { isActive = active }
+    }
+}
+
 // MARK: - App Delegate (enforces the screen-relative minimum window size)
 
 class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -4436,15 +4451,18 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    /// Every launch opens at WindowLayout.defaultSize, whatever size the last
-    /// session ended at. Keeps the window's top-left corner where it was, then
-    /// pulls the frame back on-screen if the new size pushed it off the edge.
+    /// Every launch opens at WindowLayout.defaultSize, centered on the screen
+    /// it appears on (the middle of the area left after the menu bar and Dock),
+    /// whatever size or place the last session ended at. constrainFrameRect
+    /// pulls it back on-screen if the screen is smaller than the window.
     private func applyLaunchSize(to window: NSWindow) {
-        var frame = window.frame
         let size = WindowLayout.defaultSize
-        frame.origin.y -= size.height - frame.height
-        frame.size = size
-        window.setFrame(window.constrainFrameRect(frame, to: window.screen), display: true)
+        let screen = window.screen ?? NSScreen.main
+        var frame = NSRect(origin: window.frame.origin, size: size)
+        if let visible = screen?.visibleFrame {
+            frame.origin = NSPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2)
+        }
+        window.setFrame(window.constrainFrameRect(frame, to: screen), display: true)
     }
 
     /// minSize only constrains drags (and SwiftUI can rewrite it from its own
@@ -4468,7 +4486,12 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // "Cocoa Live Window Resizing" guide): let the raw frame track the mouse,
     // defer real relayout to resize's end.
     func windowDidEndLiveResize(_ notification: Notification) {
+        LiveResizeState.shared.set(false)
         NotificationCenter.default.post(name: .dropLiveResizeEnded, object: nil)
+    }
+
+    func windowWillStartLiveResize(_ notification: Notification) {
+        LiveResizeState.shared.set(true)
     }
 
 }
@@ -4504,8 +4527,9 @@ struct DropApp: App {
         .windowToolbarStyle(.unified)
         // The delegate then pins the exact frame at every launch
         // (applyLaunchSize); this just keeps the window from first appearing
-        // at some other size before that runs.
+        // at some other size or place before that runs.
         .defaultSize(width: WindowLayout.defaultSize.width, height: WindowLayout.defaultSize.height)
+        .defaultPosition(.center)
     }
 }
 
@@ -4718,8 +4742,18 @@ struct ContentView: View {
     // "should the bottom bar stack / is the sidebar forced compact" on every
     // single one of the dozens of frames a drag produces. Kept around because
     // the settled snapshot needs a live value to catch up to once the drag ends.
+    // NOTHING in `body` may read windowSize or mainAreaWidth: they're written on
+    // every resize tick, so a read there re-runs ContentView.body -- and every
+    // sidebar tab, glass control and the bottom bar under it -- on every tick
+    // of a drag (measured: hundreds of re-runs per drag, about a third of the
+    // main thread's time). Views that need a decision from the live width read
+    // a Bool that only changes when the width crosses a threshold
+    // (isNarrowWindow).
     @State private var windowSize: CGSize = .zero
     @State private var mainAreaWidth: CGFloat = 0
+    /// Live window width is below WindowLayout.compactSidebarBreakpoint. Only
+    /// flips at the threshold, so reading it in `body` costs nothing per tick.
+    @State private var isNarrowWindow = false
     // What every breakpoint below actually reads. Equal to windowSize/
     // mainAreaWidth except while NSApp.keyWindow?.inLiveResize is true, during
     // which they're pinned to their pre-drag values and only catch up once
@@ -4797,10 +4831,11 @@ struct ContentView: View {
     /// Below this window width the sidebar is ALWAYS icons-only, to free the
     /// room -- the toggle is disabled there rather than letting the sidebar
     /// swallow a third of a narrow window.
-    /// Reads the LIVE window width, not the settled snapshot the other
-    /// breakpoints use, so the sidebar collapses/expands the moment a drag
-    /// crosses the threshold rather than when the mouse is released.
-    private var sidebarForcedCollapsed: Bool { windowSize.width > 0 && windowSize.width < WindowLayout.compactSidebarBreakpoint }
+    /// Follows the LIVE window width (via isNarrowWindow), not the settled
+    /// snapshot the other breakpoints use, so the sidebar collapses/expands the
+    /// moment a drag crosses the threshold rather than when the mouse is
+    /// released.
+    private var sidebarForcedCollapsed: Bool { isNarrowWindow }
     private var isCompactSidebar: Bool { sidebarForcedCollapsed || sidebarCollapsedByUser }
     private var isCompactHeight: Bool { settledWindowSize.height > 0 && settledWindowSize.height < WindowLayout.compactHeightBreakpoint }
     private var isTinyHeight: Bool { settledWindowSize.height > 0 && settledWindowSize.height < WindowLayout.tinyHeightBreakpoint }
@@ -4921,7 +4956,10 @@ struct ContentView: View {
             // margin (leading/vertical padding applied inside `sidebar`
             // itself), so no extra gap is needed here.
             HStack(spacing: 0) {
+                // Above everything in the main column, so the sidebar's card
+                // (and its shadow) always draws over content beside it.
                 sidebar
+                    .zIndex(99)
 
                 VStack(spacing: 0) {
                     // Active tab content -- structurally unrelated pages, so
@@ -5005,8 +5043,16 @@ struct ContentView: View {
                     // so it moves like the other pages.
                     #if DEV_BUILD
                     if DevKeychain.isDevMachine {
-                        DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
-                            .contentColumn(columnWidth)
+                        // ActiveOnlyLayout keeps it mounted (state survives) but
+                        // lays it out only while it's the active tab -- hidden,
+                        // it used to be re-laid-out on every window-resize tick
+                        // for nothing. The transaction override stops the layout
+                        // change at activation from animating the page's size.
+                        ActiveOnlyLayout(isActive: activeTab == .devRelease) {
+                            DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
+                                .contentColumn(columnWidth)
+                                .transaction(value: activeTab) { $0.animation = nil }
+                        }
                             .modifier(FocusEffect(
                                 blur: activeTab == .devRelease ? 0 : 4,
                                 scale: activeTab == .devRelease ? 1 : 0.985,
@@ -5049,9 +5095,12 @@ struct ContentView: View {
                     .onAppear {
                         windowSize = geo.size
                         settledWindowSize = geo.size
+                        isNarrowWindow = geo.size.width > 0 && geo.size.width < WindowLayout.compactSidebarBreakpoint
                     }
                     .onChange(of: geo.size) { _, newSize in
                         windowSize = newSize
+                        let narrow = newSize.width > 0 && newSize.width < WindowLayout.compactSidebarBreakpoint
+                        if narrow != isNarrowWindow { isNarrowWindow = narrow }
                         if NSApp.keyWindow?.inLiveResize != true { settledWindowSize = newSize }
                     }
             }

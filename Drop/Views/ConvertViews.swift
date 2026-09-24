@@ -13,6 +13,9 @@ enum ConvertAudioCodec: String, CaseIterable, Identifiable {
     case opus  = "Opus"
     case pcm   = "PCM"
     var id: String { rawValue }
+    /// Opus stays out of the picker (still readable as a source, and still
+    /// copied through by "Same as Source").
+    var isOffered: Bool { self != .opus }
     var note: String {
         switch self {
         case .aac:  return "Best compatibility"
@@ -79,6 +82,9 @@ enum ConvertVideoCodec: String, CaseIterable, Identifiable {
     case av1    = "AV1"
     case vp9    = "VP9"
     var id: String { rawValue }
+    /// AV1 and VP9 stay out of the picker (still readable as a source, and
+    /// still copied through by "Same as Source").
+    var isOffered: Bool { self != .av1 && self != .vp9 }
     var note: String {
         switch self {
         case .h264:   return "Best compatibility"
@@ -295,6 +301,35 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         didSet { applyDefaultCodecsFromSource() }
     }
     var process: Process? = nil
+
+    /// Set by a row's own Cancel button: once the killed process has actually
+    /// exited, the job goes back to Queued (instead of staying Cancelled) and
+    /// the queue does not move on to the next item.
+    var requeueAfterCancel = false
+
+    /// The status the queue row shows -- a job that is on its way back to
+    /// Queued already reads as Queued while its process finishes dying.
+    var visibleStatus: ConvertJobStatus {
+        status == .cancelled && requeueAfterCancel ? .queued : status
+    }
+
+    /// Stops this one running job and puts it back in the queue exactly as it
+    /// was before it started.
+    func cancelAndRequeue() {
+        requeueAfterCancel = true
+        cancel()
+        objectWillChange.send()
+    }
+
+    /// Back to a fresh Queued row (see cancelAndRequeue).
+    func restoreToQueued() {
+        requeueAfterCancel = false
+        status = .queued
+        progress = "Queued"
+        progressFraction = nil
+        etaText = ""
+        outputURL = nil
+    }
 
     func cancel() {
         if let proc = process {
@@ -1273,6 +1308,22 @@ struct ConvertView: View {
         }
     }
 
+    /// Add to Queue / Add All to Queue -- the last thing in the Analyze card, so
+    /// committing a file reads as the final action after reviewing its settings.
+    private func addToQueueButtons(for job: ConvertJob) -> some View {
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
+            if stagingJobs.count > 1 {
+                GlassButton(label: "Add All to Queue", icon: "tray.and.arrow.down", tint: .white, fitContent: true) {
+                    addAllToQueue()
+                }
+            }
+            GlassButton(label: "Add to Queue", icon: "arrow.turn.down.right", tint: DesignTokens.Accent.primary, fitContent: true) {
+                addToQueue(job)
+            }
+        }
+    }
+
     /// The one staged file currently being configured, as a card (the file list
     /// in its top-right corner when there is more than one), with the buttons that
     /// commit it -- or all of them -- to the Convert Queue beneath. Empty state
@@ -1280,39 +1331,24 @@ struct ConvertView: View {
     @ViewBuilder
     private var analyzePanel: some View {
         if let job = selectedStagingJob {
-            VStack(alignment: .trailing, spacing: 8) {
-                // The settings card hugs its content when the window is tall
-                // enough for all of it, and scrolls inside the panel when it
-                // isn't -- this panel used to be "fixed in place (never
-                // scrolls)", which forced the whole window to be ~960pt tall
-                // on this tab (the window silently grew when you switched
-                // here). Add to Queue below stays pinned either way.
-                let settingsCard = ConvertPreviewCard(
-                    job: job,
-                    config: config,
-                    onRemove: { removeFromStaging(job) },
-                    isQueueRow: false,
-                    headerAccessory: stagingJobs.count > 1 ? AnyView(fileSwitcher) : nil
-                )
-                ViewThatFits(in: .vertical) {
-                    settingsCard
-                    ScrollView(.vertical, showsIndicators: true) { settingsCard }
-                        .frame(minHeight: compactHeight ? 110 : 130)
-                }
-                // Add to Queue / Add All to Queue -- below the card, so
-                // committing a file reads as the final action after reviewing
-                // its settings.
-                HStack(spacing: 8) {
-                    Spacer()
-                    if stagingJobs.count > 1 {
-                        GlassButton(label: "Add All to Queue", icon: "tray.and.arrow.down", tint: .white, fitContent: true) {
-                            addAllToQueue()
-                        }
-                    }
-                    GlassButton(label: "Add to Queue", icon: "arrow.turn.down.right", tint: DesignTokens.Accent.primary, fitContent: true) {
-                        addToQueue(job)
-                    }
-                }
+            // The settings card hugs its content when the window is tall
+            // enough for all of it, and scrolls inside the panel when it
+            // isn't -- this panel used to be "fixed in place (never
+            // scrolls)", which forced the whole window to be ~960pt tall
+            // on this tab (the window silently grew when you switched
+            // here). Add to Queue sits inside the card, as its footer.
+            let settingsCard = ConvertPreviewCard(
+                job: job,
+                config: config,
+                onRemove: { removeFromStaging(job) },
+                isQueueRow: false,
+                headerAccessory: stagingJobs.count > 1 ? AnyView(fileSwitcher) : nil,
+                footer: AnyView(addToQueueButtons(for: job))
+            )
+            ViewThatFits(in: .vertical) {
+                settingsCard
+                ScrollView(.vertical, showsIndicators: true) { settingsCard }
+                    .frame(minHeight: compactHeight ? 110 : 130)
             }
             .background {
                 if isFileSwitcherOpen {
@@ -1575,21 +1611,12 @@ struct ConvertView: View {
     /// and remembers the last folder picked (persisted in config.convertOutputDir).
     private var batchDirectoryField: some View {
         // The folder as a capsule (with the estimated total size at its trailing
-        // end), Browse as a capsule, and Reveal. No SAVE TO label -- the folder
-        // itself says what it is. Sits in the bottom bar's grey inner card.
+        // end), then Browse and Reveal as icon buttons. No SAVE TO label -- the
+        // folder itself says what it is. Sits in the bottom bar's grey inner card.
+        // Reveal is always available: it opens the shared destination whether or
+        // not anything has finished converting yet.
         HStack(spacing: DropGrid.rowSpacing) {
             FieldCapsule {
-                FieldBrowseButton {
-                    let panel = NSOpenPanel()
-                    panel.canChooseFiles = false
-                    panel.canChooseDirectories = true
-                    panel.canCreateDirectories = true
-                    panel.allowsMultipleSelection = false
-                    panel.prompt = "Select"
-                    if panel.runModal() == .OK, let url = panel.url {
-                        config.convertOutputDir = url.path
-                    }
-                }
                 Text(config.convertOutputDir)
                     .font(.appMono(size: DropGrid.fieldFontSize))
                     .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
@@ -1600,14 +1627,7 @@ struct ConvertView: View {
             }
             .help("Convert to this folder" + (totalEstimatedSizeLabel.map { " · est. \($0)" } ?? ""))
 
-            // Always-available Reveal -- replaces the per-row "Reveal in
-            // Finder" button a completed job used to have. This one isn't tied
-            // to any single job: it just opens the shared destination, usable
-            // any time regardless of whether anything's finished converting yet.
-            HoverIconButton(icon: "arrow.up.forward.app", size: 13, help: "Open the save folder in Finder") {
-                NSWorkspace.shared.open(URL(fileURLWithPath: config.convertOutputDir))
-            }
-            .frame(height: DropGrid.controlHeight)
+            FolderActionButtons(path: config.convertOutputDir) { config.convertOutputDir = $0 }
         }
         .frame(maxWidth: .infinity)
     }
@@ -1853,8 +1873,18 @@ struct ConvertView: View {
                 DispatchQueue.main.async {
                     // advanceQueue on the way out of every branch below
                     // (including this early return) so a cancelled job
-                    // still lets the rest of the queue keep moving.
-                    guard job.status != .cancelled else { self.advanceQueue(); return }
+                    // still lets the rest of the queue keep moving -- except
+                    // a row's own Cancel, which puts the job back in the queue
+                    // and stops the run there.
+                    guard job.status != .cancelled else {
+                        if job.requeueAfterCancel {
+                            job.restoreToQueued()
+                            self.selectionVersion += 1
+                        } else {
+                            self.advanceQueue()
+                        }
+                        return
+                    }
                     let success = p.terminationStatus == 0
                     job.status = success ? .done : .failed
                     self.selectionVersion += 1
@@ -1912,7 +1942,15 @@ struct ConvertView: View {
                 // closure (and everything it captures) leaks.
                 errPipe.fileHandleForReading.readabilityHandler = nil
                 DispatchQueue.main.async {
-                    guard job.status != .cancelled else { self.advanceQueue(); return }
+                    guard job.status != .cancelled else {
+                        if job.requeueAfterCancel {
+                            job.restoreToQueued()
+                            self.selectionVersion += 1
+                        } else {
+                            self.advanceQueue()
+                        }
+                        return
+                    }
                     job.status = .failed
                     self.selectionVersion += 1
                     job.progress = error.localizedDescription
@@ -1995,8 +2033,11 @@ private struct QueueRowView: View {
                 job: job,
                 config: config,
                 onRemove: {
-                    if job.status == .converting { job.cancel() }
                     withAnimation(.spring(response: 0.3)) { queue.removeAll { $0.id == job.id } }
+                },
+                onCancel: {
+                    job.cancelAndRequeue()
+                    onSelectionChange()
                 },
                 isQueueRow: true,
                 onSelectionChange: onSelectionChange,
@@ -2019,6 +2060,9 @@ struct ConvertPreviewCard: View {
     /// fallback path construction below.
     let config: Config
     var onRemove: () -> Void
+    /// A queue row's Cancel (shown in place of Remove while its job is
+    /// converting): stops just that job and puts it back in the queue.
+    var onCancel: (() -> Void)? = nil
     /// True when this card is rendering as a row in the Convert Queue drawer
     /// (compact summary, checkbox always visible, no editable settings —
     /// editing happens by pulling the job back to the Analyze panel). False
@@ -2041,6 +2085,9 @@ struct ConvertPreviewCard: View {
     /// A control for the settings card's top-right corner, beside Remove (the
     /// Analyze panel's list of staged files).
     var headerAccessory: AnyView? = nil
+    /// Buttons that commit the card to the queue (Add to Queue), shown at the
+    /// bottom of the Analyze card itself.
+    var footer: AnyView? = nil
 
     var body: some View {
         if isQueueRow {
@@ -2139,7 +2186,7 @@ struct ConvertPreviewCard: View {
         var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeVideo) {
             withAnimation(.spring(response: 0.25)) { job.useSameAsSourceForVideo() }
         }]
-        options += job.availableVideoCodecs.map { codec in
+        options += job.availableVideoCodecs.filter(\.isOffered).map { codec in
             SegmentOption(id: codec.rawValue, label: codec.rawValue, isSelected: job.transcodeVideo && job.videoCodec == codec) {
                 withAnimation(.spring(response: 0.25)) {
                     job.videoCodec = codec
@@ -2159,8 +2206,9 @@ struct ConvertPreviewCard: View {
         var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeAudio) {
             withAnimation(.spring(response: 0.25)) { job.useSameAsSourceForAudio() }
         }]
-        if job.availableAudioCodecs.count > 1 {
-            options += job.availableAudioCodecs.map { codec in
+        let codecs = job.availableAudioCodecs.filter(\.isOffered)
+        if codecs.count > 1 {
+            options += codecs.map { codec in
                 SegmentOption(id: codec.rawValue, label: codec.rawValue, isSelected: job.transcodeAudio && job.audioCodec == codec) {
                     withAnimation(.spring(response: 0.25)) {
                         job.audioCodec = codec
@@ -2197,7 +2245,8 @@ struct ConvertPreviewCard: View {
             title: job.inputURL.deletingPathExtension().lastPathComponent,
             secondaryTitle: job.inputURL.path,
             subtitle: subtitleView, // IN / OUT lines
-            headerAccessory: headerAccessory
+            headerAccessory: headerAccessory,
+            footer: footer
         ) {
             // Four labelled rows, top to bottom: CONVERT AS -> VIDEO CODEC ->
             // AUDIO CODEC -> OUTPUT FORMAT. The output folder lives in the
@@ -2207,16 +2256,14 @@ struct ConvertPreviewCard: View {
                     SegmentedCapsule(options: modeOptions, fill: false)
                 }
                 if job.mediaMode.isVideo {
-                    FormRow(icon: "video", label: "VIDEO CODEC",
-                            hint: job.videoSourceLabel.map { "Original: \($0)" }) {
+                    FormRow(icon: "video", label: "VIDEO CODEC") {
                         SegmentedCapsule(options: videoCodecOptions)
                     }
                 }
                 // Hidden entirely for video-only mode (no audio track in the
                 // output at all).
                 if job.mediaMode != .videoOnly {
-                    FormRow(icon: "waveform", label: "AUDIO CODEC",
-                            hint: job.audioSourceLabel.map { "Original: \($0)" }) {
+                    FormRow(icon: "waveform", label: "AUDIO CODEC") {
                         SegmentedCapsule(options: audioCodecOptions)
                     }
                 }
@@ -2333,10 +2380,9 @@ struct ConvertPreviewCard: View {
     private var queueRowSubtitle: AnyView {
         AnyView(
             VStack(alignment: .leading, spacing: 3) {
-                // The same IN / OUT lines as the Analyze card, so a row reads like
-                // the card it came from.
-                MetaLines(input: job.inputChips, output: job.outputChips)
-                if job.status == .failed {
+                // What the file will become -- no input side, no OUT tag.
+                MetaLine(chips: job.outputChips)
+                if job.visibleStatus == .failed {
                     Text(job.progress)
                         .font(.appMono(size: 10))
                         .foregroundColor(.red.opacity(0.75))
@@ -2353,7 +2399,7 @@ struct ConvertPreviewCard: View {
         AnyView(
             VStack(alignment: .trailing, spacing: 5) {
                 HStack(spacing: 5) {
-                    switch job.status {
+                    switch job.visibleStatus {
                     case .done:
                         Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
                     case .failed:
@@ -2365,12 +2411,12 @@ struct ConvertPreviewCard: View {
                     case .queued:
                         Image(systemName: "clock").foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                     }
-                    Text(job.status == .converting && !job.etaText.isEmpty ? job.etaText : statusLabel)
-                        .foregroundColor(job.status == .queued ? .white.opacity(DesignTokens.Text.tertiary) : statusColor)
+                    Text(job.visibleStatus == .converting && !job.etaText.isEmpty ? job.etaText : queueStatusLabel)
+                        .foregroundColor(job.visibleStatus == .queued ? .white.opacity(DesignTokens.Text.tertiary) : queueStatusColor)
                         .lineLimit(1)
                 }
                 .font(.appMono(size: 10, weight: .semibold))
-                if job.status == .converting {
+                if job.visibleStatus == .converting {
                     inlineProgressBar
                 }
             }
@@ -2405,7 +2451,7 @@ struct ConvertPreviewCard: View {
     /// its own divided section. Only offered for statuses where editing
     /// makes sense: not yet started, or didn't finish.
     private var editAccessory: AnyView? {
-        guard let onEditRequested, job.status == .queued || job.status == .failed || job.status == .cancelled else { return nil }
+        guard let onEditRequested, job.visibleStatus == .queued || job.visibleStatus == .failed || job.visibleStatus == .cancelled else { return nil }
         return AnyView(
             HoverIconButton(icon: "slider.horizontal.3", size: 15, help: "Edit", expandable: true) {
                 onEditRequested()
@@ -2429,6 +2475,8 @@ struct ConvertPreviewCard: View {
                 onSelectionChange()
             },
             onRemove: onRemove,
+            // While the job is converting, the red Remove becomes Cancel.
+            onCancel: isQueueRow && job.status == .converting ? onCancel : nil,
             // No checkboxes: every row in the queue is included the next time
             // Convert is pressed (isSelected stays true).
             showCheckbox: false,
@@ -2524,8 +2572,13 @@ struct ConvertPreviewCard: View {
 
     // MARK: Helpers
 
-    private var statusLabel: String {
-        switch job.status {
+    private var statusLabel: String { label(for: job.status) }
+    private var statusColor: Color { color(for: job.status) }
+    private var queueStatusLabel: String { label(for: job.visibleStatus) }
+    private var queueStatusColor: Color { color(for: job.visibleStatus) }
+
+    private func label(for status: ConvertJobStatus) -> String {
+        switch status {
         case .queued:     return "Queued"
         case .converting: return "Converting"
         case .done:       return "Done"
@@ -2534,8 +2587,8 @@ struct ConvertPreviewCard: View {
         }
     }
 
-    private var statusColor: Color {
-        switch job.status {
+    private func color(for status: ConvertJobStatus) -> Color {
+        switch status {
         case .queued:     return .secondary
         case .converting: return .white
         case .done:       return .green

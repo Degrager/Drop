@@ -2803,6 +2803,45 @@ struct FocusEffect: ViewModifier {
     }
 }
 
+extension Animation {
+    /// Per-row domino curves, shared by `AnyTransition.dominoPop` (rows that
+    /// mount/unmount) and `DominoVisibility` (rows that stay mounted).
+    static func dominoEnter(index: Int) -> Animation {
+        .spring(response: 0.15, dampingFraction: 0.62).delay(Double(index) * AnyTransition.dominoStagger)
+    }
+
+    static func dominoExit(index: Int) -> Animation {
+        .easeIn(duration: AnyTransition.dominoRowDuration).delay(Double(index) * AnyTransition.dominoStagger)
+    }
+}
+
+/// Domino visibility for a row that must NOT leave layout while hidden: it
+/// shrinks to a point and blurs in place instead of being removed. Used by
+/// the sidebar's bottom-pinned tools block -- a mounted/unmounted row changes
+/// that block's height, and because the block is pinned to the bottom the
+/// change moves its top edge; under the ambient sequence animation that edge
+/// (and every row riding on it) visibly slides instead of each row popping
+/// where it sits. Top-anchored content (the nav tabs) doesn't show this,
+/// which is why they can use plain `.transition(.dominoPop)`.
+struct DominoVisibility: ViewModifier {
+    var hidden: Bool
+    var index: Int
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(FocusEffect(blur: hidden ? 8 : 0, scale: hidden ? 0.001 : 1))
+            .animation(hidden ? Animation.dominoExit(index: index) : Animation.dominoEnter(index: index), value: hidden)
+            .allowsHitTesting(!hidden)
+            .accessibilityHidden(hidden)
+    }
+}
+
+extension View {
+    func dominoVisibility(hidden: Bool, index: Int) -> some View {
+        modifier(DominoVisibility(hidden: hidden, index: index))
+    }
+}
+
 extension AnyTransition {
     static func focus(blur: CGFloat, scale: CGFloat, opacity: Double = 1, anchor: UnitPoint = .center) -> AnyTransition {
         .modifier(
@@ -2878,17 +2917,26 @@ extension AnyTransition {
         )
     }
 
-    /// Gap between one sidebar row's domino step and the next. 45ms, with
-    /// each row's OWN pop kept deliberately quick (see dominoPop) so most of
-    /// the ≤0.5s budget goes to the gap BETWEEN rows rather than to any one
-    /// row's own animation -- at equal or larger per-row duration, rows
-    /// spend most of their time overlapping mid-motion with their neighbors,
-    /// which reads as "everything happening together" instead of a visible
-    /// one-by-one march. Over 10 rows: 9 gaps * 45ms + a 0.08s shrink =
-    /// 0.485s. Single source of truth -- ContentView's own sequencing (how
-    /// long to wait before snapping sidebarWidth) reads this same constant so
-    /// the two stay in lockstep.
-    static let dominoStagger: Double = 0.045
+    /// Gap between one sidebar row's domino step and the next. Kept ≥
+    /// dominoRowDuration (see there) so each row's own motion has finished,
+    /// or very nearly has, before the next row's starts -- at equal or
+    /// larger per-row duration than the gap, rows spend most of their time
+    /// overlapping mid-motion with their neighbors, which reads as "several
+    /// things fading together" instead of a visible one-by-one march. Over
+    /// 11 rows: 10 gaps * 70ms + one row's own 70ms shrink = 0.77s exit;
+    /// enter adds its own settle buffer (see ContentView.sidebarEnterTotal)
+    /// for a ~1.75s round trip well inside a 2s ceiling. Single source of
+    /// truth -- ContentView's own sequencing (how long to wait before
+    /// snapping sidebarWidth) reads this same constant so the two stay in
+    /// lockstep.
+    static let dominoStagger: Double = 0.07
+
+    /// Per-row animation duration, both directions. Equal to dominoStagger
+    /// (not shorter, not longer) is the deliberate choice -- see
+    /// dominoStagger's own comment for why. ContentView reads this too (see
+    /// sidebarExitDuration) so the ambient withAnimation wrapping the whole
+    /// exit sequence covers exactly the last row's own animation.
+    static let dominoRowDuration: Double = 0.07
 
     /// Sidebar collapse/expand: a row vanishes (blur + shrink toward nothing,
     /// no opacity -- these rows are GlassInteractive pills with their own
@@ -2903,12 +2951,11 @@ extension AnyTransition {
     /// rows read as distinct quick pops marching down the list rather than
     /// a smooth wave of overlapping motion.
     static func dominoPop(index: Int) -> AnyTransition {
-        let stagger = Double(index) * dominoStagger
-        return .asymmetric(
+        .asymmetric(
             insertion: focus(blur: 10, scale: 0.05)
-                .animation(.spring(response: 0.18, dampingFraction: 0.58).delay(stagger)),
+                .animation(Animation.dominoEnter(index: index)),
             removal: focus(blur: 8, scale: 0.05)
-                .animation(.easeIn(duration: 0.08).delay(stagger))
+                .animation(Animation.dominoExit(index: index))
         )
     }
 
@@ -3560,15 +3607,7 @@ struct RimBeam: View {
         GeometryReader { geo in
             let rim = Self.rimPoints(size: geo.size, cornerRadius: cornerRadius)
             let perimeter = max(rim.last?.distance ?? 1, 1)
-            // Capped to 30fps (.periodic), not every display frame (.animation,
-            // up to 120Hz on ProMotion) -- a 1.8s-per-loop beam is imperceptibly
-            // different at 30fps, but this is a Canvas redraw plus two shadow
-            // blur passes running continuously for as long as a card is active,
-            // and each analyzing/downloading card gets its own. Starting several
-            // downloads at once used to mean several of these all repainting at
-            // max refresh rate simultaneously -- measurably the single most
-            // expensive thing running at that moment.
-            TimelineView(.periodic(from: start, by: 1.0 / 30.0)) { timeline in
+            TimelineView(.animation) { timeline in
                 let elapsed = timeline.date.timeIntervalSince(start)
                 let phase = CGFloat((elapsed * cyclesPerSecond).truncatingRemainder(dividingBy: 1.0))
                 trail(rim: rim, perimeter: perimeter, headPhase: phase)
@@ -3608,10 +3647,7 @@ struct RimBeam: View {
         // constant visual speed through corners and straight edges alike.
         let headDistance = headPhase * perimeter
         let trailLength = headLength * perimeter
-        // Halved from 28 -- at 30fps the extra points bought smoothness for a
-        // frame rate this no longer renders at; 14 still reads as a continuous
-        // trail and roughly halves the per-frame path/shadow work.
-        let sampleCount = 14
+        let sampleCount = 28
         let trailPoints: [CGPoint] = (0...sampleCount).map { i in
             let back = trailLength * (1 - CGFloat(i) / CGFloat(sampleCount))
             return position(at: headDistance - back, rim: rim, perimeter: perimeter)
@@ -3959,11 +3995,15 @@ struct ToolsStatusPill: View {
     /// First domino index this block's own rows should use -- see
     /// AnyTransition.dominoPop. Defaults to 0 (no stagger) so a future
     /// standalone/popover usage isn't accidentally delayed; the sidebar's
-    /// own call site passes 6 to continue the sequence after the nav pills.
+    /// own call site passes 7 to continue the sequence after the nav pills.
     var baseIndex: Int = 0
+    /// Mirrors ContentView.sidebarRowsHidden -- see ToolsDropdownContent's
+    /// own rowsHidden for why this has to reach all the way down to each
+    /// individual row instead of gating this whole view from the outside.
+    var rowsHidden: Bool = false
 
     var body: some View {
-        ToolsDropdownContent(manager: manager, dropDriver: manager.dropUpdater.userDriver, embedded: true, baseIndex: baseIndex)
+        ToolsDropdownContent(manager: manager, dropDriver: manager.dropUpdater.userDriver, embedded: true, baseIndex: baseIndex, rowsHidden: rowsHidden)
     }
 }
 
@@ -3992,6 +4032,14 @@ struct ToolsDropdownContent: View {
     /// First domino index this block's own rows should use when embedded in
     /// the sidebar -- see AnyTransition.dominoPop and ToolsStatusPill.
     var baseIndex: Int = 0
+    /// Mirrors ContentView.sidebarRowsHidden. Each row below carries its OWN
+    /// `.dominoVisibility(hidden: rowsHidden, index:)` and stays mounted the
+    /// whole time (shrunk to a point + blurred while hidden) rather than
+    /// being removed with `.transition`: this block is pinned to the bottom
+    /// of the sidebar, so mounting/unmounting rows changes its height and
+    /// slides its top edge, dragging every row with it instead of each one
+    /// popping in place (see DominoVisibility).
+    var rowsHidden: Bool = false
     @Environment(\.isCompactSidebar) private var compact
     @Environment(\.isTinyHeight) private var tiny
 
@@ -4018,7 +4066,7 @@ struct ToolsDropdownContent: View {
                 // No room for the version readouts in a very short window; the
                 // update button is the one control worth keeping.
                 checkForUpdatesButton
-                    .transition(.dominoPop(index: baseIndex))
+                    .dominoVisibility(hidden: rowsHidden, index: baseIndex)
             } else if compact {
                 // Each row is its own domino step (baseIndex...baseIndex+3),
                 // continuing the sequence the sidebar's nav pills started --
@@ -4028,13 +4076,13 @@ struct ToolsDropdownContent: View {
                 // whole block mounting/unmounting.
                 VStack(spacing: 10) {
                     compactRow("yt-dlp", installed: manager.toolsReady, updateAvailable: manager.updateAvailable, version: manager.ytdlpVersion)
-                        .transition(.dominoPop(index: baseIndex))
+                        .dominoVisibility(hidden: rowsHidden, index: baseIndex)
                     compactRow("ffmpeg", installed: manager.toolsReady, updateAvailable: manager.ffmpegUpdateAvailable, version: manager.ffmpegVersion)
-                        .transition(.dominoPop(index: baseIndex + 1))
+                        .dominoVisibility(hidden: rowsHidden, index: baseIndex + 1)
                     compactRow("Drop", installed: true, updateAvailable: dropDriver.hasActionableUpdate, version: manager.currentAppVersion)
-                        .transition(.dominoPop(index: baseIndex + 2))
+                        .dominoVisibility(hidden: rowsHidden, index: baseIndex + 2)
                     checkForUpdatesButton
-                        .transition(.dominoPop(index: baseIndex + 3))
+                        .dominoVisibility(hidden: rowsHidden, index: baseIndex + 3)
                 }
                 .padding(.top, 4)
                 .transition(.blurIn)
@@ -4076,65 +4124,75 @@ struct ToolsDropdownContent: View {
             // shared button's single "Checking…" state below covers the
             // whole operation; each chip simply updates to its new value in
             // place once its own piece finishes.
-            ToolStatusRow(
-                name: "yt-dlp",
-                installed: manager.toolsReady,
-                installing: false,
-                installAction: {},
-                versionChip: AnyView(
-                    VersionChip(
-                        version: manager.ytdlpVersion,
-                        isUpdating: false,
-                        isCheckingUpdates: false,
-                        updateAvailable: manager.updateAvailable
-                    )
-                ),
-                updateAvailable: manager.updateAvailable,
-                isUpdating: false
-            )
-            .transition(.dominoPop(index: baseIndex))
-            GlassDivider()
-            ToolStatusRow(
-                name: "ffmpeg",
-                installed: manager.toolsReady,
-                installing: false,
-                installAction: {},
-                versionChip: AnyView(
-                    VersionChip(
-                        version: manager.ffmpegVersion,
-                        isUpdating: false,
-                        isCheckingUpdates: false,
-                        updateAvailable: manager.ffmpegUpdateAvailable
-                    )
-                ),
-                updateAvailable: manager.ffmpegUpdateAvailable,
-                isUpdating: false
-            )
-            .transition(.dominoPop(index: baseIndex + 1))
-            GlassDivider()
-            ToolStatusRow(
-                name: "Drop",
-                installed: true,
-                installing: false,
-                installAction: {},
-                versionChip: AnyView(
-                    VersionChip(
-                        version: manager.currentAppVersion,
-                        isUpdating: false,
-                        isCheckingUpdates: false,
-                        updateAvailable: dropDriver.hasActionableUpdate
-                    )
-                ),
-                updateAvailable: dropDriver.hasActionableUpdate,
-                isUpdating: false
-            )
-            .transition(.dominoPop(index: baseIndex + 2))
-            GlassDivider()
+            // Each row (paired with its own trailing divider, so the divider
+            // shrinks with the row it belongs to rather than sitting there
+            // orphaned) is its own domino step and stays mounted -- see
+            // rowsHidden's declaration.
+            VStack(alignment: .leading, spacing: 2) {
+                ToolStatusRow(
+                    name: "yt-dlp",
+                    installed: manager.toolsReady,
+                    installing: false,
+                    installAction: {},
+                    versionChip: AnyView(
+                        VersionChip(
+                            version: manager.ytdlpVersion,
+                            isUpdating: false,
+                            isCheckingUpdates: false,
+                            updateAvailable: manager.updateAvailable
+                        )
+                    ),
+                    updateAvailable: manager.updateAvailable,
+                    isUpdating: false
+                )
+                GlassDivider()
+            }
+            .dominoVisibility(hidden: rowsHidden, index: baseIndex)
+            VStack(alignment: .leading, spacing: 2) {
+                ToolStatusRow(
+                    name: "ffmpeg",
+                    installed: manager.toolsReady,
+                    installing: false,
+                    installAction: {},
+                    versionChip: AnyView(
+                        VersionChip(
+                            version: manager.ffmpegVersion,
+                            isUpdating: false,
+                            isCheckingUpdates: false,
+                            updateAvailable: manager.ffmpegUpdateAvailable
+                        )
+                    ),
+                    updateAvailable: manager.ffmpegUpdateAvailable,
+                    isUpdating: false
+                )
+                GlassDivider()
+            }
+            .dominoVisibility(hidden: rowsHidden, index: baseIndex + 1)
+            VStack(alignment: .leading, spacing: 2) {
+                ToolStatusRow(
+                    name: "Drop",
+                    installed: true,
+                    installing: false,
+                    installAction: {},
+                    versionChip: AnyView(
+                        VersionChip(
+                            version: manager.currentAppVersion,
+                            isUpdating: false,
+                            isCheckingUpdates: false,
+                            updateAvailable: dropDriver.hasActionableUpdate
+                        )
+                    ),
+                    updateAvailable: dropDriver.hasActionableUpdate,
+                    isUpdating: false
+                )
+                GlassDivider()
+            }
+            .dominoVisibility(hidden: rowsHidden, index: baseIndex + 2)
             checkForUpdatesButton
-            .padding(.horizontal, embedded ? 0 : 12)
-            .padding(.top, 4)
-            .padding(.bottom, embedded ? 0 : 10)
-            .transition(.dominoPop(index: baseIndex + 3))
+                .padding(.horizontal, embedded ? 0 : 12)
+                .padding(.top, 4)
+                .padding(.bottom, embedded ? 0 : 10)
+                .dominoVisibility(hidden: rowsHidden, index: baseIndex + 3)
         }
         .frame(minWidth: embedded ? 0 : 220, alignment: .leading)
         .padding(.top, 4)
@@ -4700,7 +4758,7 @@ struct ContentView: View {
     /// can recognize it's no longer current and no-op instead of clobbering
     /// a newer sequence's width/visibility.
     @State private var sidebarToggleGeneration = 0
-    /// Set true by sidebarHeader's toggle button right before it flips
+    /// Set true by sidebarToggleButton's action right before it flips
     /// sidebarCollapsedByUser, and consumed (read + cleared) by the very next
     /// onChange(of: isCompactSidebar). Distinguishes a deliberate tap -- which
     /// gets the domino pop -- from isCompactSidebar changing because the
@@ -4710,25 +4768,24 @@ struct ContentView: View {
     /// should always be the cheap instant snap, never the multi-row spring
     /// sequence.
     @State private var sidebarUserInitiatedToggle = false
-    // header(1) + 5 tab pills + 4 tool rows (yt-dlp/ffmpeg/Drop/Check for
-    // Updates, see ToolsStatusPill's baseIndex: 6) = indices 0-9. Kept at the
-    // worst-case count even when Dev is absent -- an unused index just means
-    // the wait before the width snap is a touch more generous than strictly
-    // needed, never too short.
-    private static let sidebarRowCount = 10
-    // Per request: fade-out + collapse together should be half a second or
-    // less. Must match dominoPop's own removal duration (see there for why
-    // most of the budget goes to the gap, not this). 9 gaps * 45ms + a
-    // 0.08s per-row shrink = 0.485s.
-    private static let sidebarExitDuration: Double = 0.08
+    // label(1) + toggle button(1) + 5 tab pills + 4 tool rows (yt-dlp/ffmpeg/
+    // Drop/Check for Updates, see ToolsStatusPill's baseIndex: 7) = indices
+    // 0-10, 11 total. Kept at the worst-case count even when Dev is absent --
+    // an unused index just means the wait before the width snap is a touch
+    // more generous than strictly needed, never too short.
+    private static let sidebarRowCount = 11
+    // Must match dominoPop's own removal duration (AnyTransition.
+    // dominoRowDuration) -- see there for why the gap, not this, carries most
+    // of the budget. 10 gaps * dominoStagger + one row's own shrink.
+    private static var sidebarExitDuration: Double { AnyTransition.dominoRowDuration }
     private static var sidebarExitTotal: Double { AnyTransition.dominoStagger * Double(sidebarRowCount - 1) + sidebarExitDuration }
-    // How long the enter sequence's last row takes to fully settle: its own
-    // delay plus its spring's response plus a little slack for the spring's
-    // overshoot to visibly damp out (a spring doesn't stop dead at
-    // `response`, it keeps interpolating past it). Must stay ≥ dominoPop's
-    // insertion animation (response + delay) or the last rows get cut off
-    // before their pop plays -- see the ambient-wrapper comment below.
-    private static var sidebarEnterTotal: Double { AnyTransition.dominoStagger * Double(sidebarRowCount - 1) + 0.18 + 0.15 }
+    // How long the enter sequence's last row takes to read as fully settled:
+    // its own delay plus a little slack for its spring's overshoot to
+    // visibly damp out (a spring doesn't stop dead at `response`, it keeps
+    // interpolating past it). Must stay ≥ dominoPop's insertion animation
+    // (response + delay) or the last rows get cut off before their pop plays
+    // -- see the ambient-wrapper comment below.
+    private static var sidebarEnterTotal: Double { AnyTransition.dominoStagger * Double(sidebarRowCount - 1) + 0.28 }
     /// Below this window width the sidebar is ALWAYS icons-only, to free the
     /// room -- the toggle is disabled there rather than letting the sidebar
     /// swallow a third of a narrow window.
@@ -5158,34 +5215,22 @@ struct ContentView: View {
     /// bar, just re-flowed top-to-bottom.
     /// Logo (and name when expanded) plus the collapse/expand toggle. The
     /// toggle is hidden while the window is too narrow to expand at all.
+    // Split into two pieces (was one combined view) so the label and the
+    // toggle button can be independently staggered in the domino sequence
+    // (indices 0 and 1) -- per request, "label" and "collapse button" are
+    // two separate steps, not one. Each piece keeps its own compact/
+    // expanded look (icon-only vs icon+"Drop") via the SAME isCompactSidebar
+    // ZStack-mode-switch pattern used elsewhere, just applied to a smaller
+    // view now.
     @ViewBuilder
-    private var sidebarHeader: some View {
-        let toggle = HoverIconButton(
-            icon: "sidebar.left", size: 13,
-            help: sidebarForcedCollapsed ? "" : (isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
-        ) {
-            // Marks the resulting isCompactSidebar change as user-initiated --
-            // see sidebarUserInitiatedToggle's declaration and the onChange
-            // handler below for why this matters (only a deliberate tap gets
-            // the domino pop; the window merely crossing the width threshold
-            // never should).
-            sidebarUserInitiatedToggle = true
-            sidebarCollapsedByUser.toggle()
-        }
-        .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
-        // ZStack, not a bare if/else: while one layout blurs out the other blurs in,
-        // and in a stack the two would be laid out end to end, transiently doubling
-        // the sidebar's minimum height (and auto-growing the window to fit).
+    private var sidebarLabel: some View {
         ZStack(alignment: .top) {
             if isCompactSidebar {
-                VStack(spacing: isTinyHeight ? 4 : 8) {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.appMono(size: 14, weight: .semibold))
-                        .foregroundColor(DesignTokens.Accent.primary)
-                    if !sidebarForcedCollapsed { toggle }
-                }
-                .frame(maxWidth: .infinity)
-                .transition(.blurIn)
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.appMono(size: 14, weight: .semibold))
+                    .foregroundColor(DesignTokens.Accent.primary)
+                    .frame(maxWidth: .infinity)
+                    .transition(.blurIn)
             } else {
                 HStack(spacing: 7) {
                     Image(systemName: "arrow.down.circle.fill")
@@ -5195,7 +5240,6 @@ struct ContentView: View {
                         .font(.appMono(size: 14, weight: .semibold))
                         .foregroundColor(.white.opacity(DesignTokens.Text.primary))
                     Spacer()
-                    toggle
                 }
                 .padding(.horizontal, 14)
                 .transition(.blurIn)
@@ -5203,45 +5247,93 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder
+    private var sidebarToggleButton: some View {
+        // Hidden entirely while the window's too narrow to expand at all --
+        // matches the old `if !sidebarForcedCollapsed { toggle }` gating.
+        if !sidebarForcedCollapsed {
+            HoverIconButton(
+                icon: "sidebar.left", size: 13,
+                help: isCompactSidebar ? "Expand sidebar" : "Collapse sidebar"
+            ) {
+                // Marks the resulting isCompactSidebar change as user-initiated
+                // -- see sidebarUserInitiatedToggle's declaration and the
+                // onChange handler below for why this matters (only a
+                // deliberate tap gets the domino pop; the window merely
+                // crossing the width threshold never should).
+                sidebarUserInitiatedToggle = true
+                sidebarCollapsedByUser.toggle()
+            }
+            .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
+            .frame(maxWidth: isCompactSidebar ? .infinity : nil)
+        }
+    }
+
     var sidebar: some View {
         VStack(spacing: 0) {
-            // App icon + name. Wrapped in the domino gate (index 0, first to
-            // go/first to come back) -- see sidebarRowsHidden's declaration.
-            if !sidebarRowsHidden {
-                sidebarHeader
-                    .padding(.top, isTinyHeight ? 8 : 16)
-                    .padding(.bottom, isTinyHeight ? 6 : 18)
-                    .transition(.dominoPop(index: 0))
+            // Header is two independent domino steps, not one: the label
+            // (icon + "Drop") is index 0, the collapse/expand button is
+            // index 1 -- each in its OWN `if !sidebarRowsHidden { ... }` so
+            // SwiftUI tracks them as separate insertions/removals (see the
+            // note on the nav items below for why shared conditionals don't
+            // stagger).
+            VStack(spacing: isTinyHeight ? 4 : 8) {
+                if !sidebarRowsHidden {
+                    sidebarLabel
+                        .transition(.dominoPop(index: 0))
+                }
+                if !sidebarRowsHidden {
+                    sidebarToggleButton
+                        .transition(.dominoPop(index: 1))
+                }
             }
+            .padding(.top, isTinyHeight ? 8 : 16)
+            .padding(.bottom, isTinyHeight ? 6 : 18)
 
             // Nav items — larger touch targets (bumped padding/font inside
             // SidebarTabItem itself) with real breathing room between rows,
             // instead of the previous near-zero 2pt gap. Each row is its own
-            // domino step (index 1-5), gated the same way as the header.
-            if !sidebarRowsHidden {
+            // domino step (index 2-6), and critically each gets its OWN
+            // independent `if !sidebarRowsHidden { ... }` rather than sharing
+            // one `if` around the whole VStack -- when several sibling views
+            // shared a single conditional, SwiftUI treated that whole block
+            // as ONE unit entering/leaving, and did not reliably apply each
+            // child's own individually-delayed `.transition()` to its own
+            // removal/insertion. An unconditionally-present VStack containing
+            // several independently-gated children is the pattern SwiftUI's
+            // transition system unambiguously honors per-view (same pattern
+            // the header above and ToolsStatusPill below also use).
             VStack(spacing: 6) {
+                if !sidebarRowsHidden {
                 SidebarTabItem(label: "Download", icon: "arrow.down.circle", isSelected: activeTab == .download) {
                     withAnimation(.spring(response: 0.25)) { activeTab = .download }
                 }
                 .accessibilityIdentifier("tab_download")
-                .transition(.dominoPop(index: 1))
+                .transition(.dominoPop(index: 2))
+                }
+                if !sidebarRowsHidden {
                 SidebarTabItem(label: "Convert", icon: "arrow.triangle.2.circlepath", isSelected: activeTab == .convert) {
                     withAnimation(.spring(response: 0.25)) { activeTab = .convert }
                 }
                 .accessibilityIdentifier("tab_convert")
-                .transition(.dominoPop(index: 2))
+                .transition(.dominoPop(index: 3))
+                }
+                if !sidebarRowsHidden {
                 SidebarTabItem(label: "History", icon: "clock",
                         isSelected: activeTab == .history,
                         badge: manager.history.entries.isEmpty ? nil : "\(manager.history.entries.count)") {
                     withAnimation(.spring(response: 0.25)) { activeTab = .history }
                 }
                 .accessibilityIdentifier("tab_history")
-                .transition(.dominoPop(index: 3))
+                .transition(.dominoPop(index: 4))
+                }
+                if !sidebarRowsHidden {
                 SidebarTabItem(label: "Log", icon: "terminal", isSelected: activeTab == .log) {
                     withAnimation(.spring(response: 0.25)) { activeTab = .log }
                 }
                 .accessibilityIdentifier("tab_log")
-                .transition(.dominoPop(index: 4))
+                .transition(.dominoPop(index: 5))
+                }
                 // Present only on a machine holding the Sparkle signing key
                 // and GitHub token -- see DevKeychain.isDevMachine. On any
                 // other machine this row, and everything behind it, simply
@@ -5251,12 +5343,12 @@ struct ContentView: View {
                 // DevKeychain/DevReleaseView in at all, so this couldn't
                 // reference them regardless.
                 #if DEV_BUILD
-                if DevKeychain.isDevMachine {
+                if !sidebarRowsHidden, DevKeychain.isDevMachine {
                     SidebarTabItem(label: "Dev", icon: "wrench.and.screwdriver", isSelected: activeTab == .devRelease) {
                         withAnimation(.spring(response: 0.25)) { activeTab = .devRelease }
                     }
                     .accessibilityIdentifier("tab_dev")
-                    .transition(.dominoPop(index: 5))
+                    .transition(.dominoPop(index: 6))
                 }
                 // DEBUG only (never in the Release build that ships to users,
                 // where the Dev tab's absence is the access control): a Debug
@@ -5264,18 +5356,17 @@ struct ContentView: View {
                 // denied, or a new build's signature was never approved --
                 // otherwise just silently has no Dev tab for the whole session.
                 #if DEBUG
-                if !DevKeychain.isDevMachine {
+                if !sidebarRowsHidden, !DevKeychain.isDevMachine {
                     SidebarTabItem(label: "Dev (locked)", icon: "lock", isSelected: false) {}
                         .opacity(0.4)
                         .help("Keychain access to the Sparkle signing key / GitHub token was denied or is missing. Relaunch and choose Always Allow.")
                         .accessibilityIdentifier("tab_dev_locked")
-                        .transition(.dominoPop(index: 5))
+                        .transition(.dominoPop(index: 6))
                 }
                 #endif
                 #endif
             }
             .padding(.horizontal, 8)
-            }
 
             Spacer()
 
@@ -5285,17 +5376,21 @@ struct ContentView: View {
             // used to live here is gone -- Log is now its own full
             // sidebar tab (see nav items above) instead of a floating
             // side panel triggered from this row. Continues the domino from
-            // index 6 -- its OWN rows (yt-dlp/ffmpeg/Drop/Check for Updates)
+            // index 7 -- its OWN rows (yt-dlp/ffmpeg/Drop/Check for Updates)
             // each carry their own dominoPop transition (see baseIndex),
             // rather than this whole block popping as one piece. Its
             // internal compact/expanded switch is unchanged (it already only
-            // renders once sidebarRowsHidden has gone back to false, so
-            // isCompactSidebar has already settled by then).
-            if !sidebarRowsHidden {
-                ToolsStatusPill(manager: manager, baseIndex: 6)
-                    .padding(.horizontal, 6 + 10 * WindowLayout.sidebarExpansion(sidebarWidth))
-                    .padding(.bottom, isTinyHeight ? 8 : 16)
-            }
+            // fully switches once sidebarRowsHidden has gone back to false,
+            // so isCompactSidebar has already settled by then). Passed
+            // through as rowsHidden rather than gated with an outer
+            // `if !sidebarRowsHidden` here -- gating the WHOLE pill from
+            // outside would remove all of its rows in one shot, and even
+            // per-row removal changes this bottom-pinned block's height,
+            // sliding it; ToolsStatusPill instead keeps every row mounted and
+            // shrinks/blurs each one in place (see DominoVisibility).
+            ToolsStatusPill(manager: manager, baseIndex: 7, rowsHidden: sidebarRowsHidden)
+                .padding(.horizontal, 6 + 10 * WindowLayout.sidebarExpansion(sidebarWidth))
+                .padding(.bottom, isTinyHeight ? 8 : 16)
         }
         // maxHeight: .infinity guards against the card collapsing to the lone
         // Spacer's zero intrinsic height during the brief window where every

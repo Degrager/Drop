@@ -574,7 +574,7 @@ struct SidebarTabItem: View {
                     TypedText(label)
                         .font(.appMono(size: 13, weight: isSelected ? .semibold : .medium))
                         .lineLimit(1)
-                        .transition(.opacity)
+                        .transition(.labelFade)
                     // Pushes the count to the pill's trailing edge; the label
                     // and icon stay leading-aligned.
                     Spacer(minLength: 0)

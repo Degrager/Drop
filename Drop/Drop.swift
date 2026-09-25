@@ -4935,6 +4935,8 @@ struct ContentView: View {
     // appearance.
     @State private var sidebarWidth: CGFloat =
         UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
+    /// How far the page's bars are still to slide (see FollowsSidebar).
+    @State private var sidebarChromeOffset: CGFloat = 0
     /// True for the whole toggle sequence (width tween AND the reveal after
     /// it). While it is, the live-resize rule that switches animations off
     /// stands aside, so the sidebar can animate during a window drag.
@@ -5103,149 +5105,150 @@ struct ContentView: View {
             // width, set instantly (see the `.animation(nil...)` below), so it is
             // laid out once per toggle; only the sidebar card itself animates,
             // sliding over the page or away from it.
-            ZStack(alignment: .topLeading) {
-                VStack(spacing: 0) {
-                    // Active tab content -- structurally unrelated pages, so
-                    // they swap instantly: no fade, blur or scale between them
-                    // (see the transaction override on the Group below).
-                    ZStack(alignment: .top) {
-                    Group {
-                        if activeTab == .download {
-                            mainPanel
-                                .transition(.identity)
-                        } else if activeTab == .history {
-                            HistoryView(history: manager.history, activeTab: $activeTab, urlText: $urlText, hasInvalidURLs: $hasInvalidURLs, linkPreviews: $linkPreviews, config: config, onAnalyze: { urls, ids in analyzeURL(urls: urls, ids: ids) }, onReconvert: { fileURL in
-                                // Treat Reconvert exactly like freshly dropping/importing the original
-                                // input file into the Convert tab — no stored snapshot reused, the file
-                                // is re-probed from scratch just like a first-time add.
-                                // Selecting the job matters: ConvertView's Analyze panel only
-                                // renders the SELECTED staged file, so appending without
-                                // selecting left Reconvert landing on an empty Convert tab.
-                                if let existing = convertStagingJobs.first(where: { $0.inputURL == fileURL }) {
-                                    convertSelectedStagingID = existing.id
-                                    activeTab = .convert
-                                    return
-                                }
-                                guard !convertQueue.contains(where: { $0.inputURL == fileURL }) else {
-                                    activeTab = .convert
-                                    return
-                                }
-                                let job = ConvertJob(inputURL: fileURL)
-                                withAnimation(.spring(response: 0.35)) {
-                                    convertStagingJobs.append(job)
-                                    convertSelectedStagingID = job.id
-                                }
+            VStack(spacing: 0) {
+                // Active tab content -- structurally unrelated pages, so
+                // they swap instantly: no fade, blur or scale between them
+                // (see the transaction override on the Group below).
+                ZStack(alignment: .top) {
+                Group {
+                    if activeTab == .download {
+                        mainPanel
+                            .transition(.identity)
+                    } else if activeTab == .history {
+                        HistoryView(history: manager.history, activeTab: $activeTab, urlText: $urlText, hasInvalidURLs: $hasInvalidURLs, linkPreviews: $linkPreviews, config: config, onAnalyze: { urls, ids in analyzeURL(urls: urls, ids: ids) }, onReconvert: { fileURL in
+                            // Treat Reconvert exactly like freshly dropping/importing the original
+                            // input file into the Convert tab — no stored snapshot reused, the file
+                            // is re-probed from scratch just like a first-time add.
+                            // Selecting the job matters: ConvertView's Analyze panel only
+                            // renders the SELECTED staged file, so appending without
+                            // selecting left Reconvert landing on an empty Convert tab.
+                            if let existing = convertStagingJobs.first(where: { $0.inputURL == fileURL }) {
+                                convertSelectedStagingID = existing.id
                                 activeTab = .convert
-                            })
-                            // History is one continuous panel rather than a stack of
-                            // floating cards, so the equivalent of "cap the cards at
-                            // the content column" here is capping the whole panel -- the
-                            // same shared column width and centering as every other tab.
+                                return
+                            }
+                            guard !convertQueue.contains(where: { $0.inputURL == fileURL }) else {
+                                activeTab = .convert
+                                return
+                            }
+                            let job = ConvertJob(inputURL: fileURL)
+                            withAnimation(.spring(response: 0.35)) {
+                                convertStagingJobs.append(job)
+                                convertSelectedStagingID = job.id
+                            }
+                            activeTab = .convert
+                        })
+                        // History is one continuous panel rather than a stack of
+                        // floating cards, so the equivalent of "cap the cards at
+                        // the content column" here is capping the whole panel -- the
+                        // same shared column width and centering as every other tab.
+                        .contentColumn()
+                        .transition(.identity)
+                    } else if activeTab == .convert {
+                        ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
+                            .transition(.identity)
+                    } else if activeTab == .devRelease {
+                        // Real content is devReleaseOverlay below, kept
+                        // permanently mounted instead of created fresh
+                        // here -- see its comment for why.
+                        Color.clear
+                    } else {
+                        // Log is now a full page like Download/History/Convert
+                        // instead of a floating side panel -- same bare-VStack-
+                        // against-the-window-glass structure and 60%-width
+                        // convention as History, not a card floating on a page.
+                        LogView(logs: manager.globalLogs)
                             .contentColumn()
                             .transition(.identity)
-                        } else if activeTab == .convert {
-                            ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
-                                .transition(.identity)
-                        } else if activeTab == .devRelease {
-                            // Real content is devReleaseOverlay below, kept
-                            // permanently mounted instead of created fresh
-                            // here -- see its comment for why.
-                            Color.clear
-                        } else {
-                            // Log is now a full page like Download/History/Convert
-                            // instead of a floating side panel -- same bare-VStack-
-                            // against-the-window-glass structure and 60%-width
-                            // convention as History, not a card floating on a page.
-                            LogView(logs: manager.globalLogs)
-                                .contentColumn()
-                                .transition(.identity)
-                        }
                     }
-                    // A tab click runs inside withAnimation (the sidebar's
-                    // highlight uses it), and an animated transaction would
-                    // cross-fade the outgoing and incoming pages -- and let the
-                    // cards' own removal transitions play as a ghost of the old
-                    // page; `.transition(.identity)` on each page root is what
-                    // takes the whole page out in one piece. Scoped to
-                    // `activeTab` so ONLY the page swap is made instant; card
-                    // spawns, thumbnail loads and the rest of the subtree keep
-                    // their own animations.
-                    .transaction(value: activeTab) { $0.animation = nil }
+                }
+                // A tab click runs inside withAnimation (the sidebar's
+                // highlight uses it), and an animated transaction would
+                // cross-fade the outgoing and incoming pages -- and let the
+                // cards' own removal transitions play as a ghost of the old
+                // page; `.transition(.identity)` on each page root is what
+                // takes the whole page out in one piece. Scoped to
+                // `activeTab` so ONLY the page swap is made instant; card
+                // spawns, thumbnail loads and the rest of the subtree keep
+                // their own animations.
+                .transaction(value: activeTab) { $0.animation = nil }
 
-                    // Dev tab, unlike the others above, keeps essentially
-                    // all of its own state locally (pipeline, typed-in
-                    // version/changelog, fetched releases/audit trail) --
-                    // nothing hoisted up to ContentView the way History's
-                    // and Convert's real data lives in `manager`. Mounting
-                    // it fresh on every tab switch (the pattern above) tore
-                    // all of that down and rebuilt it from scratch each
-                    // time, which read as "the Dev page resets when I leave
-                    // it." Keeping it permanently in the tree and only
-                    // toggling opacity/hit-testing preserves its state for
-                    // as long as the app runs, matching every other tab's
-                    // actual persistence even though the mechanism here is
-                    // different. It switches instantly like the other pages.
-                    #if DEV_BUILD
-                    if DevKeychain.isDevMachine {
-                        // ActiveOnlyLayout keeps it mounted (state survives) but
-                        // lays it out only while it's the active tab -- hidden,
-                        // it used to be re-laid-out on every window-resize tick
-                        // for nothing. The transaction override stops the layout
-                        // change at activation from animating the page's size.
-                        ActiveOnlyLayout(isActive: activeTab == .devRelease) {
-                            DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
-                                .contentColumn()
-                                .transaction(value: activeTab) { $0.animation = nil }
-                        }
-                            .opacity(activeTab == .devRelease ? 1 : 0)
-                            .allowsHitTesting(activeTab == .devRelease)
+                // Dev tab, unlike the others above, keeps essentially
+                // all of its own state locally (pipeline, typed-in
+                // version/changelog, fetched releases/audit trail) --
+                // nothing hoisted up to ContentView the way History's
+                // and Convert's real data lives in `manager`. Mounting
+                // it fresh on every tab switch (the pattern above) tore
+                // all of that down and rebuilt it from scratch each
+                // time, which read as "the Dev page resets when I leave
+                // it." Keeping it permanently in the tree and only
+                // toggling opacity/hit-testing preserves its state for
+                // as long as the app runs, matching every other tab's
+                // actual persistence even though the mechanism here is
+                // different. It switches instantly like the other pages.
+                #if DEV_BUILD
+                if DevKeychain.isDevMachine {
+                    // ActiveOnlyLayout keeps it mounted (state survives) but
+                    // lays it out only while it's the active tab -- hidden,
+                    // it used to be re-laid-out on every window-resize tick
+                    // for nothing. The transaction override stops the layout
+                    // change at activation from animating the page's size.
+                    ActiveOnlyLayout(isActive: activeTab == .devRelease) {
+                        DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
+                            .contentColumn()
                             .transaction(value: activeTab) { $0.animation = nil }
                     }
-                    #endif
-                    }
-
+                        .opacity(activeTab == .devRelease ? 1 : 0)
+                        .allowsHitTesting(activeTab == .devRelease)
+                        .transaction(value: activeTab) { $0.animation = nil }
                 }
-                .frame(maxWidth: .infinity)
-                // The main column's own width (everything right of the
-                // sidebar). Every tab's content column is derived from the space
-                // it offers (ContentColumnLayout); this only feeds the breakpoint
-                // class views compare against.
-                .background(
-                    GeometryReader { geo in
-                        Color.clear
-                            .onAppear {
-                                mainAreaWidth = geo.size.width
-                                columnClass = WindowLayout.columnClass(mainWidth: geo.size.width)
-                            }
-                            .onChange(of: geo.size.width) { _, newWidth in
-                                mainAreaWidth = newWidth
-                                let cls = WindowLayout.columnClass(mainWidth: newWidth)
-                                if cls != columnClass {
-                                    if sidebarSequencePlaying {
-                                        // The page jumps to its final width when a
-                                        // toggle starts, so its breakpoints flip
-                                        // then too -- instantly, not as a 0.3s
-                                        // animated restack of every card.
-                                        var t = Transaction()
-                                        t.disablesAnimations = true
-                                        withTransaction(t) { columnClass = cls }
-                                    } else {
-                                        columnClass = cls
-                                    }
+                #endif
+                }
+
+            }
+            .frame(maxWidth: .infinity)
+            // The main column's own width (everything right of the
+            // sidebar). Every tab's content column is derived from the space
+            // it offers (ContentColumnLayout); this only feeds the breakpoint
+            // class views compare against.
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear {
+                            mainAreaWidth = geo.size.width
+                            columnClass = WindowLayout.columnClass(mainWidth: geo.size.width)
+                        }
+                        .onChange(of: geo.size.width) { _, newWidth in
+                            mainAreaWidth = newWidth
+                            let cls = WindowLayout.columnClass(mainWidth: newWidth)
+                            if cls != columnClass {
+                                if sidebarSequencePlaying {
+                                    // The page jumps to its final width when a
+                                    // toggle starts, so its breakpoints flip
+                                    // then too -- instantly, not as a 0.3s
+                                    // animated restack of every card.
+                                    var t = Transaction()
+                                    t.disablesAnimations = true
+                                    withTransaction(t) { columnClass = cls }
+                                } else {
+                                    columnClass = cls
                                 }
                             }
-                    }
-                )
-                // The sidebar card's footprint: its width plus the 12pt leading and
-                // 8pt trailing margins `sidebar` adds around it.
-                .padding(.leading, sidebarWidth + 20)
-                .animation(nil, value: sidebarWidth)
-
-                // Above everything in the main column, so the sidebar's card
-                // (and its shadow) always draws over the page.
-                sidebar
-                    .zIndex(99)
-            }
+                        }
+                }
+            )
+            // The sidebar card's footprint: its width plus the 12pt leading and
+            // 8pt trailing margins `sidebar` adds around it.
+            .padding(.leading, sidebarWidth + 20)
+            .animation(nil, value: sidebarWidth)
+            // Fills the window, and centered as it was when a row beside the
+            // sidebar: the overlay below takes its size from this.
+            .frame(maxHeight: .infinity)
+            // An OVERLAY, not a sibling: an overlay never affects its base's
+            // layout, so the sidebar's changing size can't make the container
+            // re-ask the whole page (every card) for its size on every frame.
+            // Draws above the page, so the card and its shadow cover it.
+            .overlay(alignment: .topLeading) { sidebar }
         }
         .background(
             GeometryReader { geo in
@@ -5265,6 +5268,7 @@ struct ContentView: View {
         )
         .environment(\.contentColumnWidth, columnClass)
         .environment(\.isCompactSidebar, sidebarDisplayCompact)
+        .environment(\.sidebarChromeOffset, sidebarChromeOffset)
         .onChange(of: isCompactSidebar) { _, compact in
             // Toggle sequence, per request: every row blurs/shrinks out AT
             // ONCE while the card visibly shrinks/grows; once the width lands
@@ -5281,6 +5285,29 @@ struct ContentView: View {
             // exempts it from the live-resize rule below that switches
             // animations off.
             sidebarSequencePlaying = true
+            // The page jumps to its final inset; its bars start exactly where
+            // they were (offset = old footprint - new) and ease to 0 with the
+            // sidebar. Set in one update and animated in the next, or the two
+            // writes would collapse into "no change".
+            //
+            // The page's breakpoint class is worked out here too, from the width
+            // the page is about to have (its old width plus the footprint
+            // difference), so every heavy re-layout lands in this one update
+            // instead of a second one after the geometry catches up.
+            var jump = Transaction()
+            jump.disablesAnimations = true
+            let footprintChange = sidebarWidth - target
+            withTransaction(jump) {
+                sidebarChromeOffset = footprintChange
+                if mainAreaWidth > 0 {
+                    columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth + footprintChange)
+                }
+            }
+            let chromeDuration = sidebarAnimationStyle == .resize ? Self.sidebarResizeDuration : Self.sidebarWidthDuration
+            DispatchQueue.main.async {
+                guard sidebarToggleGeneration == generation else { return }
+                withAnimation(.easeInOut(duration: chromeDuration)) { sidebarChromeOffset = 0 }
+            }
             if sidebarAnimationStyle == .resize {
                 // Resize style: nothing leaves. The card's width tweens and
                 // the tabs, icons and labels resize with it (SidebarTabItem
@@ -5290,10 +5317,14 @@ struct ContentView: View {
                 // through when expanding, so a label never shows up inside
                 // a pill that's still too narrow for it.
                 withAnimation(.easeInOut(duration: Self.sidebarResizeDuration)) { sidebarWidth = target }
-                let flipDelay = compact ? 0 : Self.sidebarResizeDuration * 0.45
-                DispatchQueue.main.asyncAfter(deadline: .now() + flipDelay) {
-                    guard sidebarToggleGeneration == generation else { return }
+                if compact {
+                    // Collapsing: labels leave right away, in this same update.
                     withAnimation(.easeInOut(duration: 0.2)) { sidebarDisplayCompact = compact }
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarResizeDuration * 0.45) {
+                        guard sidebarToggleGeneration == generation else { return }
+                        withAnimation(.easeInOut(duration: 0.2)) { sidebarDisplayCompact = compact }
+                    }
                 }
                 // After the last label/tools transition (a flip at most
                 // 0.45 * duration in, plus its 0.2s) has finished.
@@ -5656,6 +5687,7 @@ struct ContentView: View {
                 // window, where the card list needs every point.
                 .padding(.top, isCompactHeight ? 22 : 30)
                 .padding(.bottom, isCompactHeight ? 10 : 14)
+                .followsSidebar()
 
             if isTinyHeight {
                 // Too short for pinned chrome AND a card list: everything under
@@ -5685,8 +5717,10 @@ struct ContentView: View {
                 }
             } else {
                 mainPanelToolbar
+                    .followsSidebar()
                 mainPanelCardsScroll
                 mainPanelBottomBar
+                    .followsSidebar()
             }
         }
     }

@@ -144,6 +144,7 @@ struct HistoryView: View {
             searchHeader
                 .padding(.top, compactHeight ? 22 : 30)
                 .padding(.bottom, compactHeight ? 10 : 14)
+                .followsSidebar()
 
             if filtered.isEmpty {
                 EmptyStateView(

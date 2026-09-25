@@ -57,7 +57,7 @@ enum WindowLayout {
     /// which share its width) is ever allowed to get.
     static let minColumnWidth: CGFloat = 380
     /// The widest the column grows: past this, extra window width becomes margin.
-    static let maxColumnWidth: CGFloat = 1300
+    static let maxColumnWidth: CGFloat = 1000
     /// The margin between the column and each edge of the main area (the space
     /// between the sidebar and the window's right edge). The column fills the
     /// area minus this, at every window width, so the cards run nearly edge to

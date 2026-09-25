@@ -4163,15 +4163,14 @@ struct SidebarBrandLabel: View {
     }
 }
 
-/// One row of the sidebar's update block -- the SAME views whether the rail is
-/// collapsed or open. Open, it reads across: the tool's name, its version chip at
-/// the trailing edge. Collapsed, the very same name and version re-lay-out as a
-/// short stack (name over a short version) -- so a collapsed rail still says which
-/// tool is which and what version it is on, and widening the sidebar just moves
-/// those two views instead of swapping in a different set. There is no per-row
-/// status glyph: one badge on the Check for Updates button says whether
-/// everything is current, and a tool that needs an update shows its version in
-/// orange.
+/// One tool in the sidebar's update block: its name over its version, in the
+/// same two-line cell whether the rail is collapsed or open: same fonts, same
+/// two lines, same height, so nothing in it scales or moves up or down. The card
+/// around it just changes width, and the text slides sideways with it (to line
+/// up with the button's icon when open, tucked in when collapsed). A tool that
+/// needs an update shows its version in orange; there is no per-row status
+/// glyph, because one badge on the Check for Updates button says whether
+/// everything is current.
 struct SidebarToolRow: View {
     let name: String
     let updateAvailable: Bool
@@ -4179,49 +4178,30 @@ struct SidebarToolRow: View {
     let version: String
     @Environment(\.isCompactSidebar) private var compact
 
-    private var accent: Color { updateAvailable ? .orange : .white }
-
-    /// "2026.09.16" in the open row; "26.09.16" (year shortened) when collapsed --
-    /// versions like ffmpeg's "8.0" are already short and pass through.
+    /// "26.09.16": the year is shortened so the line fits the collapsed rail
+    /// (about 40pt); versions like ffmpeg's "8.0" are already short.
     private var shownVersion: String {
         guard !version.isEmpty else { return "—" }
         let simple = VersionChip.simplify(version)
-        if compact, simple.count > 8, simple.hasPrefix("20") { return String(simple.dropFirst(2)) }
+        if simple.count > 8, simple.hasPrefix("20") { return String(simple.dropFirst(2)) }
         return simple
     }
 
     var body: some View {
-        let arrangement = compact
-            ? AnyLayout(VStackLayout(alignment: .center, spacing: 1))
-            : AnyLayout(HStackLayout(alignment: .center, spacing: 8))
-        arrangement {
+        VStack(alignment: .leading, spacing: 2) {
             Text(name)
-                .font(.appMono(size: compact ? 9 : 11.5, weight: .medium))
+                .font(.appMono(size: 9, weight: .medium))
                 .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(maxWidth: compact ? nil : CGFloat.infinity, alignment: .leading)
             Text(shownVersion)
-                .font(.appMono(size: compact ? 8 : 9.5))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .fixedSize(horizontal: true, vertical: false)
-                .foregroundColor(updateAvailable && compact ? .orange : .white.opacity(compact ? DesignTokens.Text.tertiary : DesignTokens.Text.secondary))
-                .frame(minWidth: compact ? 0 : 58, minHeight: compact ? 0 : 22)
-                .padding(.horizontal, compact ? 0 : 6)
-                .background(accent.opacity(compact ? 0 : 0.1))
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule().stroke(accent.opacity(compact ? 0 : (updateAvailable ? 0.45 : 0.14)), lineWidth: 0.5)
-                )
+                .font(.appMono(size: 8))
+                .foregroundColor(updateAvailable ? .orange : .white.opacity(DesignTokens.Text.tertiary))
         }
-        // Open: the name starts at the row's leading edge and the chip sits at
-        // the trailing one. Collapsed: the stack is centered.
-        .padding(.horizontal, compact ? 0 : 10)
-        .padding(.vertical, compact ? 5 : 8)
-        // Holding both states to the same minimum height means the block
-        // doesn't move up and down as the sidebar opens and closes.
-        .frame(maxWidth: .infinity, minHeight: 38, alignment: compact ? .center : .leading)
+        .lineLimit(1)
+        .fixedSize()
+        // Open: the same left edge as the button's icon below. Collapsed: as far
+        // left as the 40pt rail allows.
+        .padding(.leading, compact ? 2 : WindowLayout.railIconInset - WindowLayout.updateCardInset)
+        .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
         .clipped()
         .help(version.isEmpty ? name : "\(name) \(version)\(updateAvailable ? " — update available" : "")")
         .accessibilityElement(children: .combine)
@@ -4958,6 +4938,11 @@ struct ContentView: View {
     // appearance.
     @State private var sidebarWidth: CGFloat =
         UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
+    /// The sidebar width the PAGE is currently laid out for. It follows
+    /// `sidebarWidth`, but not at the same moment: opening, the page moves at
+    /// once; collapsing, it waits until the sidebar has finished shrinking.
+    @State private var pageInset: CGFloat =
+        UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
     /// How far the page's bars are still to slide (see FollowsSidebar).
     @State private var sidebarChromeOffset: CGFloat = 0
     /// True for the whole toggle sequence (width tween AND the reveal after
@@ -5262,8 +5247,8 @@ struct ContentView: View {
             )
             // The sidebar card's footprint: its width plus the 12pt leading and
             // 8pt trailing margins `sidebar` adds around it.
-            .padding(.leading, sidebarWidth + 20)
-            .animation(nil, value: sidebarWidth)
+            .padding(.leading, pageInset + 20)
+            .animation(nil, value: pageInset)
             // Fills the window, and centered as it was when a row beside the
             // sidebar: the overlay below takes its size from this.
             .frame(maxHeight: .infinity)
@@ -5308,28 +5293,51 @@ struct ContentView: View {
             // exempts it from the live-resize rule below that switches
             // animations off.
             sidebarSequencePlaying = true
-            // The page jumps to its final inset; its bars start exactly where
-            // they were (offset = old footprint - new) and ease to 0 with the
-            // sidebar. Set in one update and animated in the next, or the two
-            // writes would collapse into "no change".
-            //
-            // The page's breakpoint class is worked out here too, from the width
+            // The page (its cards) takes its new size in ONE step, never live:
+            // opening, at the start; collapsing, once the sidebar has finished
+            // shrinking. Its bars (paste bar, toolbar, bottom bar) follow the
+            // sidebar's edge in between through `sidebarChromeOffset`. The page's
+            // breakpoint class is worked out at the same moment from the width
             // the page is about to have (its old width plus the footprint
-            // difference), so every heavy re-layout lands in this one update
-            // instead of a second one after the geometry catches up.
+            // difference), so the heavy re-layout is a single update instead of
+            // a second one after the geometry catches up.
             var jump = Transaction()
             jump.disablesAnimations = true
-            let footprintChange = sidebarWidth - target
-            withTransaction(jump) {
-                sidebarChromeOffset = footprintChange
-                if mainAreaWidth > 0 {
-                    columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth + footprintChange)
-                }
-            }
+            let footprintChange = pageInset - target
             let chromeDuration = sidebarAnimationStyle == .resize ? Self.sidebarResizeDuration : Self.sidebarWidthDuration
-            DispatchQueue.main.async {
-                guard sidebarToggleGeneration == generation else { return }
-                withAnimation(.easeInOut(duration: chromeDuration)) { sidebarChromeOffset = 0 }
+            if compact {
+                // Collapsing: the page keeps its old size until the sidebar has
+                // finished shrinking; its bars just follow the sidebar's edge
+                // meanwhile (offset from 0 to the whole change, animated below,
+                // in the same update as the sidebar's own width). Then, once the
+                // animation is over, the page takes its new size in one step.
+                withAnimation(.easeInOut(duration: chromeDuration)) { sidebarChromeOffset = -footprintChange }
+                DispatchQueue.main.asyncAfter(deadline: .now() + chromeDuration) {
+                    guard sidebarToggleGeneration == generation else { return }
+                    var commit = Transaction()
+                    commit.disablesAnimations = true
+                    withTransaction(commit) {
+                        pageInset = target
+                        sidebarChromeOffset = 0
+                        if mainAreaWidth > 0 {
+                            columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth + footprintChange)
+                        }
+                    }
+                }
+            } else {
+                // Opening: the page moves to its new size at once and its bars
+                // start where they were.
+                withTransaction(jump) {
+                    pageInset = target
+                    sidebarChromeOffset = footprintChange
+                    if mainAreaWidth > 0 {
+                        columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth + footprintChange)
+                    }
+                }
+                DispatchQueue.main.async {
+                    guard sidebarToggleGeneration == generation else { return }
+                    withAnimation(.easeInOut(duration: chromeDuration)) { sidebarChromeOffset = 0 }
+                }
             }
             if sidebarAnimationStyle == .resize {
                 // Resize style: nothing leaves. The card's width tweens and
@@ -5344,7 +5352,7 @@ struct ContentView: View {
                     // Collapsing: labels leave right away, in this same update.
                     withAnimation(.easeInOut(duration: 0.2)) { sidebarDisplayCompact = compact }
                 } else {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarResizeDuration * 0.45) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarResizeDuration * 0.25) {
                         guard sidebarToggleGeneration == generation else { return }
                         withAnimation(.easeInOut(duration: 0.2)) { sidebarDisplayCompact = compact }
                     }

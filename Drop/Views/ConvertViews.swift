@@ -1082,6 +1082,7 @@ struct ConvertView: View {
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
                 .padding(.top, compactHeight ? 22 : 30)
                 .padding(.bottom, compactHeight ? 10 : 14)
+                .followsSidebar()
 
             // ── Analyze panel — fixed in place (never scrolls): exactly one
             // staged file at a time, switchable via the dropdown, so every
@@ -1115,6 +1116,7 @@ struct ConvertView: View {
                 // instead of overflowing. With a staged file the panel and the bar
                 // share space as before.
                 convertBottomBar
+                    .followsSidebar()
                     .layoutPriority(hasStaging ? 0 : 1)
             }
         }

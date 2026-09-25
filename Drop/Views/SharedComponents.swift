@@ -112,6 +112,7 @@ enum WindowLayout {
 
 private struct ContentColumnWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 private struct CompactSidebarKey: EnvironmentKey { static let defaultValue = false }
+private struct SidebarChromeOffsetKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 private struct CompactHeightKey: EnvironmentKey { static let defaultValue = false }
 private struct TinyHeightKey: EnvironmentKey { static let defaultValue = false }
 
@@ -128,6 +129,14 @@ extension EnvironmentValues {
     var isCompactSidebar: Bool {
         get { self[CompactSidebarKey.self] }
         set { self[CompactSidebarKey.self] = newValue }
+    }
+    /// While the sidebar toggles, how far the page's bars (paste bar, toolbar,
+    /// bottom bar) are still to slide toward their final position: it starts at
+    /// the old sidebar footprint minus the new one and eases to 0. See
+    /// `followsSidebar()`.
+    var sidebarChromeOffset: CGFloat {
+        get { self[SidebarChromeOffsetKey.self] }
+        set { self[SidebarChromeOffsetKey.self] = newValue }
     }
     var isCompactHeight: Bool {
         get { self[CompactHeightKey.self] }
@@ -218,7 +227,19 @@ private struct ContentColumnLayout: Layout {
     }
 }
 
+/// The page beside the sidebar is laid out once at its final width (see
+/// ContentView.body), so while the sidebar slides the page's cards stay put and
+/// the sidebar covers or uncovers them. The cheap bars above and below the
+/// cards opt in with this instead: they start where they were and follow the
+/// sidebar's edge, so the top bar doesn't snap.
+struct FollowsSidebar: ViewModifier {
+    @Environment(\.sidebarChromeOffset) private var offset
+    func body(content: Content) -> some View { content.padding(.leading, offset) }
+}
+
 extension View {
+    func followsSidebar() -> some View { modifier(FollowsSidebar()) }
+
     /// Lays a view out as the shared content column, centered in its
     /// container. The column already leaves the side padding, so callers add
     /// none of their own.
@@ -329,6 +350,7 @@ struct LogView: View {
             logHeader
                 .padding(.top, compactHeight ? 22 : 30)
                 .padding(.bottom, compactHeight ? 10 : 14)
+                .followsSidebar()
 
             if logs.isEmpty {
                 EmptyStateView(icon: "terminal", title: "No log output yet")

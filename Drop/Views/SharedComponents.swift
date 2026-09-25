@@ -370,7 +370,7 @@ struct LogView: View {
 
             if logs.isEmpty {
                 EmptyStateView(icon: "terminal", title: "No log output yet")
-                    .pinnedToSidebar()
+                    .followsSidebar()
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {

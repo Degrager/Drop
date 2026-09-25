@@ -1100,14 +1100,12 @@ struct ConvertView: View {
                 ScrollView(showsIndicators: true) {
                     VStack(spacing: 12) {
                         analyzePanel
-                            .pinnedToSidebar()
                             .zIndex(99)
                         convertBottomBar.pinnedToSidebar()
                     }
                 }
             } else {
                 analyzePanel
-                    .pinnedToSidebar()
                     .zIndex(99)
 
                 Spacer(minLength: 0)
@@ -1364,6 +1362,9 @@ struct ConvertView: View {
                 }
             }
             .contentColumn()
+            // The settings card is heavy: laid out once, for where the sidebar
+            // is heading (see PinnedToSidebar).
+            .pinnedToSidebar()
             // Both branches of this if/else take layout space, so the outgoing
             // one must leave instantly -- see AnyTransition.glassPopInOnly.
             .transition(.glassPopInOnly)
@@ -1376,6 +1377,9 @@ struct ConvertView: View {
             // Hard minimum kept low: it counts toward the window's minimum
             // height, and this state also holds the whole bottom bar.
             .frame(maxWidth: .infinity, minHeight: compactHeight ? 80 : 120)
+            // Light, so the hint FOLLOWS the sidebar's edge frame by frame and
+            // stays centered in what's visible.
+            .followsSidebar()
             .transition(.blurInOnly)
         }
     }

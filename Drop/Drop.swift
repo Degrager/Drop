@@ -5411,7 +5411,12 @@ struct ContentView: View {
             // re-layout is a single update.
             let chromeDuration = sidebarAnimationStyle == .resize ? Self.sidebarResizeDuration : Self.sidebarWidthDuration
             let newContentWidth = { mainAreaWidth - (target - WindowLayout.compactSidebarWidth) }
-            if compact {
+            // Only a collapse the USER asked for waits for the sidebar. When the
+            // window itself forced it (a drag or zoom took the width under the
+            // breakpoint) the page has to fit the new width right now: waiting
+            // left the cards laid out for a sidebar that was already leaving, so
+            // after a fast shrink they wrapped for 0.3s with room to spare.
+            if compact && !isNarrowWindow {
                 // Collapsing: the content keeps its old size until the animation is over.
                 DispatchQueue.main.asyncAfter(deadline: .now() + chromeDuration) {
                     guard sidebarToggleGeneration == generation else { return }
@@ -5423,7 +5428,8 @@ struct ContentView: View {
                     }
                 }
             } else {
-                // Opening: the content takes its new size at once.
+                // Opening (or a window-forced collapse): the content takes its
+                // new size at once.
                 var jump = Transaction()
                 jump.disablesAnimations = true
                 withTransaction(jump) {
@@ -5531,7 +5537,9 @@ struct ContentView: View {
             // settledWindowSize's declaration.
             NotificationCenter.default.addObserver(forName: .dropLiveResizeEnded, object: nil, queue: .main) { _ in
                 settledWindowSize = windowSize
-                columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth)
+                // Minus the room the (pinned) sidebar takes -- mainAreaWidth is
+                // measured as if the sidebar were collapsed.
+                columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth - (pageInset - WindowLayout.compactSidebarWidth))
             }
             NotificationCenter.default.addObserver(forName: .menuBarDownload, object: nil, queue: .main) { note in
                 guard let raw = note.userInfo?["url"] as? String else { return }

@@ -4929,15 +4929,12 @@ struct ContentView: View {
     // The sidebar card's own width. A deliberate toggle tween it (rows blur
     // out, the card visibly shrinks/grows, rows pop back in one by one -- see
     // onChange(of: isCompactSidebar) below); a window-driven change snaps it.
-    // While it tweens, columnClass is held (sidebarWidthAnimating) so the
-    // main content doesn't restack between side-by-side and stacked on every
-    // intermediate width. Seeded from the persisted preference so a
-    // collapsed launch doesn't animate on first appearance.
+    // The page beside it is inset by this value's FINAL number the instant it
+    // changes (see body), so only the card animates. Seeded from the
+    // persisted preference so a collapsed launch doesn't animate on first
+    // appearance.
     @State private var sidebarWidth: CGFloat =
         UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
-    /// True from the moment a toggle starts the card's width tween until it
-    /// lands; pins columnClass so breakpoints don't flip mid-tween.
-    @State private var sidebarWidthAnimating = false
     /// True for the whole toggle sequence (width tween AND the reveal after
     /// it). While it is, the live-resize rule that switches animations off
     /// stands aside, so the sidebar can animate during a window drag.
@@ -5099,12 +5096,14 @@ struct ContentView: View {
             // right. Sidebar is now a floating GlassCard with its own
             // margin (leading/vertical padding applied inside `sidebar`
             // itself), so no extra gap is needed here.
-            HStack(spacing: 0) {
-                // Above everything in the main column, so the sidebar's card
-                // (and its shadow) always draws over content beside it.
-                sidebar
-                    .zIndex(99)
-
+            //
+            // The page is NOT pushed by the sidebar (an HStack made every card
+            // re-lay-out on every frame of the width tween: about 40ms a frame,
+            // ~20fps on a 120Hz screen). It is inset by the sidebar's FINAL
+            // width, set instantly (see the `.animation(nil...)` below), so it is
+            // laid out once per toggle; only the sidebar card itself animates,
+            // sliding over the page or away from it.
+            ZStack(alignment: .topLeading) {
                 VStack(spacing: 0) {
                     // Active tab content -- structurally unrelated pages, so
                     // they swap instantly: no fade, blur or scale between them
@@ -5220,16 +5219,32 @@ struct ContentView: View {
                             }
                             .onChange(of: geo.size.width) { _, newWidth in
                                 mainAreaWidth = newWidth
-                                // Held while the sidebar's own width tween is dragging
-                                // this through intermediate values
-                                // (sidebarWidthAnimating); caught up when it lands.
-                                if !sidebarWidthAnimating {
-                                    let cls = WindowLayout.columnClass(mainWidth: newWidth)
-                                    if cls != columnClass { columnClass = cls }
+                                let cls = WindowLayout.columnClass(mainWidth: newWidth)
+                                if cls != columnClass {
+                                    if sidebarSequencePlaying {
+                                        // The page jumps to its final width when a
+                                        // toggle starts, so its breakpoints flip
+                                        // then too -- instantly, not as a 0.3s
+                                        // animated restack of every card.
+                                        var t = Transaction()
+                                        t.disablesAnimations = true
+                                        withTransaction(t) { columnClass = cls }
+                                    } else {
+                                        columnClass = cls
+                                    }
                                 }
                             }
                     }
                 )
+                // The sidebar card's footprint: its width plus the 12pt leading and
+                // 8pt trailing margins `sidebar` adds around it.
+                .padding(.leading, sidebarWidth + 20)
+                .animation(nil, value: sidebarWidth)
+
+                // Above everything in the main column, so the sidebar's card
+                // (and its shadow) always draws over the page.
+                sidebar
+                    .zIndex(99)
             }
         }
         .background(
@@ -5250,16 +5265,13 @@ struct ContentView: View {
         )
         .environment(\.contentColumnWidth, columnClass)
         .environment(\.isCompactSidebar, sidebarDisplayCompact)
-        .environment(\.sidebarWidth, sidebarWidth)
         .onChange(of: isCompactSidebar) { _, compact in
             // Toggle sequence, per request: every row blurs/shrinks out AT
             // ONCE while the card visibly shrinks/grows; once the width lands
             // the new row set pops IN one by one, top-to-bottom. See
-            // AnyTransition.dominoPop. While the width tweens, the main
-            // content's breakpoints are held (sidebarWidthAnimating) and
-            // catch up once, when it lands -- otherwise the bottom bar and
-            // chip rows would flip between side-by-side and stacked on
-            // every intermediate width.
+            // AnyTransition.dominoPop. The page beside the card is laid out
+            // once at its final width (see body), so its breakpoints flip
+            // once, at the start, rather than on every intermediate width.
             let target = compact ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
             sidebarToggleGeneration += 1
             let generation = sidebarToggleGeneration
@@ -5268,7 +5280,6 @@ struct ContentView: View {
             // -- get the same animated sequence. sidebarSequencePlaying
             // exempts it from the live-resize rule below that switches
             // animations off.
-            sidebarWidthAnimating = true
             sidebarSequencePlaying = true
             if sidebarAnimationStyle == .resize {
                 // Resize style: nothing leaves. The card's width tweens and
@@ -5283,11 +5294,6 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + flipDelay) {
                     guard sidebarToggleGeneration == generation else { return }
                     withAnimation(.easeInOut(duration: 0.2)) { sidebarDisplayCompact = compact }
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarResizeDuration) {
-                    guard sidebarToggleGeneration == generation else { return }
-                    sidebarWidthAnimating = false
-                    withAnimation(.easeOut(duration: 0.2)) { columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth) }
                 }
                 // After the last label/tools transition (a flip at most
                 // 0.45 * duration in, plus its 0.2s) has finished.
@@ -5311,10 +5317,7 @@ struct ContentView: View {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarWidthDuration) {
                 guard sidebarToggleGeneration == generation else { return }
-                // The width has landed: let the main content's breakpoints
-                // catch up (once, gently), then start the reveal.
-                sidebarWidthAnimating = false
-                withAnimation(.easeOut(duration: 0.2)) { columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth) }
+                // The width has landed: start the reveal.
                 // The ambient wrapper's OWN duration must span the full
                 // staggered reveal, not just one row's animation -- each
                 // row's transition bakes its own delay+curve (see

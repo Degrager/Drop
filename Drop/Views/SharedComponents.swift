@@ -112,7 +112,6 @@ enum WindowLayout {
 
 private struct ContentColumnWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 private struct CompactSidebarKey: EnvironmentKey { static let defaultValue = false }
-private struct SidebarWidthKey: EnvironmentKey { static let defaultValue: CGFloat = WindowLayout.sidebarWidth }
 private struct CompactHeightKey: EnvironmentKey { static let defaultValue = false }
 private struct TinyHeightKey: EnvironmentKey { static let defaultValue = false }
 
@@ -129,15 +128,6 @@ extension EnvironmentValues {
     var isCompactSidebar: Bool {
         get { self[CompactSidebarKey.self] }
         set { self[CompactSidebarKey.self] = newValue }
-    }
-    /// The sidebar card's CURRENT width, animated between compactSidebarWidth
-    /// and sidebarWidth. Everything inside that should shrink/grow with the
-    /// card (tab pills, paddings) derives from this, not from the discrete
-    /// isCompactSidebar flag -- the flag flips instantly, so anything sized
-    /// from it snaps to its final size while the card is still mid-animation.
-    var sidebarWidth: CGFloat {
-        get { self[SidebarWidthKey.self] }
-        set { self[SidebarWidthKey.self] = newValue }
     }
     var isCompactHeight: Bool {
         get { self[CompactHeightKey.self] }

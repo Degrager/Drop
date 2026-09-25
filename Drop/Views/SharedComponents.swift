@@ -263,6 +263,115 @@ extension View {
     }
 }
 
+// MARK: - Resize facade
+
+/// A card's last real size, remembered so a facade can stand in for it (same height,
+/// so the list doesn't jump) while the window edge is being dragged.
+final class SizeMemory {
+    var width: CGFloat = 0
+    var height: CGFloat = 0
+}
+
+/// Two children: [0] a real card, [1] its facade. Normally it is exactly the real card
+/// (the facade sits at zero opacity above it). While `frozen` -- a window-edge drag --
+/// it reports the facade's size instead and places the real card at its LAST size, a
+/// constant proposal, so SwiftUI reuses the cached layout and the card costs nothing per
+/// frame; only the facade (a few plain shapes) follows the window. Measured on the
+/// Download page with 12 cards: ~57 fps -> ~118 fps during a drag. The real card stays
+/// mounted throughout, so releasing the drag is one layout pass, not a rebuild.
+struct FreezeLayout: Layout {
+    var frozen: Bool
+    let memory: SizeMemory
+    private static let fallbackHeight: CGFloat = 96
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 2 else { return .zero }
+        if frozen {
+            return CGSize(width: proposal.width ?? memory.width,
+                          height: memory.height > 0 ? memory.height : Self.fallbackHeight)
+        }
+        let size = subviews[0].sizeThatFits(proposal)
+        if let w = proposal.width, w > 1 {
+            memory.width = w
+            memory.height = size.height
+        }
+        return size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let live = ProposedViewSize(width: bounds.width, height: bounds.height)
+        if frozen {
+            // Zero size, like ActiveOnlyLayout: a constant proposal SwiftUI can reuse the
+            // cached layout for, and no real-sized glass views for AppKit to keep moving
+            // (and re-blurring) under the facade on every frame of the drag.
+            subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: .zero)
+        } else {
+            subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: live)
+        }
+        subviews[1].place(at: bounds.origin, anchor: .topLeading, proposal: live)
+    }
+}
+
+/// The placeholder drawn in a card's place during a window drag: the card's outline plus
+/// a thumbnail box, a title bar and a metadata bar. Plain shapes only (no material, no
+/// animation), so it is cheap to lay out and draw at any width.
+struct CardFacade: View {
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
+        shape
+            .fill(Color(white: 0.075))
+            .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 0.75))
+            .overlay(alignment: .topLeading) {
+                HStack(alignment: .top, spacing: 12) {
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                        .frame(width: CardMetrics.thumbWidth, height: CardMetrics.thumbHeight)
+                    VStack(alignment: .leading, spacing: 8) {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color.white.opacity(0.09))
+                            .frame(maxWidth: 200)
+                            .frame(height: 11)
+                        Capsule()
+                            .fill(Color.white.opacity(0.05))
+                            .frame(maxWidth: 320)
+                            .frame(height: 28)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(16)
+            }
+            .allowsHitTesting(false)
+    }
+}
+
+/// Swaps a card for its facade while the window edge is dragged, and fades the facade
+/// back out on release (the real card is already laid out underneath by then). The real
+/// card is hidden at opacity 0 with animation OFF -- never a partial opacity on glass,
+/// which greys it -- so only the facade's own opacity fades.
+struct FrozenDuringResize: ViewModifier {
+    @ObservedObject private var live = LiveResizeState.shared
+    @State private var memory = SizeMemory()
+
+    func body(content: Content) -> some View {
+        FreezeLayout(frozen: live.isActive, memory: memory) {
+            content
+                .opacity(live.isActive ? 0 : 1)
+                .animation(nil, value: live.isActive)
+                .allowsHitTesting(!live.isActive)
+            CardFacade()
+                .opacity(live.isActive ? 1 : 0)
+        }
+        // The drag start stays a cut (the window is already moving under the pointer);
+        // the release is what animates: facade fades out, height settles.
+        .animation(.easeOut(duration: 0.2), value: live.isActive)
+    }
+}
+
+extension View {
+    func frozenDuringResize() -> some View { modifier(FrozenDuringResize()) }
+}
+
 // MARK: - Status Badge
 
 struct StatusBadge: View {
@@ -806,25 +915,45 @@ struct MetaLines: View {
 /// symbols and text as MetaLines, separated by thin dividers.
 struct MetaLine: View {
     let chips: [ChipData]
+    /// Draws the line inside the same capsule MetaLines uses (Convert queue rows).
+    var inCapsule: Bool = false
 
     private var separator: some View {
         Rectangle().fill(Color.white.opacity(0.2)).frame(width: 0.75, height: 10)
     }
 
+    private var oneLine: some View {
+        HStack(spacing: 9) {
+            ForEach(Array(chips.enumerated()), id: \.offset) { index, chip in
+                if index > 0 { separator }
+                MetaCell(chip: chip)
+            }
+        }
+    }
+
+    private var wrapped: some View {
+        FlowLayout(spacing: 8) {
+            ForEach(chips, id: \.self) { MetaCell(chip: $0) }
+        }
+    }
+
     var body: some View {
         if chips.isEmpty {
             EmptyView()
+        } else if inCapsule {
+            // The padding is inside the fit test, so the line is only picked when it
+            // fits with its capsule around it; the capsule hugs its content.
+            ViewThatFits(in: .horizontal) {
+                oneLine.padding(.horizontal, 12).padding(.vertical, 6)
+                wrapped.padding(.horizontal, 12).padding(.vertical, 6)
+            }
+            .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
+            .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 9) {
-                    ForEach(Array(chips.enumerated()), id: \.offset) { index, chip in
-                        if index > 0 { separator }
-                        MetaCell(chip: chip)
-                    }
-                }
-                FlowLayout(spacing: 8) {
-                    ForEach(chips, id: \.self) { MetaCell(chip: $0) }
-                }
+                oneLine
+                wrapped
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -985,9 +1114,12 @@ struct FormRow<Content: View>: View {
                 content()
             }
         } else {
-            HStack(alignment: .center, spacing: 12) {
+            // The label column is only as wide as the longest label ("OUTPUT FORMAT",
+            // icon included) plus a little air -- it used to be 150pt, which left a
+            // ~70pt hole between the label and its selector.
+            HStack(alignment: .center, spacing: 10) {
                 labelBlock
-                    .frame(width: 150, alignment: .leading)
+                    .frame(width: 112, alignment: .leading)
                 content()
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

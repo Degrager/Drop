@@ -257,6 +257,31 @@ func sourceResolutionLabel(_ height: Int) -> String? {
     return height >= 2160 ? "4K" : "\(height)p"
 }
 
+/// Even pixel count, the way real encodes are sized (1920x1080, 854x480, ...).
+private func evenPixels(_ value: Double) -> Int { max(2, Int((value / 2).rounded()) * 2) }
+
+/// The source's FULL resolution ("3840×2160"), like Convert's chips show it -- never
+/// the "4K" / "1080p" shorthand. Uses the real pixel size when it is known; entries
+/// analyzed before that was kept only have the tier height, so those assume 16:9.
+func fullResolutionLabel(width: Int, height: Int, tierHeight: Int) -> String? {
+    if width > 0, height > 0 { return "\(width)×\(height)" }
+    guard tierHeight > 0 else { return nil }
+    return "\(evenPixels(Double(tierHeight) * 16 / 9))×\(tierHeight)"
+}
+
+/// The full resolution that will land in the file for the chosen quality: the source
+/// scaled down to the quality's height cap (never up), sized to even pixel counts.
+/// nil when the source's size is unknown (callers fall back to the tier label).
+func outputResolutionLabel(_ quality: VideoQuality, width: Int, height: Int, tierHeight: Int) -> String? {
+    let w: Int, h: Int
+    if width > 0, height > 0 { (w, h) = (width, height) }
+    else if tierHeight > 0 { (w, h) = (evenPixels(Double(tierHeight) * 16 / 9), tierHeight) }
+    else { return nil }
+    guard tierHeight > quality.maxHeight else { return "\(w)×\(h)" }
+    let scale = Double(quality.maxHeight) / Double(tierHeight)
+    return "\(evenPixels(Double(w) * scale))×\(evenPixels(Double(h) * scale))"
+}
+
 /// The resolution that will actually land in the downloaded file for a given
 /// quality selection, clamped to the source's real max height. yt-dlp's
 /// format selector (`bestvideo[height<=N]`) can never manufacture pixels the
@@ -832,6 +857,8 @@ struct DownloadSnapshot {
     var durationSeconds: Int = 0
     var fileSizeBytes: Int? = nil
     var sourceMaxHeight: Int = 0
+    var sourceWidthPx: Int = 0
+    var sourceHeightPx: Int = 0
     var sourceASR: Int = 0
     var sourceABR: Int = 0
     var sourceVideoCodec: String? = nil
@@ -906,7 +933,7 @@ struct Download: Identifiable {
             result.append(length)
         }
         if mediaMode == .videoAndAudio {
-            result.append(.video([snapshot.sourceVideoCodec, sourceResolutionLabel(snapshot.sourceMaxHeight)]) ?? .videoPlaceholder)
+            result.append(.video([snapshot.sourceVideoCodec, fullResolutionLabel(width: snapshot.sourceWidthPx, height: snapshot.sourceHeightPx, tierHeight: snapshot.sourceMaxHeight)]) ?? .videoPlaceholder)
         }
         if let audio = ChipData.audio([snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, bitrateLabel(kbps: snapshot.sourceABR)]) {
             result.append(audio)
@@ -955,7 +982,8 @@ struct Download: Identifiable {
             // audio track is stream-copied too, so it reuses the detected
             // source audio info.
             result.append(.video([videoFormat.rawValue.uppercased(), snapshot.sourceVideoCodec,
-                                  effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: snapshot.sourceMaxHeight)]) ?? .videoPlaceholder)
+                                  outputResolutionLabel(videoQuality, width: snapshot.sourceWidthPx, height: snapshot.sourceHeightPx, tierHeight: snapshot.sourceMaxHeight)
+                                    ?? effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: snapshot.sourceMaxHeight)]) ?? .videoPlaceholder)
             result.append(.audio([snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, bitrateLabel(kbps: snapshot.sourceABR)]) ?? .audioPlaceholder)
         }
         return result
@@ -6463,6 +6491,10 @@ struct ContentView: View {
     var previewCard: some View {
         ForEach($linkPreviews) { $preview in
             linkPreviewCard(preview: $preview)
+                // While the window edge is dragged each card is replaced by a cheap
+                // facade (see FreezeLayout) -- laying out the real cards on every frame
+                // of a drag is what made resizing choppy.
+                .frozenDuringResize()
                 // Insert/remove only -- same-identity property updates
                 // (analyze completing, instant-preview title/thumbnail
                 // landing) never hit this transition since the id is
@@ -6626,7 +6658,10 @@ struct ContentView: View {
                 ZStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 9) {
                         if p.hasVideo && p.mediaMode != .audioOnly {
-                            FormRow(icon: "video", label: "FORMAT", showsNativeLegend: true) {
+                            // Every video container here is a plain remux, so there is no
+                            // Native / Re-encodes marker to show (the audio row below still
+                            // has one: only M4A is native there).
+                            FormRow(icon: "video", label: "FORMAT") {
                                 SegmentedCapsule(options: downloadVideoFormatOptions(preview: preview))
                             }
                             FormRow(icon: "slider.horizontal.3", label: "QUALITY") {
@@ -6687,7 +6722,7 @@ struct ContentView: View {
         let p = preview.wrappedValue
         return VideoFormat.allCases.map { f in
             SegmentOption(
-                id: f.rawValue, label: f.label, nativeBadge: f.isNative, help: f.note,
+                id: f.rawValue, label: f.label, help: f.note,
                 isSelected: p.videoFormat == f, tint: DesignTokens.Accent.primary
             ) {
                 preview.videoFormat.wrappedValue = f
@@ -7019,7 +7054,9 @@ struct ContentView: View {
         let duration: String
         var durationSeconds: Int = 0      // for size estimation
         var fileSizeBytes: Int? = nil     // filesize_approx from yt-dlp (best available format)
-        var sourceMaxHeight: Int = 0      // actual max resolution of the source (0 = unknown)
+        var sourceMaxHeight: Int = 0      // tier height of the source (0 = unknown); widened for ultrawide, see analyze
+        var sourceWidthPx: Int = 0        // real pixel size of the best video format (0 = unknown)
+        var sourceHeightPx: Int = 0
         var sourceASR: Int = 0              // audio sample rate in Hz (0 = unknown)
         var sourceABR: Int = 0              // audio bitrate in kbps (0 = unknown)
         var sourceVideoCodec: String? = nil  // e.g. "AV1", "H264" (nil = unknown/audio-only)
@@ -7081,7 +7118,7 @@ struct ContentView: View {
             // (the source's actual capability), NOT mediaMode (the user's
             // current output choice).
             if hasVideo {
-                result.append(.video([sourceVideoCodec, sourceResolutionLabel(sourceMaxHeight)]) ?? .videoPlaceholder)
+                result.append(.video([sourceVideoCodec, fullResolutionLabel(width: sourceWidthPx, height: sourceHeightPx, tierHeight: sourceMaxHeight)]) ?? .videoPlaceholder)
             }
             // Green: source audio info (codec + channels + bitrate)
             if let audio = ChipData.audio([sourceAudioCodec, sourceChannelLabel, bitrateLabel(kbps: sourceABR)]) {
@@ -7114,7 +7151,8 @@ struct ContentView: View {
                 // Video and audio are both stream-copied when merging, so the
                 // output codec/channels/bitrate match the source's own.
                 result.append(.video([videoFormat.rawValue.uppercased(), sourceVideoCodec,
-                                      effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: sourceMaxHeight)]) ?? .videoPlaceholder)
+                                      outputResolutionLabel(videoQuality, width: sourceWidthPx, height: sourceHeightPx, tierHeight: sourceMaxHeight)
+                                        ?? effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: sourceMaxHeight)]) ?? .videoPlaceholder)
                 result.append(.audio([sourceAudioCodec, sourceChannelLabel, bitrateLabel(kbps: sourceABR)]) ?? .audioPlaceholder)
             }
             return result
@@ -7580,6 +7618,8 @@ struct ContentView: View {
                         mediaMode: hasVideo ? .videoAndAudio : .audioOnly
                     )
                     lp.sourceMaxHeight = sourceH
+                    lp.sourceWidthPx = sourceW
+                    lp.sourceHeightPx = rawHeight
                     lp.sourceASR = sourceASR
                     lp.sourceABR = sourceABR
                     lp.sourceVideoCodec = hasVideo ? normVideoCodec : nil
@@ -7869,6 +7909,8 @@ struct ContentView: View {
                     durationSeconds:  preview.durationSeconds,
                     fileSizeBytes:    preview.fileSizeBytes,
                     sourceMaxHeight:  preview.sourceMaxHeight,
+                    sourceWidthPx:    preview.sourceWidthPx,
+                    sourceHeightPx:   preview.sourceHeightPx,
                     sourceASR:        preview.sourceASR,
                     sourceABR:        preview.sourceABR,
                     sourceVideoCodec: preview.sourceVideoCodec,
@@ -7917,6 +7959,8 @@ struct ContentView: View {
             mediaMode: dl.mediaMode
         )
         lp.sourceMaxHeight   = snap.sourceMaxHeight
+        lp.sourceWidthPx     = snap.sourceWidthPx
+        lp.sourceHeightPx    = snap.sourceHeightPx
         lp.sourceASR         = snap.sourceASR
         lp.sourceABR         = snap.sourceABR
         lp.sourceVideoCodec  = snap.sourceVideoCodec
@@ -8131,15 +8175,19 @@ struct FlowLayout: Layout {
 /// shown on format/codec chips. `positiveLabel` reads "Native" for Download's format rows
 /// (true remux-native containers) and "Original" for Convert's codec rows (matches source).
 func nativeLegend(positiveLabel: String = "Native", showReencodeHint: Bool = true) -> some View {
-    HStack(spacing: 10) {
+    // Stacked, one entry per line: it lives in FormRow's narrow label column,
+    // where the two side by side used to wrap "Re-encodes" mid-word.
+    VStack(alignment: .leading, spacing: 2) {
         HStack(spacing: 4) {
             Circle().fill(DesignTokens.Accent.success).frame(width: 5, height: 5)
             Text(positiveLabel).font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                .lineLimit(1).fixedSize()
         }
         if showReencodeHint {
             HStack(spacing: 4) {
                 Circle().fill(DesignTokens.Accent.warning).frame(width: 5, height: 5)
                 Text("Re-encodes").font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                    .lineLimit(1).fixedSize()
             }
         }
     }

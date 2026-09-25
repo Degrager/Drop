@@ -2401,7 +2401,7 @@ struct ConvertPreviewCard: View {
         AnyView(
             VStack(alignment: .leading, spacing: 3) {
                 // What the file will become -- no input side, no OUT tag.
-                MetaLine(chips: job.outputChips)
+                MetaLine(chips: job.outputChips, inCapsule: true)
                 if job.visibleStatus == .failed {
                     Text(job.progress)
                         .font(.appMono(size: 10))

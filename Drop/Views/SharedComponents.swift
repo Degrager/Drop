@@ -460,6 +460,54 @@ private struct LogRow: View {
 /// width previously spread a saturated tint across enough area to read
 /// as a solid color block. A lighter override keeps the same glass
 /// language legible at this larger scale.
+/// A label that types itself out, one character at a time, when it appears --
+/// instead of fading or blurring in. The full text's width is reserved from the
+/// first frame, so nothing beside it moves while it types. It only types once the
+/// app has been up a couple of seconds (`settled`), so labels already there at
+/// launch just appear; once done it shows the current text, so a later text
+/// change (the update button's "Checking…") is just a swap. The whole label
+/// takes about `duration` however long it is.
+struct TypedText: View {
+    private static let firstUse = Date()
+    /// False during launch, true after: only a reveal after that types.
+    static var settled: Bool { Date().timeIntervalSince(firstUse) > 2 }
+
+    let text: String
+    var animates: Bool = true
+    var delay: Double = 0.05
+    var duration: Double = 0.22
+    @State private var shown: Int
+
+    init(_ text: String, animates: Bool = TypedText.settled, delay: Double = 0.05, duration: Double = 0.22) {
+        self.text = text
+        self.animates = animates
+        self.delay = delay
+        self.duration = duration
+        _shown = State(initialValue: animates ? 0 : .max)
+    }
+
+    var body: some View {
+        Text(text)
+            .hidden()
+            .overlay(alignment: .leading) {
+                Text(shown >= text.count ? text : String(text.prefix(shown)))
+                    .lineLimit(1)
+            }
+            .task {
+                guard animates, shown == 0 else { return }
+                let count = text.count
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                let step = min(0.04, duration / Double(max(count, 1)))
+                for i in 1...max(count, 1) {
+                    if Task.isCancelled { return }
+                    shown = i
+                    if i < count { try? await Task.sleep(nanoseconds: UInt64(step * 1_000_000_000)) }
+                }
+                shown = .max
+            }
+    }
+}
+
 struct SidebarTabItem: View {
     let label: String
     let icon: String
@@ -504,10 +552,10 @@ struct SidebarTabItem: View {
                     .font(.appMono(size: 14))
                     .frame(width: Self.iconSlot)
                 if !compact {
-                    Text(label)
+                    TypedText(label)
                         .font(.appMono(size: 13, weight: isSelected ? .semibold : .medium))
                         .lineLimit(1)
-                        .transition(.blurInLeading)
+                        .transition(.opacity)
                     // Pushes the count to the pill's trailing edge; the label
                     // and icon stay leading-aligned.
                     Spacer(minLength: 0)

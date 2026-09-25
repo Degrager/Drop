@@ -1347,10 +1347,22 @@ struct ConvertView: View {
                 headerAccessory: stagingJobs.count > 1 ? AnyView(fileSwitcher) : nil,
                 footer: AnyView(addToQueueButtons(for: job))
             )
-            ViewThatFits(in: .vertical) {
-                settingsCard
-                ScrollView(.vertical, showsIndicators: true) { settingsCard }
-                    .frame(minHeight: compactHeight ? 110 : 130)
+            // In a normal window the card simply hugs its content. The scroll
+            // fallback is only for a short window (the window's own minimum
+            // height is 800, so that's a small screen), and it is kept out of
+            // the normal case on purpose: a ViewThatFits builds BOTH children,
+            // so every import mounted the whole card twice (measured: about
+            // 90ms of the ~200ms hitch when the card appears).
+            Group {
+                if compactHeight {
+                    ViewThatFits(in: .vertical) {
+                        settingsCard
+                        ScrollView(.vertical, showsIndicators: true) { settingsCard }
+                            .frame(minHeight: 110)
+                    }
+                } else {
+                    settingsCard
+                }
             }
             .background {
                 if isFileSwitcherOpen {

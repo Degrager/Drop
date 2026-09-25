@@ -5400,6 +5400,25 @@ struct ContentView: View {
             // -- get the same animated sequence. sidebarSequencePlaying
             // exempts it from the live-resize rule below that switches
             // animations off.
+            // A drag of the window edge that crosses the breakpoint has no time for
+            // a 0.3s animation: every frame of it also re-lays-out the page for the
+            // new window size, and the two together stalled about 25 frames per
+            // crossing (identical with or without cards, so it is the sidebar's
+            // animation under a live drag, not the page). The window is changing
+            // size anyway, so the sidebar just snaps to its new state, like the
+            // rest of the layout does during a drag.
+            if NSApp.keyWindow?.inLiveResize == true {
+                var snap = Transaction()
+                snap.disablesAnimations = true
+                withTransaction(snap) {
+                    sidebarWidth = target
+                    sidebarDisplayCompact = compact
+                    sidebarRowsHidden = false
+                    pageInset = target
+                    if mainAreaWidth > 0 { columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth - (target - WindowLayout.compactSidebarWidth)) }
+                }
+                return
+            }
             sidebarSequencePlaying = true
             // The page's CONTENT (its cards) takes its new size in ONE step,
             // never live: opening, at the start; collapsing, once the sidebar has

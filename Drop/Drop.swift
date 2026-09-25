@@ -4164,13 +4164,13 @@ struct SidebarBrandLabel: View {
 }
 
 /// One tool in the sidebar's update block: its name over its version, in the
-/// same two-line cell whether the rail is collapsed or open: same fonts, same
-/// two lines, same height, so nothing in it scales or moves up or down. The card
-/// around it just changes width, and the text slides sideways with it (to line
-/// up with the button's icon when open, tucked in when collapsed). A tool that
-/// needs an update shows its version in orange; there is no per-row status
-/// glyph, because one badge on the Check for Updates button says whether
-/// everything is current.
+/// same two-line cell whether the rail is collapsed or open -- same fonts, same
+/// lines, same height, so nothing in it scales or moves up or down. Opening the
+/// sidebar only widens the card around it, slides the text sideways to line up
+/// with the button's icon, and reveals a status chip on the right ("Up to date",
+/// or an orange "Update"), typed out like the tab labels. A tool that needs an
+/// update also shows its version in orange. The chip is the per-tool detail; the
+/// one badge on the Check for Updates button says whether everything is current.
 struct SidebarToolRow: View {
     let name: String
     let updateAvailable: Bool
@@ -4187,20 +4187,39 @@ struct SidebarToolRow: View {
         return simple
     }
 
+    private var statusText: String { updateAvailable ? "Update" : "Up to date" }
+    private var statusColor: Color { updateAvailable ? .orange : .white }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(name)
-                .font(.appMono(size: 9, weight: .medium))
-                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-            Text(shownVersion)
-                .font(.appMono(size: 8))
-                .foregroundColor(updateAvailable ? .orange : .white.opacity(DesignTokens.Text.tertiary))
+        HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(.appMono(size: 9.5, weight: .medium))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                Text(shownVersion)
+                    .font(.appMono(size: 8))
+                    .foregroundColor(updateAvailable ? .orange : .white.opacity(DesignTokens.Text.tertiary))
+            }
+            .lineLimit(1)
+            .fixedSize()
+            if !compact {
+                Spacer(minLength: 0)
+                TypedText(statusText)
+                    .font(.appMono(size: 9, weight: .medium))
+                    .foregroundColor(updateAvailable ? .orange : .white.opacity(DesignTokens.Text.secondary))
+                    .lineLimit(1)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(statusColor.opacity(updateAvailable ? 0.1 : 0.06))
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(statusColor.opacity(updateAvailable ? 0.45 : 0.14), lineWidth: 0.5))
+                    .transition(.opacity)
+            }
         }
-        .lineLimit(1)
-        .fixedSize()
-        // Open: the same left edge as the button's icon below. Collapsed: as far
-        // left as the 40pt rail allows.
+        // Open: the same left edge as the button's icon below, and the chip 14pt
+        // from the trailing edge like the button's badge. Collapsed: as far left
+        // as the 40pt rail allows.
         .padding(.leading, compact ? 2 : WindowLayout.railIconInset - WindowLayout.updateCardInset)
+        .padding(.trailing, compact ? 0 : 14)
         .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
         .clipped()
         .help(version.isEmpty ? name : "\(name) \(version)\(updateAvailable ? " — update available" : "")")

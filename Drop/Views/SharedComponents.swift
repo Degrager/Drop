@@ -345,6 +345,26 @@ struct CardFacade: View {
     }
 }
 
+/// Keeps the facade's left edge on the sidebar's edge while the sidebar collapses or
+/// expands during a drag. The real cards are laid out for where the sidebar is HEADING
+/// (`pinned`, which jumps in one step), so a facade that simply filled the column would
+/// snap by the sidebar's width the moment it starts to move. `live` is the sidebar's
+/// animated inset, interpolated by SwiftUI (the same trick LiveOutline uses for the
+/// real cards' outlines), so `live - pinned` is how far the facade must start inside
+/// (collapse) or outside (expand) the column, easing to 0 as the sidebar lands.
+private struct FacadeFollowsSidebar: ViewModifier, Animatable {
+    var live: CGFloat
+    var pinned: CGFloat
+    var animatableData: CGFloat {
+        get { live }
+        set { live = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.padding(.leading, live - pinned)
+    }
+}
+
 /// Swaps a card for its facade while the window edge is dragged, and fades the facade
 /// back out on release (the real card is already laid out underneath by then). The real
 /// card is hidden at opacity 0 with animation OFF -- never a partial opacity on glass,
@@ -352,6 +372,8 @@ struct CardFacade: View {
 struct FrozenDuringResize: ViewModifier {
     @ObservedObject private var live = LiveResizeState.shared
     @State private var memory = SizeMemory()
+    @Environment(\.sidebarLiveInset) private var sidebarLive
+    @Environment(\.cardContentInset) private var sidebarPinned
 
     func body(content: Content) -> some View {
         FreezeLayout(frozen: live.isActive, memory: memory) {
@@ -360,6 +382,7 @@ struct FrozenDuringResize: ViewModifier {
                 .animation(nil, value: live.isActive)
                 .allowsHitTesting(!live.isActive)
             CardFacade()
+                .modifier(FacadeFollowsSidebar(live: sidebarLive, pinned: sidebarPinned))
                 .opacity(live.isActive ? 1 : 0)
         }
         // The drag start stays a cut (the window is already moving under the pointer);

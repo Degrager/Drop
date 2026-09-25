@@ -474,11 +474,11 @@ struct TypedText: View {
 
     let text: String
     var animates: Bool = true
-    var delay: Double = 0.05
+    var delay: Double = 0.02
     var duration: Double = 0.22
     @State private var shown: Int
 
-    init(_ text: String, animates: Bool = TypedText.settled, delay: Double = 0.05, duration: Double = 0.22) {
+    init(_ text: String, animates: Bool = TypedText.settled, delay: Double = 0.02, duration: Double = 0.22) {
         self.text = text
         self.animates = animates
         self.delay = delay
@@ -705,7 +705,7 @@ struct MetaCell: View {
 /// "IN" and "OUT" lines for a card header: what you have, then what you'll
 /// get, in fixed columns (time and size, video, audio) so the eye can read
 /// straight down from source to result. Falls back to wrapping lines when the
-/// column is too narrow for the grid.
+/// column is too narrow for the grid. Both lines sit inside ONE rounded capsule.
 struct MetaLines: View {
     let input: [ChipData]
     let output: [ChipData]
@@ -764,6 +764,8 @@ struct MetaLines: View {
         if input.isEmpty && output.isEmpty {
             EmptyView()
         } else {
+            // The padding is inside the fit test, so the grid is only picked when
+            // it fits with its capsule around it; the capsule hugs its content.
             ViewThatFits(in: .horizontal) {
                 grid(withTime: true)
                 grid(withTime: false)
@@ -772,6 +774,10 @@ struct MetaLines: View {
                     if !output.isEmpty { wrapped(output, "OUT", out: true) }
                 }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

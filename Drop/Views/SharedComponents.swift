@@ -32,10 +32,6 @@ enum WindowLayout {
     /// the text beside it is what appears and disappears.
     static let railIconSlot: CGFloat = 18
     static let railIconInset: CGFloat = (compactSidebarWidth - 2 * railContentInset - railIconSlot) / 2
-    /// Padding inside the sidebar's grey update card. The rows and the button
-    /// inside it take this off their rail inset, so their icons still line up
-    /// with the tab icons above.
-    static let updateCardInset: CGFloat = 4
     /// 0 = fully collapsed, 1 = fully expanded, for an in-flight sidebar width.
     static func sidebarExpansion(_ width: CGFloat) -> CGFloat {
         min(max((width - compactSidebarWidth) / (sidebarWidth - compactSidebarWidth), 0), 1)

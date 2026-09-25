@@ -4276,6 +4276,10 @@ struct SidebarToolRow: View {
                     .transition(.blurInLeading)
             }
         }
+        // One fixed content height, so the pill is exactly as tall collapsed (the
+        // bare icon) as open (typed name and version badge, which are taller than
+        // the icon) -- it never shrinks when the sidebar collapses.
+        .frame(height: 17)
         .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
         // The icon sits exactly where the tab icons do.
         .padding(.leading, WindowLayout.railIconInset)
@@ -4472,6 +4476,10 @@ struct CheckForUpdatesButton: View {
                     }
                 }
             }
+            // Same fixed content height as the tool pills above and the tab
+            // buttons: the badge is taller than the icon, and the button must not
+            // shrink when it goes away.
+            .frame(height: 17)
             .padding(.leading, WindowLayout.railIconInset)
             .padding(.trailing, 14)
             .padding(.vertical, 8)

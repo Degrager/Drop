@@ -4148,32 +4148,37 @@ struct ToolsStatusPill: View {
     }
 }
 
+/// The logo and "Drop" in the sidebar's header; the name types itself out when
+/// the sidebar opens (see TypedText).
+struct SidebarBrandLabel: View {
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.appMono(size: 14, weight: .semibold))
+                .foregroundColor(DesignTokens.Accent.primary)
+            TypedText("Drop")
+                .font(.appMono(size: 14, weight: .semibold))
+                .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+        }
+    }
+}
+
 /// One row of the sidebar's update block -- the SAME views whether the rail is
-/// collapsed or open. Open, it reads across: status glyph on the rail (where the
-/// tab icons sit), the tool's name, its version chip at the trailing edge.
-/// Collapsed, the very same name and version re-lay-out as a short stack
-/// (name over a short version) with the status shrunk to a dot in the corner --
-/// so a collapsed rail still says which tool is which, what version it is on and
-/// whether it needs an update, and widening the sidebar moves those views
-/// instead of swapping in a different set.
+/// collapsed or open. Open, it reads across: the tool's name, its version chip at
+/// the trailing edge. Collapsed, the very same name and version re-lay-out as a
+/// short stack (name over a short version) -- so a collapsed rail still says which
+/// tool is which and what version it is on, and widening the sidebar just moves
+/// those two views instead of swapping in a different set. There is no per-row
+/// status glyph: one badge on the Check for Updates button says whether
+/// everything is current, and a tool that needs an update shows its version in
+/// orange.
 struct SidebarToolRow: View {
     let name: String
-    let installed: Bool
     let updateAvailable: Bool
     /// Raw version string.
     let version: String
     @Environment(\.isCompactSidebar) private var compact
 
-    private var iconName: String {
-        if !installed { return "exclamationmark.circle.fill" }
-        if updateAvailable { return "exclamationmark.triangle.fill" }
-        return "checkmark.circle.fill"
-    }
-    private var iconColor: Color {
-        if !installed { return .orange.opacity(0.85) }
-        if updateAvailable { return .yellow.opacity(0.9) }
-        return .green.opacity(0.85)
-    }
     private var accent: Color { updateAvailable ? .orange : .white }
 
     /// "2026.09.16" in the open row; "26.09.16" (year shortened) when collapsed --
@@ -4210,28 +4215,13 @@ struct SidebarToolRow: View {
                     Capsule().stroke(accent.opacity(compact ? 0 : (updateAvailable ? 0.45 : 0.14)), lineWidth: 0.5)
                 )
         }
-        // Open: room on the left for the status glyph, which sits on the rail
-        // exactly where the tab icons do. Collapsed: the stack is centered.
-        .padding(.leading, compact ? 0 : WindowLayout.railIconInset - WindowLayout.updateCardInset + WindowLayout.railIconSlot + 8)
-        .padding(.trailing, compact ? 0 : 6)
+        // Open: the name starts at the row's leading edge and the chip sits at
+        // the trailing one. Collapsed: the stack is centered.
+        .padding(.horizontal, compact ? 0 : 10)
         .padding(.vertical, compact ? 5 : 8)
         // Holding both states to the same minimum height means the block
         // doesn't move up and down as the sidebar opens and closes.
         .frame(maxWidth: .infinity, minHeight: 38, alignment: compact ? .center : .leading)
-        .overlay(alignment: compact ? .topTrailing : .leading) {
-            // The glyph changes place and size between the two layouts. Keyed on
-            // `compact` so it CROSSFADES between them instead of sliding across
-            // the name and version while those re-arrange.
-            Image(systemName: iconName)
-                .font(.appMono(size: compact ? 6 : 12))
-                .foregroundColor(iconColor)
-                .frame(width: compact ? nil : WindowLayout.railIconSlot)
-                .padding(.leading, compact ? 0 : WindowLayout.railIconInset - WindowLayout.updateCardInset)
-                .padding(.top, compact ? 5 : 0)
-                .padding(.trailing, compact ? 1 : 0)
-                .id(compact)
-                .transition(.opacity)
-        }
         .clipped()
         .help(version.isEmpty ? name : "\(name) \(version)\(updateAvailable ? " — update available" : "")")
         .accessibilityElement(children: .combine)
@@ -4289,13 +4279,13 @@ struct ToolsDropdownContent: View {
             // sidebar width, so the whole block is a single object that
             // widens and narrows in place.
             VStack(alignment: .leading, spacing: 2) {
-                toolRow("yt-dlp", installed: manager.toolsReady, updateAvailable: manager.updateAvailable,
+                toolRow("yt-dlp", updateAvailable: manager.updateAvailable,
                         version: manager.ytdlpVersion)
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex)
-                toolRow("ffmpeg", installed: manager.toolsReady, updateAvailable: manager.ffmpegUpdateAvailable,
+                toolRow("ffmpeg", updateAvailable: manager.ffmpegUpdateAvailable,
                         version: manager.ffmpegVersion)
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex + 1)
-                toolRow("Drop", installed: true, updateAvailable: dropDriver.hasActionableUpdate,
+                toolRow("Drop", updateAvailable: dropDriver.hasActionableUpdate,
                         version: manager.currentAppVersion)
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex + 2)
                 checkForUpdatesButton
@@ -4310,11 +4300,10 @@ struct ToolsDropdownContent: View {
         }
     }
 
-    private func toolRow(_ name: String, installed: Bool, updateAvailable: Bool, version: String) -> some View {
+    private func toolRow(_ name: String, updateAvailable: Bool, version: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             SidebarToolRow(
                 name: name,
-                installed: installed,
                 updateAvailable: updateAvailable,
                 version: version
             )
@@ -4327,6 +4316,9 @@ struct ToolsDropdownContent: View {
             isChecking: manager.checkingUpdates || dropDriver.isActivelyChecking,
             hasUpdate: manager.updateAvailable || manager.ffmpegUpdateAvailable || dropDriver.hasActionableUpdate,
             isUpToDate: manager.justCheckedUpToDate && dropDriver.justConfirmedUpToDate,
+            // Everything current: the tools are installed and none of the three
+            // (yt-dlp, ffmpeg, Drop) has an update waiting.
+            allUpToDate: manager.toolsReady && !manager.updateAvailable && !manager.ffmpegUpdateAvailable && !dropDriver.hasActionableUpdate,
             disabledUntilSetup: !manager.toolsReady,
             action: {
                 // The one place all three checks actually run now --
@@ -4341,8 +4333,11 @@ struct ToolsDropdownContent: View {
 
 /// Single button below the tool rows that triggers a version/update check
 /// for both bundled tools at once. One view at every sidebar width: a capsule
-/// that fills the row, its icon fixed on the rail (where the tab icons are) and
-/// its label revealed beside it as the sidebar widens.
+/// that fills the row, its icon fixed on the rail (where the tab icons are), its
+/// label typed out beside it as the sidebar widens, and ONE status badge at the
+/// trailing edge (a check when everything is up to date, an exclamation mark when
+/// something needs attention) -- placed and styled like the count badges on the
+/// tab buttons, and shrinking to a corner dot in the collapsed rail the same way.
 struct CheckForUpdatesButton: View {
     let isChecking: Bool
     let hasUpdate: Bool
@@ -4350,9 +4345,19 @@ struct CheckForUpdatesButton: View {
     // everything current -- cleared the instant a new check starts, so it
     // can never linger from a stale previous result.
     var isUpToDate: Bool = false
+    /// yt-dlp, ffmpeg and Drop are all installed and none has an update.
+    var allUpToDate: Bool = false
     var disabledUntilSetup: Bool = false
     let action: () -> Void
     @Environment(\.isCompactSidebar) private var compact
+
+    /// The badge: nothing while a check runs.
+    private var statusBadge: (icon: String, color: Color)? {
+        if isChecking { return nil }
+        if disabledUntilSetup || hasUpdate { return ("exclamationmark", .orange) }
+        if allUpToDate { return ("checkmark", DesignTokens.Accent.success) }
+        return nil
+    }
 
     private var accentColor: Color {
         if hasUpdate { return .orange }
@@ -4366,10 +4371,6 @@ struct CheckForUpdatesButton: View {
     private var labelText: String {
         isChecking ? "Checking…" : (disabledUntilSetup ? "Tools Missing" : (hasUpdate ? "Update Available" : (isUpToDate ? "Up to Date" : "Check for Updates")))
     }
-    private var iconName: String {
-        disabledUntilSetup ? "exclamationmark.triangle.fill" : (isUpToDate && !hasUpdate ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
-    }
-
     var body: some View {
         GlassInteractive(shape: .capsule, tint: tint, isActive: false, disabled: isDisabled,
                          scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress), action: action) {
@@ -4380,21 +4381,30 @@ struct CheckForUpdatesButton: View {
                         // and the shrunk spinner can't bleed past it.
                         ProgressView().frame(width: 10, height: 10).scaleEffect(0.55)
                     } else {
-                        Image(systemName: iconName).font(.appMono(size: 11))
+                        Image(systemName: "arrow.triangle.2.circlepath").font(.appMono(size: 11))
                     }
                 }
                 .frame(width: WindowLayout.railIconSlot)
                 if !compact {
-                    Text(labelText)
+                    TypedText(labelText)
                         .font(.appMono(size: 11, weight: .medium))
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
-                        .transition(.blurInLeading)
+                        .transition(.opacity)
                     Spacer(minLength: 0)
+                    if let badge = statusBadge {
+                        Image(systemName: badge.icon)
+                            .font(.appMono(size: 9, weight: .bold))
+                            .foregroundColor(badge.color)
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(badge.color.opacity(0.14))
+                            .clipShape(Capsule())
+                            .transition(.blurInLeading)
+                    }
                 }
             }
             .padding(.leading, WindowLayout.railIconInset - WindowLayout.updateCardInset)
-            .padding(.trailing, 12)
+            .padding(.trailing, 14)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .clipped()
@@ -4404,6 +4414,19 @@ struct CheckForUpdatesButton: View {
         // large constant traces a true capsule at any width.
         .overlay {
             if isChecking { RimBeam(cornerRadius: 999) }
+        }
+        // Collapsed, the badge is gone with the label -- a small dot in the
+        // corner says the same thing, exactly as on the tab buttons.
+        .overlay(alignment: .topTrailing) {
+            if compact, let badge = statusBadge {
+                Circle()
+                    .fill(badge.color)
+                    .frame(width: 8, height: 8)
+                    .overlay(Circle().stroke(Color.black, lineWidth: 2))
+                    .padding(.top, 4).padding(.trailing, 10)
+                    .transition(.blurIn)
+                    .allowsHitTesting(false)
+            }
         }
         .help(compact ? labelText : (disabledUntilSetup ? "Bundled yt-dlp/ffmpeg missing — reinstall Drop" : ""))
         .accessibilityLabel(labelText)
@@ -5515,14 +5538,7 @@ struct ContentView: View {
             .foregroundColor(DesignTokens.Accent.primary)
     }
 
-    private var sidebarLabel: some View {
-        HStack(spacing: 7) {
-            sidebarLogo
-            Text("Drop")
-                .font(.appMono(size: 14, weight: .semibold))
-                .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-        }
-    }
+    private var sidebarLabel: some View { SidebarBrandLabel() }
 
     var sidebar: some View {
         VStack(spacing: 0) {
@@ -5541,7 +5557,7 @@ struct ContentView: View {
                 if !sidebarRowsHidden, !sidebarDisplayCompact {
                     sidebarLabel
                         .padding(.leading, -8)
-                        .transition(sidebarAnimationStyle == .resize ? AnyTransition.blurInLeading : AnyTransition.dominoPop(index: 1))
+                        .transition(sidebarAnimationStyle == .resize ? AnyTransition.opacity : AnyTransition.dominoPop(index: 1))
                 }
                 Spacer(minLength: 0)
             }
@@ -5716,9 +5732,14 @@ struct ContentView: View {
                     }
                 }
             } else {
-                mainPanelToolbar
-                    .followsSidebar()
-                mainPanelCardsScroll
+                // Only the gap between the Select / Collapse / Clear row and the
+                // first card is tighter (6pt, not the VStack's 12); the space
+                // above the row is unchanged.
+                VStack(spacing: 6) {
+                    mainPanelToolbar
+                        .followsSidebar()
+                    mainPanelCardsScroll
+                }
                 mainPanelBottomBar
                     .followsSidebar()
             }
@@ -5743,7 +5764,6 @@ struct ContentView: View {
                         label: isBatchMode ? "Done" : "Select",
                         icon: isBatchMode ? "xmark.circle" : "checkmark.circle",
                         tint: DesignTokens.Accent.primary,
-                        verticalPadding: 2,
                         fitContent: true
                     ) {
                         withAnimation(.spring(response: 0.25)) {
@@ -5761,8 +5781,7 @@ struct ContentView: View {
                             label: allEligibleLinksSelected ? "Deselect All" : "Select All",
                             icon: allEligibleLinksSelected ? "circle" : "checkmark.circle",
                             tint: .white,
-                            verticalPadding: 2,
-                            fitContent: true
+                                fitContent: true
                         ) {
                             withAnimation(.spring(response: 0.25)) {
                                 toggleSelectAllLinks()
@@ -5779,8 +5798,7 @@ struct ContentView: View {
                             label: allLinksCollapsed ? "Expand All" : "Collapse All",
                             icon: allLinksCollapsed ? "chevron.down" : "chevron.up",
                             tint: .white,
-                            verticalPadding: 2,
-                            fitContent: true,
+                                fitContent: true,
                             disabled: !hasExpandableLinks
                         ) {
                             withAnimation(.easeOut(duration: 0.22)) {
@@ -5792,7 +5810,6 @@ struct ContentView: View {
                         label: isBatchMode ? "Clear Selected" : "Clear All",
                         icon: "trash",
                         tint: .red,
-                        verticalPadding: 2,
                         fitContent: true,
                         disabled: isBatchMode && !linkPreviews.contains { $0.isSelected }
                     ) {

@@ -1100,12 +1100,14 @@ struct ConvertView: View {
                 ScrollView(showsIndicators: true) {
                     VStack(spacing: 12) {
                         analyzePanel
+                            .pinnedToSidebar()
                             .zIndex(99)
-                        convertBottomBar
+                        convertBottomBar.pinnedToSidebar()
                     }
                 }
             } else {
                 analyzePanel
+                    .pinnedToSidebar()
                     .zIndex(99)
 
                 Spacer(minLength: 0)

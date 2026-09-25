@@ -144,6 +144,7 @@ struct HistoryView: View {
             searchHeader
                 .padding(.top, compactHeight ? 22 : 30)
                 .padding(.bottom, compactHeight ? 10 : 14)
+                .contentColumn()
                 .followsSidebar()
 
             if filtered.isEmpty {
@@ -151,6 +152,7 @@ struct HistoryView: View {
                     icon: "clock",
                     title: history.entries.isEmpty ? "No downloads yet" : "No results"
                 )
+                .pinnedToSidebar()
             } else {
                 ScrollView {
                     LazyVStack(spacing: 6, pinnedViews: [.sectionHeaders]) {
@@ -210,6 +212,10 @@ struct HistoryView: View {
                     }
                     .padding(.vertical, 16)
                 }
+                // The list is laid out once, for where the sidebar will be (the header
+                // above follows the sidebar's edge instead).
+                .contentColumn()
+                .pinnedToSidebar()
             }
         }
     }

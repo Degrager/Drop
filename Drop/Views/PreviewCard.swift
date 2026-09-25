@@ -167,7 +167,7 @@ struct PreviewCard<Settings: View>: View {
         // Once resolved: back to the normal large radius, no active rim.
         // Same view, same identity -- this just animates the chrome rather
         // than swapping to a different card.
-        .glassCard(cornerRadius: isAnalyzing ? DesignTokens.Radius.medium : DesignTokens.Radius.large, isActive: isAnalyzing)
+        .liveGlassCard(cornerRadius: isAnalyzing ? DesignTokens.Radius.medium : DesignTokens.Radius.large, isActive: isAnalyzing)
         .animation(.easeOut(duration: 0.15), value: isSelected)
         .animation(.easeOut(duration: 0.15), value: showCheckbox)
         .animation(.easeInOut(duration: 0.35), value: isAnalyzing)
@@ -553,7 +553,7 @@ struct CompletedCard<Status: View>: View {
                 .transition(.blurIn)
         } else {
             rowContent
-                .glassCard(cornerRadius: DesignTokens.Radius.large)
+                .liveGlassCard(cornerRadius: DesignTokens.Radius.large)
                 .animation(.easeOut(duration: 0.15), value: isSelected)
                 .animation(.easeOut(duration: 0.15), value: showCheckbox)
                 .transition(.glassPop)

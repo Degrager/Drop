@@ -3523,6 +3523,96 @@ struct WindowDither: View {
     }
 }
 
+/// The frosted fill of a card (blur, black tint, wash, grain), clipped to its
+/// rounded shape -- shared by GlassCard and LiveGlassCard.
+struct GlassFill: View {
+    var cornerRadius: CGFloat
+    var opacity: Double
+
+    var body: some View {
+        ZStack {
+            // .underWindowBackground reads dark/neutral by default,
+            // unlike .hudWindow which leans light -- the right base
+            // for a true black-frosted-glass look.
+            VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+            // Heavy black tint on top so the material reads as black
+            // smoked glass, not grey.
+            Color.black.opacity(DesignTokens.Glass.blackTint)
+            Color.white.opacity(opacity * DesignTokens.Glass.whiteWash)
+            // Fine grain across the frosted-glass fill -- breaks up
+            // 8-bit banding on the near-black surface and gives the
+            // card a textured, physical "frosted" quality instead of
+            // a flat tinted panel.
+            DitherNoise(opacity: 0.04)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
+/// A card whose OUTLINE (glass, rim, glow) can stick out to the left of its
+/// contents. While the sidebar moves, the outline follows the sidebar's edge frame
+/// by frame -- cheap, only a shape changes -- while the contents are laid out once,
+/// for where the sidebar will be, and never reflow mid-animation: opening, the
+/// contents shrink at once and the outline narrows to meet them; collapsing, the
+/// outline widens first and the contents take the new width at the end.
+struct LiveGlassCard: ViewModifier {
+    var cornerRadius: CGFloat = DesignTokens.Radius.large
+    var opacity: Double = 0.55
+    var isActive: Bool = false
+    @Environment(\.sidebarLiveInset) private var live
+    @Environment(\.cardContentInset) private var pinned
+
+    func body(content: Content) -> some View {
+        content
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .modifier(LiveOutline(live: live, pinned: pinned, cornerRadius: cornerRadius, opacity: opacity, isActive: isActive))
+    }
+}
+
+/// The animated half of LiveGlassCard: `live` is interpolated by SwiftUI, so the
+/// outline's overhang (`pinned - live`, never negative) shrinks or grows smoothly.
+private struct LiveOutline: ViewModifier, Animatable {
+    var live: CGFloat
+    var pinned: CGFloat
+    var cornerRadius: CGFloat
+    var opacity: Double
+    var isActive: Bool
+    var animatableData: CGFloat {
+        get { live }
+        set { live = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let overhang = max(pinned - live, 0)
+        content
+            .background(alignment: .topLeading) {
+                GeometryReader { geo in
+                    GlassFill(cornerRadius: cornerRadius, opacity: opacity)
+                        // Same specular rim as every card, drawn by Core Animation.
+                        .overlay(GlassRim(cornerRadius: cornerRadius).allowsHitTesting(false))
+                        .frame(width: geo.size.width + overhang, height: geo.size.height)
+                        .offset(x: -overhang)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if isActive {
+                    GeometryReader { geo in
+                        RimBeam(cornerRadius: cornerRadius)
+                            .frame(width: geo.size.width + overhang, height: geo.size.height)
+                            .offset(x: -overhang)
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+    }
+}
+
+extension View {
+    func liveGlassCard(cornerRadius: CGFloat = DesignTokens.Radius.large, opacity: Double = 0.55, isActive: Bool = false) -> some View {
+        modifier(LiveGlassCard(cornerRadius: cornerRadius, opacity: opacity, isActive: isActive))
+    }
+}
+
 struct GlassCard: ViewModifier {
     var cornerRadius: CGFloat = DesignTokens.Radius.large
     var opacity: Double = 0.55
@@ -3534,24 +3624,7 @@ struct GlassCard: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(
-                ZStack {
-                    // .underWindowBackground reads dark/neutral by default,
-                    // unlike .hudWindow which leans light -- the right base
-                    // for a true black-frosted-glass look.
-                    VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                    // Heavy black tint on top so the material reads as black
-                    // smoked glass, not grey.
-                    Color.black.opacity(DesignTokens.Glass.blackTint)
-                    Color.white.opacity(opacity * DesignTokens.Glass.whiteWash)
-                    // Fine grain across the frosted-glass fill -- breaks up
-                    // 8-bit banding on the near-black surface and gives the
-                    // card a textured, physical "frosted" quality instead of
-                    // a flat tinted panel.
-                    DitherNoise(opacity: 0.04)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            )
+            .background(GlassFill(cornerRadius: cornerRadius, opacity: opacity))
             .overlay(
                 // Static, quiet rim running the full perimeter: bright at the
                 // top-leading corner, dimmest at the bottom-trailing one -- a
@@ -4163,65 +4236,66 @@ struct SidebarBrandLabel: View {
     }
 }
 
-/// One tool in the sidebar's update block: its name over its version, in the
-/// same two-line cell whether the rail is collapsed or open -- same fonts, same
-/// lines, same height, so nothing in it scales or moves up or down. Opening the
-/// sidebar only widens the card around it, slides the text sideways to line up
-/// with the button's icon, and reveals a status chip on the right ("Up to date",
-/// or an orange "Update"), typed out like the tab labels. A tool that needs an
-/// update also shows its version in orange. The chip is the per-tool detail; the
-/// one badge on the Check for Updates button says whether everything is current.
+/// One tool in the sidebar's update block, built like a tab button: a pill with
+/// an icon that never moves (it sits where the tab icons do), the name typed out
+/// beside it when the sidebar opens, and the version as a badge at the trailing
+/// edge, styled like the tab counters. Collapsed, it is just the icon -- with a
+/// small orange dot in the corner when that tool has an update, exactly as the
+/// tab counters shrink to a dot -- and the version moves to the tooltip. There
+/// is no per-row check mark: one badge on the Check for Updates button says
+/// whether everything is current.
 struct SidebarToolRow: View {
     let name: String
+    let icon: String
     let updateAvailable: Bool
     /// Raw version string.
     let version: String
     @Environment(\.isCompactSidebar) private var compact
 
-    /// "26.09.16": the year is shortened so the line fits the collapsed rail
-    /// (about 40pt); versions like ffmpeg's "8.0" are already short.
-    private var shownVersion: String {
-        guard !version.isEmpty else { return "—" }
-        let simple = VersionChip.simplify(version)
-        if simple.count > 8, simple.hasPrefix("20") { return String(simple.dropFirst(2)) }
-        return simple
-    }
-
-    private var statusText: String { updateAvailable ? "Update" : "Up to date" }
-    private var statusColor: Color { updateAvailable ? .orange : .white }
+    private var shownVersion: String { version.isEmpty ? "—" : VersionChip.simplify(version) }
+    private var badgeColor: Color { updateAvailable ? .orange : .white }
 
     var body: some View {
         HStack(spacing: 6) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name)
-                    .font(.appMono(size: 9.5, weight: .medium))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                Text(shownVersion)
-                    .font(.appMono(size: 8))
-                    .foregroundColor(updateAvailable ? .orange : .white.opacity(DesignTokens.Text.tertiary))
-            }
-            .lineLimit(1)
-            .fixedSize()
+            Image(systemName: icon)
+                .font(.appMono(size: 11))
+                .frame(width: WindowLayout.railIconSlot)
             if !compact {
-                Spacer(minLength: 0)
-                TypedText(statusText)
-                    .font(.appMono(size: 9, weight: .medium))
-                    .foregroundColor(updateAvailable ? .orange : .white.opacity(DesignTokens.Text.secondary))
+                TypedText(name)
+                    .font(.appMono(size: 11, weight: .medium))
                     .lineLimit(1)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(statusColor.opacity(updateAvailable ? 0.1 : 0.06))
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(statusColor.opacity(updateAvailable ? 0.45 : 0.14), lineWidth: 0.5))
                     .transition(.opacity)
+                Spacer(minLength: 0)
+                Text(shownVersion)
+                    .font(.appMono(size: 9, weight: .semibold))
+                    .lineLimit(1)
+                    .foregroundColor(updateAvailable ? .orange : .white.opacity(DesignTokens.Text.secondary))
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(badgeColor.opacity(updateAvailable ? 0.14 : 0.08))
+                    .clipShape(Capsule())
+                    .transition(.blurInLeading)
             }
         }
-        // Open: the same left edge as the button's icon below, and the chip 14pt
-        // from the trailing edge like the button's badge. Collapsed: as far left
-        // as the 40pt rail allows.
-        .padding(.leading, compact ? 2 : WindowLayout.railIconInset - WindowLayout.updateCardInset)
-        .padding(.trailing, compact ? 0 : 14)
-        .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+        .padding(.leading, WindowLayout.railIconInset - WindowLayout.updateCardInset)
+        .padding(.trailing, 14)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
+        .background(Capsule().fill(Color.white.opacity(0.04)))
+        .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.75))
+        // Collapsed, the badge is gone with the label: a dot says a tool needs an update.
+        .overlay(alignment: .topTrailing) {
+            if compact, updateAvailable {
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: 8, height: 8)
+                    .overlay(Circle().stroke(Color.black, lineWidth: 2))
+                    .padding(.top, 2).padding(.trailing, 8)
+                    .transition(.blurIn)
+                    .allowsHitTesting(false)
+            }
+        }
         .help(version.isEmpty ? name : "\(name) \(version)\(updateAvailable ? " — update available" : "")")
         .accessibilityElement(children: .combine)
     }
@@ -4272,19 +4346,18 @@ struct ToolsDropdownContent: View {
             // read as broken. The button's single "Checking…" state covers
             // the whole operation; each chip updates in place when its own
             // piece finishes.
-            // Each row is paired with its own trailing divider so the divider
-            // shrinks with the row it belongs to, and is its own domino step.
+            // Each tool is a tab-style pill and its own domino step.
             // One grey inner card holds the rows and the button, at every
             // sidebar width, so the whole block is a single object that
             // widens and narrows in place.
-            VStack(alignment: .leading, spacing: 2) {
-                toolRow("yt-dlp", updateAvailable: manager.updateAvailable,
+            VStack(alignment: .leading, spacing: 4) {
+                toolRow("yt-dlp", icon: "arrow.down.to.line", updateAvailable: manager.updateAvailable,
                         version: manager.ytdlpVersion)
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex)
-                toolRow("ffmpeg", updateAvailable: manager.ffmpegUpdateAvailable,
+                toolRow("ffmpeg", icon: "film", updateAvailable: manager.ffmpegUpdateAvailable,
                         version: manager.ffmpegVersion)
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex + 1)
-                toolRow("Drop", updateAvailable: dropDriver.hasActionableUpdate,
+                toolRow("Drop", icon: "drop.fill", updateAvailable: dropDriver.hasActionableUpdate,
                         version: manager.currentAppVersion)
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex + 2)
                 checkForUpdatesButton
@@ -4299,15 +4372,13 @@ struct ToolsDropdownContent: View {
         }
     }
 
-    private func toolRow(_ name: String, updateAvailable: Bool, version: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            SidebarToolRow(
-                name: name,
-                updateAvailable: updateAvailable,
-                version: version
-            )
-            GlassDivider()
-        }
+    private func toolRow(_ name: String, icon: String, updateAvailable: Bool, version: String) -> some View {
+        SidebarToolRow(
+            name: name,
+            icon: icon,
+            updateAvailable: updateAvailable,
+            version: version
+        )
     }
 
     private var checkForUpdatesButton: some View {
@@ -4962,8 +5033,6 @@ struct ContentView: View {
     /// once; collapsing, it waits until the sidebar has finished shrinking.
     @State private var pageInset: CGFloat =
         UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
-    /// How far the page's bars are still to slide (see FollowsSidebar).
-    @State private var sidebarChromeOffset: CGFloat = 0
     /// True for the whole toggle sequence (width tween AND the reveal after
     /// it). While it is, the live-resize rule that switches animations off
     /// stands aside, so the sidebar can animate during a window drag.
@@ -5165,11 +5234,9 @@ struct ContentView: View {
                             }
                             activeTab = .convert
                         })
-                        // History is one continuous panel rather than a stack of
-                        // floating cards, so the equivalent of "cap the cards at
-                        // the content column" here is capping the whole panel -- the
-                        // same shared column width and centering as every other tab.
-                        .contentColumn()
+                        // History caps its own header and list at the shared content
+                        // column (see HistoryView), each following or pinned to the
+                        // sidebar as it should.
                         .transition(.identity)
                     } else if activeTab == .convert {
                         ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
@@ -5185,7 +5252,6 @@ struct ContentView: View {
                         // against-the-window-glass structure and 60%-width
                         // convention as History, not a card floating on a page.
                         LogView(logs: manager.globalLogs)
-                            .contentColumn()
                             .transition(.identity)
                     }
                 }
@@ -5223,6 +5289,7 @@ struct ContentView: View {
                     ActiveOnlyLayout(isActive: activeTab == .devRelease) {
                         DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
                             .contentColumn()
+                            .pinnedToSidebar()
                             .transaction(value: activeTab) { $0.animation = nil }
                     }
                         .opacity(activeTab == .devRelease ? 1 : 0)
@@ -5243,11 +5310,13 @@ struct ContentView: View {
                     Color.clear
                         .onAppear {
                             mainAreaWidth = geo.size.width
-                            columnClass = WindowLayout.columnClass(mainWidth: geo.size.width)
+                            columnClass = WindowLayout.columnClass(mainWidth: geo.size.width - (pageInset - WindowLayout.compactSidebarWidth))
                         }
                         .onChange(of: geo.size.width) { _, newWidth in
                             mainAreaWidth = newWidth
-                            let cls = WindowLayout.columnClass(mainWidth: newWidth)
+                            // The page's real width: this frame minus the room
+                            // the (pinned) sidebar takes.
+                            let cls = WindowLayout.columnClass(mainWidth: newWidth - (pageInset - WindowLayout.compactSidebarWidth))
                             if cls != columnClass {
                                 if sidebarSequencePlaying {
                                     // The page jumps to its final width when a
@@ -5264,10 +5333,12 @@ struct ContentView: View {
                         }
                 }
             )
-            // The sidebar card's footprint: its width plus the 12pt leading and
-            // 8pt trailing margins `sidebar` adds around it.
-            .padding(.leading, pageInset + 20)
-            .animation(nil, value: pageInset)
+            // The page's frame is as wide as the window allows with the sidebar
+            // COLLAPSED (its footprint is the rail's width plus the 12pt leading
+            // and 8pt trailing margins `sidebar` adds around it); every piece
+            // then insets itself for the sidebar -- following its edge live
+            // (`followsSidebar()`) or pinned (`pinnedToSidebar()`).
+            .padding(.leading, WindowLayout.compactSidebarWidth + 20)
             // Fills the window, and centered as it was when a row beside the
             // sidebar: the overlay below takes its size from this.
             .frame(maxHeight: .infinity)
@@ -5295,7 +5366,8 @@ struct ContentView: View {
         )
         .environment(\.contentColumnWidth, columnClass)
         .environment(\.isCompactSidebar, sidebarDisplayCompact)
-        .environment(\.sidebarChromeOffset, sidebarChromeOffset)
+        .environment(\.sidebarLiveInset, sidebarWidth - WindowLayout.compactSidebarWidth)
+        .environment(\.cardContentInset, pageInset - WindowLayout.compactSidebarWidth)
         .onChange(of: isCompactSidebar) { _, compact in
             // Toggle sequence, per request: every row blurs/shrinks out AT
             // ONCE while the card visibly shrinks/grows; once the width lands
@@ -5312,50 +5384,34 @@ struct ContentView: View {
             // exempts it from the live-resize rule below that switches
             // animations off.
             sidebarSequencePlaying = true
-            // The page (its cards) takes its new size in ONE step, never live:
-            // opening, at the start; collapsing, once the sidebar has finished
-            // shrinking. Its bars (paste bar, toolbar, bottom bar) follow the
-            // sidebar's edge in between through `sidebarChromeOffset`. The page's
-            // breakpoint class is worked out at the same moment from the width
-            // the page is about to have (its old width plus the footprint
-            // difference), so the heavy re-layout is a single update instead of
-            // a second one after the geometry catches up.
-            var jump = Transaction()
-            jump.disablesAnimations = true
-            let footprintChange = pageInset - target
+            // The page's CONTENT (its cards) takes its new size in ONE step,
+            // never live: opening, at the start; collapsing, once the sidebar has
+            // finished shrinking. Everything else follows the sidebar's edge
+            // frame by frame on its own (see `followsSidebar()` and
+            // LiveGlassCard, which read `sidebarWidth`). The page's breakpoint
+            // class is worked out at the same moment as the content's new size,
+            // from the width the content is about to have, so the heavy
+            // re-layout is a single update.
             let chromeDuration = sidebarAnimationStyle == .resize ? Self.sidebarResizeDuration : Self.sidebarWidthDuration
+            let newContentWidth = { mainAreaWidth - (target - WindowLayout.compactSidebarWidth) }
             if compact {
-                // Collapsing: the page keeps its old size until the sidebar has
-                // finished shrinking; its bars just follow the sidebar's edge
-                // meanwhile (offset from 0 to the whole change, animated below,
-                // in the same update as the sidebar's own width). Then, once the
-                // animation is over, the page takes its new size in one step.
-                withAnimation(.easeInOut(duration: chromeDuration)) { sidebarChromeOffset = -footprintChange }
+                // Collapsing: the content keeps its old size until the animation is over.
                 DispatchQueue.main.asyncAfter(deadline: .now() + chromeDuration) {
                     guard sidebarToggleGeneration == generation else { return }
                     var commit = Transaction()
                     commit.disablesAnimations = true
                     withTransaction(commit) {
                         pageInset = target
-                        sidebarChromeOffset = 0
-                        if mainAreaWidth > 0 {
-                            columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth + footprintChange)
-                        }
+                        if mainAreaWidth > 0 { columnClass = WindowLayout.columnClass(mainWidth: newContentWidth()) }
                     }
                 }
             } else {
-                // Opening: the page moves to its new size at once and its bars
-                // start where they were.
+                // Opening: the content takes its new size at once.
+                var jump = Transaction()
+                jump.disablesAnimations = true
                 withTransaction(jump) {
                     pageInset = target
-                    sidebarChromeOffset = footprintChange
-                    if mainAreaWidth > 0 {
-                        columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth + footprintChange)
-                    }
-                }
-                DispatchQueue.main.async {
-                    guard sidebarToggleGeneration == generation else { return }
-                    withAnimation(.easeInOut(duration: chromeDuration)) { sidebarChromeOffset = 0 }
+                    if mainAreaWidth > 0 { columnClass = WindowLayout.columnClass(mainWidth: newContentWidth()) }
                 }
             }
             if sidebarAnimationStyle == .resize {
@@ -5739,7 +5795,7 @@ struct ContentView: View {
                 ScrollViewReader { proxy in
                     ScrollView(showsIndicators: true) {
                         VStack(spacing: 12) {
-                            mainPanelToolbar
+                            mainPanelToolbar.pinnedToSidebar()
                             mainPanelCardsContent
                             if linkPreviews.isEmpty {
                                 EmptyStateView(
@@ -5748,8 +5804,9 @@ struct ContentView: View {
                                     subtitle: "Supports YouTube, SoundCloud, Vimeo and more"
                                 )
                                 .padding(.vertical, 16)
+                                .pinnedToSidebar()
                             }
-                            mainPanelBottomBar
+                            mainPanelBottomBar.pinnedToSidebar()
                         }
                     }
                     .onChange(of: linkPreviews.count) {
@@ -5939,6 +5996,9 @@ struct ContentView: View {
                     // NEAREST container -- and this VStack sits inside a
                     // ScrollView, which has its own.
                     .contentColumn()
+                    // Laid out once for where the sidebar will be; each card's
+                    // outline follows the sidebar's edge live (LiveGlassCard).
+                    .pinnedToSidebar()
                     .padding(.top, 10)
                     .padding(.bottom, 6)
     }
@@ -5982,6 +6042,7 @@ struct ContentView: View {
                             title: "Paste a link to get started",
                             subtitle: "Supports YouTube, SoundCloud, Vimeo and more"
                         )
+                        .pinnedToSidebar()
                         .transition(.blurIn)
                     }
                 }

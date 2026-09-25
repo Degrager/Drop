@@ -1364,6 +1364,9 @@ struct ConvertView: View {
                     settingsCard
                 }
             }
+            // Same facade as Download's cards: a placeholder while the window edge is
+            // dragged, a fade back to the real card on release (see FreezeLayout).
+            .frozenDuringResize()
             .background {
                 if isFileSwitcherOpen {
                     GeometryReader { geo in

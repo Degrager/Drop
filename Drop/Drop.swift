@@ -2993,6 +2993,16 @@ extension AnyTransition {
             .animation(.easeIn(duration: 0.1))
     )
 
+    /// A sidebar label (tab names, tool names, "Drop"): fades in on the ambient
+    /// animation, and leaves with a quick fade of its OWN. The collapse flips the
+    /// labels in the very same transaction as the card's width, so every row's
+    /// frame follows one curve; this keeps the text from lingering (and being
+    /// clipped by the shrinking pill) for the whole width animation.
+    static let labelFade = AnyTransition.asymmetric(
+        insertion: .opacity,
+        removal: AnyTransition.opacity.animation(.easeOut(duration: 0.15))
+    )
+
     /// Tab-to-tab page change and the Video<->Audio section swap. The outgoing
     /// page is removed instantly (animating two full pages of glass at once was
     /// the single most expensive thing here, and a measured contributor to the
@@ -4264,7 +4274,7 @@ struct SidebarToolRow: View {
                 TypedText(name)
                     .font(.appMono(size: 11, weight: .medium))
                     .lineLimit(1)
-                    .transition(.opacity)
+                    .transition(.labelFade)
                 Spacer(minLength: 0)
                 Text(shownVersion)
                     .font(.appMono(size: 9, weight: .semibold))
@@ -4463,7 +4473,7 @@ struct CheckForUpdatesButton: View {
                         .font(.appMono(size: 11, weight: .medium))
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
-                        .transition(.opacity)
+                        .transition(.labelFade)
                     Spacer(minLength: 0)
                     if let badge = statusBadge {
                         Image(systemName: badge.icon)
@@ -5429,11 +5439,20 @@ struct ContentView: View {
                 // own transitions: right away when collapsing, partway
                 // through when expanding, so a label never shows up inside
                 // a pill that's still too narrow for it.
-                withAnimation(.easeInOut(duration: Self.sidebarResizeDuration)) { sidebarWidth = target }
                 if compact {
-                    // Collapsing: labels leave right away, in this same update.
-                    withAnimation(.easeInOut(duration: 0.2)) { sidebarDisplayCompact = compact }
+                    // Collapsing: labels leave right away, in this same update AND
+                    // this same transaction as the width. They used to flip in a
+                    // second withAnimation of their own (0.2s against the width's
+                    // 0.3s), and the two curves each moved part of every row's
+                    // frame, so all the icons drifted about a point to the left
+                    // mid-collapse and back -- a wiggle. One transaction = one
+                    // curve for every row.
+                    withAnimation(.easeInOut(duration: Self.sidebarResizeDuration)) {
+                        sidebarWidth = target
+                        sidebarDisplayCompact = compact
+                    }
                 } else {
+                    withAnimation(.easeInOut(duration: Self.sidebarResizeDuration)) { sidebarWidth = target }
                     DispatchQueue.main.asyncAfter(deadline: .now() + Self.sidebarResizeDuration * 0.25) {
                         guard sidebarToggleGeneration == generation else { return }
                         withAnimation(.easeInOut(duration: 0.2)) { sidebarDisplayCompact = compact }
@@ -5647,7 +5666,7 @@ struct ContentView: View {
                 if !sidebarRowsHidden, !sidebarDisplayCompact {
                     sidebarLabel
                         .padding(.leading, -8)
-                        .transition(sidebarAnimationStyle == .resize ? AnyTransition.opacity : AnyTransition.dominoPop(index: 1))
+                        .transition(sidebarAnimationStyle == .resize ? AnyTransition.labelFade : AnyTransition.dominoPop(index: 1))
                 }
                 Spacer(minLength: 0)
             }

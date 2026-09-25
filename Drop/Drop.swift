@@ -4277,13 +4277,15 @@ struct SidebarToolRow: View {
             }
         }
         .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-        .padding(.leading, WindowLayout.railIconInset - WindowLayout.updateCardInset)
+        // The icon sits exactly where the tab icons do.
+        .padding(.leading, WindowLayout.railIconInset)
         .padding(.trailing, 14)
-        .padding(.vertical, 7)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
         .background(Capsule().fill(Color.white.opacity(0.04)))
-        .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.75))
+        // A little quieter than the tabs' rim (they are buttons; these are readouts).
+        .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.75))
         // Collapsed, the badge is gone with the label: a dot says a tool needs an update.
         .overlay(alignment: .topTrailing) {
             if compact, updateAvailable {
@@ -4346,11 +4348,10 @@ struct ToolsDropdownContent: View {
             // read as broken. The button's single "Checking…" state covers
             // the whole operation; each chip updates in place when its own
             // piece finishes.
-            // Each tool is a tab-style pill and its own domino step.
-            // One grey inner card holds the rows and the button, at every
-            // sidebar width, so the whole block is a single object that
-            // widens and narrows in place.
-            VStack(alignment: .leading, spacing: 4) {
+            // Each tool is a tab-style pill and its own domino step. The pills and
+            // the button sit straight on the sidebar, 6pt apart like the tabs
+            // above, at the same edge inset -- no card around them.
+            VStack(alignment: .leading, spacing: 6) {
                 toolRow("yt-dlp", icon: "arrow.down.to.line", updateAvailable: manager.updateAvailable,
                         version: manager.ytdlpVersion)
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex)
@@ -4361,13 +4362,8 @@ struct ToolsDropdownContent: View {
                         version: manager.currentAppVersion)
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex + 2)
                 checkForUpdatesButton
-                    .padding(.top, 4)
                     .dominoVisibility(hidden: rowsHidden, index: baseIndex + 3)
             }
-            .padding(WindowLayout.updateCardInset)
-            // Large radius: the capsule button inside has a ~15pt radius and sits
-            // 4pt in, so 20 keeps its corners concentric with the card's.
-            .innerCard(cornerRadius: DesignTokens.Radius.large)
             .padding(.top, 4)
         }
     }
@@ -4442,8 +4438,11 @@ struct CheckForUpdatesButton: View {
         isChecking ? "Checking…" : (disabledUntilSetup ? "Tools Missing" : (hasUpdate ? "Update Available" : (isUpToDate ? "Up to Date" : "Check for Updates")))
     }
     var body: some View {
+        // Sits straight on the sidebar now (no card behind it), so its rim is a
+        // little stronger than the default, like the tab buttons'.
         GlassInteractive(shape: .capsule, tint: tint, isActive: false, disabled: isDisabled,
-                         scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress), action: action) {
+                         scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress),
+                         restStrokeOverride: 0.24, action: action) {
             HStack(spacing: 6) {
                 Group {
                     if isChecking {
@@ -4473,7 +4472,7 @@ struct CheckForUpdatesButton: View {
                     }
                 }
             }
-            .padding(.leading, WindowLayout.railIconInset - WindowLayout.updateCardInset)
+            .padding(.leading, WindowLayout.railIconInset)
             .padding(.trailing, 14)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)

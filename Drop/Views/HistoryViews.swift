@@ -152,7 +152,7 @@ struct HistoryView: View {
                     icon: "clock",
                     title: history.entries.isEmpty ? "No downloads yet" : "No results"
                 )
-                .pinnedToSidebar()
+                .followsSidebar()
             } else {
                 ScrollView {
                     LazyVStack(spacing: 6, pinnedViews: [.sectionHeaders]) {

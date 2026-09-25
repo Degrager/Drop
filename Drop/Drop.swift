@@ -5830,7 +5830,7 @@ struct ContentView: View {
                                     subtitle: "Supports YouTube, SoundCloud, Vimeo and more"
                                 )
                                 .padding(.vertical, 16)
-                                .pinnedToSidebar()
+                                .followsSidebar()
                             }
                             mainPanelBottomBar.pinnedToSidebar()
                         }
@@ -6060,7 +6060,10 @@ struct ContentView: View {
                         proxy.scrollTo("scrollBottom", anchor: .bottom)
                     }
                 }
-                // Empty state — overlaid and truly centered in the scroll area
+                // Empty state — overlaid and truly centered in the scroll area.
+                // It is a light view, so it FOLLOWS the sidebar's edge frame by
+                // frame (always centered in what's visible) instead of waiting
+                // for the sidebar like the cards do.
                 .overlay {
                     if linkPreviews.isEmpty {
                         EmptyStateView(
@@ -6068,7 +6071,7 @@ struct ContentView: View {
                             title: "Paste a link to get started",
                             subtitle: "Supports YouTube, SoundCloud, Vimeo and more"
                         )
-                        .pinnedToSidebar()
+                        .followsSidebar()
                         .transition(.blurIn)
                     }
                 }

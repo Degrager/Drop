@@ -25,6 +25,7 @@
 		DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A3 /* DevReleaseView.swift */; };
 		DEV1000000000000000000A4 /* GitHubMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A4 /* GitHubMarkdown.swift */; };
 		OVL1000000000000000000A1 /* DropUpdateOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = OVL2000000000000000000A1 /* DropUpdateOverlay.swift */; };
+		MBP1000000000000000000A1 /* MenuBarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = MBP2000000000000000000A1 /* MenuBarPanel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -47,6 +48,7 @@
 		CFG1000000000000000000A1 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		CFG1000000000000000000A2 /* Local.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig; sourceTree = "<group>"; };
 		OVL2000000000000000000A1 /* DropUpdateOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropUpdateOverlay.swift; sourceTree = "<group>"; };
+		MBP2000000000000000000A1 /* MenuBarPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPanel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -115,6 +117,7 @@
 				DD223344556677889900BBCC /* PreviewCard.swift */,
 				EE445566778899001122DDEE /* TabBottomBar.swift */,
 				OVL2000000000000000000A1 /* DropUpdateOverlay.swift */,
+				MBP2000000000000000000A1 /* MenuBarPanel.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -245,6 +248,7 @@
 				DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */,
 				DEV1000000000000000000A4 /* GitHubMarkdown.swift in Sources */,
 				OVL1000000000000000000A1 /* DropUpdateOverlay.swift in Sources */,
+				MBP1000000000000000000A1 /* MenuBarPanel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -4621,8 +4621,8 @@ final class LiveResizeState: ObservableObject {
 
 class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared: DropAppDelegate!
-    private var statusItem: NSStatusItem?
-    private var popover: NSPopover?
+    /// The status item, its panel and its right-click menu (MenuBarPanel.swift).
+    private let menuBar = MenuBarController()
 
     override init() {
         super.init()
@@ -4656,26 +4656,8 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             editor.isAutomaticTextReplacementEnabled = false
         }
 
-        // Create status item here — guaranteed AppKit is fully initialized
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "Drop")
-            button.image?.isTemplate = true
-            button.action = #selector(handleStatusItemClick)
-            button.target = self
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        }
-        let pop = NSPopover()
-        pop.contentSize = NSSize(width: 260, height: 160)
-        pop.behavior = .transient
-        // Force dark vibrancy for the popover's own native bezel/arrow
-        // chrome (defaults to light otherwise) so it reads as dark at the
-        // edges where SwiftUI content doesn't fully cover it; the black
-        // frosted-glass tint/grain on top comes from MenuBarQuickView's own
-        // .glassCard() background.
-        pop.appearance = NSAppearance(named: .vibrantDark)
-        pop.contentViewController = NSHostingController(rootView: MenuBarQuickView())
-        popover = pop
+        // Created here, not in init -- AppKit is fully initialized by now.
+        menuBar.install()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             if let window = NSApplication.shared.windows.first(where: { !($0 is NSPanel) }) {
                 window.delegate = self
@@ -4720,51 +4702,6 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // TextField) but still worth keeping off since Drop has no
                 // meaningful state worth restoring between launches.
                 window.isRestorable = false
-            }
-        }
-    }
-
-    @objc private func handleStatusItemClick() {
-        guard let event = NSApp.currentEvent else { return }
-        if event.type == .rightMouseUp {
-            showStatusMenu()
-        } else {
-            togglePopover()
-        }
-    }
-
-    private func showStatusMenu() {
-        let menu = NSMenu()
-        let updateItem = menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
-        updateItem.target = self
-        menu.addItem(.separator())
-        let quitItem = menu.addItem(withTitle: "Quit Drop", action: #selector(quitApp), keyEquivalent: "q")
-        quitItem.target = self
-        statusItem?.menu = menu
-        statusItem?.button?.performClick(nil)
-        statusItem?.menu = nil
-    }
-
-    @objc private func quitApp() {
-        NSApp.terminate(nil)
-    }
-
-    @objc private func checkForUpdates() {
-        // Bring window to front
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.windows.first(where: { !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
-        // Trigger update check via notification
-        NotificationCenter.default.post(name: NSNotification.Name("DropCheckForUpdates"), object: nil)
-    }
-
-    @objc private func togglePopover() {
-        guard let button = statusItem?.button else { return }
-        if let pop = popover {
-            if pop.isShown {
-                pop.performClose(nil)
-            } else {
-                pop.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-                pop.contentViewController?.view.window?.makeKey()
             }
         }
     }
@@ -4865,88 +4802,6 @@ func dropAllLinesAreURLs(_ text: String) -> Bool {
               (scheme == "http" || scheme == "https"),
               url.host != nil else { return false }
         return true
-    }
-}
-
-struct MenuBarQuickView: View {
-    @State private var submitted = false
-    @State private var invalidClipboard = false
-
-    var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.appMono(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                Text("Drop")
-                    .font(.appMono(size: 13, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-            }
-
-            if submitted {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                    Text("Queued — open Drop to track progress")
-                        .font(.appMono(size: 11))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                }
-                .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        submitted = false
-                    }
-                }
-            } else {
-                // Same label/icon/tint states as the Download tab's own
-                // Paste & Analyze button ("Invalid" in red when the
-                // clipboard doesn't contain a valid URL list).
-                GlassButton(
-                    label: invalidClipboard ? "Invalid" : "Paste & Analyze",
-                    icon: invalidClipboard ? "exclamationmark.triangle" : "doc.on.clipboard",
-                    tint: invalidClipboard ? .red : .white
-                ) {
-                    pasteAndQueue()
-                }
-                .onAppear { invalidClipboard = false }
-            }
-
-            GlassButton(label: "Open Drop", icon: "arrow.up.forward.app", tint: .white, fitContent: true) {
-                NSApp.activate(ignoringOtherApps: true)
-                NSApp.windows.first(where: { !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
-            }
-        }
-        .padding(14)
-        .frame(width: 260)
-        // Same black-frosted-glass recipe as every other surface in the
-        // app (VisualEffectBlur + black tint + grain + gradient rim
-        // stroke), layered on top of the popover's own dark-vibrancy
-        // bezel (set to .vibrantDark where the NSPopover is created) so
-        // this reads as Drop's own material, not a stock system popover.
-        .glassCard(cornerRadius: DesignTokens.Radius.medium)
-        .preferredColorScheme(.dark)
-    }
-
-    /// Validates the clipboard exactly like the Download tab's Paste &
-    /// Analyze button does, then hands off to ContentView's notification
-    /// handler to run the identical placeholder-card + analyze flow.
-    private func pasteAndQueue() {
-        guard let raw = NSPasteboard.general.string(forType: .string) else {
-            flashInvalid()
-            return
-        }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, dropAllLinesAreURLs(trimmed) else {
-            flashInvalid()
-            return
-        }
-        NotificationCenter.default.post(name: .menuBarDownload, object: nil, userInfo: ["url": trimmed])
-        submitted = true
-    }
-
-    private func flashInvalid() {
-        invalidClipboard = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-            invalidClipboard = false
-        }
     }
 }
 
@@ -5598,16 +5453,23 @@ struct ContentView: View {
                 // measured as if the sidebar were collapsed.
                 columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth - (pageInset - WindowLayout.compactSidebarWidth))
             }
+            // The menu bar's Check for Updates (panel button and right-click menu):
+            // exactly what the sidebar's button does, gated the same way (it is
+            // disabled until the tools are installed).
+            NotificationCenter.default.addObserver(forName: .menuBarCheckForUpdates, object: nil, queue: .main) { _ in
+                guard manager.toolsReady else { return }
+                manager.ensureLatestTools()
+                manager.dropUpdater.checkForUpdates()
+            }
             NotificationCenter.default.addObserver(forName: .menuBarDownload, object: nil, queue: .main) { note in
                 guard let raw = note.userInfo?["url"] as? String else { return }
                 let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !candidate.isEmpty, allLinesAreURLs(candidate) else { return }
                 activeTab = .download
                 // Deliberately NOT activating/foregrounding the app here --
-                // the menu bar popover's whole point is a quick background
+                // the menu bar panel's whole point is a quick background
                 // paste-and-queue without interrupting whatever the user is
-                // doing (matches the popover's own "Queued — open Drop to
-                // track progress" messaging, which implies you stay where
+                // doing (its button just turns to "Queued" -- you stay where
                 // you are unless you tap "Open Drop" yourself).
                 let pendingURLs = candidate.components(separatedBy: "\n")
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

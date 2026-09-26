@@ -25,19 +25,20 @@ enum CardMetrics {
 // MARK: - Shared card chrome
 //
 // Both PreviewCard and CompletedCard share the same header row:
-// checkbox · thumbnail · title + subtitle · remove button.
-// The only difference is the body below the header.
+// checkbox · thumbnail · title + subtitle · buttons.
 //
-//  PreviewCard   — item is queued / waiting. Shows settings rows
-//                  (format pickers, codec chips, etc.) via @ViewBuilder.
+//  PreviewCard   — Download's card for a link's WHOLE life (analyzing, ready with its
+//                  settings, downloading, finished, failed): one card whose contents change
+//                  with the state (see the `capsule`, `inlineStatus`, `trailingControls` and
+//                  `showsSettings` inputs), never replaced by another view. Also Convert's
+//                  analyze card.
 //
-//  CompletedCard — item is active, done, or failed. Shows status +
-//                  action buttons via @ViewBuilder.
+//  CompletedCard — Convert's queue rows (and their inline status), which Download's
+//                  downloading / finished states now look like.
 
 // MARK: - PreviewCard
 
-/// Universal settings card. Used before a download starts or while
-/// a convert job is queued. The `settings` slot receives tab-specific
+/// Universal card. Download's card in every state, and Convert's analyze card. The `settings` slot receives tab-specific
 /// sections (DOWNLOAD AS / RESOLUTION / AUDIO CODEC / VIDEO CODEC …).
 struct PreviewCard<Settings: View>: View {
 
@@ -107,6 +108,25 @@ struct PreviewCard<Settings: View>: View {
     /// when isAnalyzing is false -- onRemove is used instead.
     var onCancelAnalyze: () -> Void = {}
 
+    /// The metadata capsule, when the card manages one itself: ONE capsule that stays mounted
+    /// and changes its contents as the card moves through its states (analyzing, ready,
+    /// downloading, finished; see PersistentCapsule). Cards that pass nil keep using `subtitle`.
+    var capsule: CardCapsule? = nil
+    /// True once `title` is the real title, not the pasted link standing in for it while the
+    /// link is analyzed. Until then the title bar waits at a default length; when it is true the
+    /// bar first takes the title's length and only then gives way to the title.
+    var titleKnown: Bool = true
+    /// A status column between the text and the buttons on the header's trailing side (a
+    /// download's progress).
+    var inlineStatus: AnyView? = nil
+    /// Replaces the collapse and remove buttons (a download's cancel / reveal / redownload).
+    var trailingControls: AnyView? = nil
+    /// How many buttons `trailingControls` holds (the resize facade draws that many).
+    var trailingControlCount: Int = 0
+    /// False hides everything below the header (belowHeader, settings, footer): a download
+    /// under way or finished.
+    var showsSettings: Bool = true
+
     // Settings content
     @ViewBuilder var settings: () -> Settings
 
@@ -114,6 +134,12 @@ struct PreviewCard<Settings: View>: View {
     // hold before the real thumbnail/title are allowed to show, even if
     // they're already known instantly (e.g. redownloading from History).
     @State private var revealTimerElapsed = false
+    /// The title bar is on screen from the moment the card waits for its title until the title
+    /// has faded in. Set once the card is seen analyzing; cleared after the reveal.
+    @State private var titleWasPending = false
+    /// 0: the bar at its default length. 1: the bar has taken the title's length. 2: the title
+    /// itself is showing.
+    @State private var titlePhase = 0
     // Measured width of the real title Text once it has actual content --
     // the skeleton bar sizes itself to this instead of a fixed guess, so it
     // reads as a placeholder for THIS title rather than a generic bar.
@@ -131,6 +157,35 @@ struct PreviewCard<Settings: View>: View {
                     }
                 }
             }
+            .task(id: TitleProgress(known: titleKnown, analyzing: isAnalyzing)) { await advanceTitle() }
+    }
+
+    private struct TitleProgress: Hashable {
+        var known: Bool
+        var analyzing: Bool
+    }
+
+    /// The title's reveal, in order: the bar takes the title's length, then (after the card has
+    /// been up long enough not to flash) the title fades in over it. Runs again whenever the
+    /// title becomes known or the analysis ends.
+    @MainActor
+    private func advanceTitle() async {
+        if isAnalyzing { titleWasPending = true }
+        guard titleWasPending, titlePhase < 2 else { return }
+        // Still waiting for the real title: the bar just stays at its default length.
+        guard titleKnown || !isAnalyzing else { return }
+        if titlePhase < 1 {
+            withAnimation(.easeInOut(duration: 0.3)) { titlePhase = 1 }
+        }
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        while !revealTimerElapsed && isAnalyzing && !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        guard !Task.isCancelled else { return }
+        withAnimation(.easeInOut(duration: 0.3)) { titlePhase = 2 }
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        guard !Task.isCancelled else { return }
+        titleWasPending = false
     }
 
     // MARK: Full card
@@ -145,11 +200,13 @@ struct PreviewCard<Settings: View>: View {
                 if let belowHeader {
                     belowHeader.transition(.blurInTop)
                 }
-                if expanded {
-                    GlassDivider().transition(.blurInTop)
-                    settings().transition(.blurInTop)
+                if showsSettings {
+                    if expanded {
+                        GlassDivider().transition(.blurInTop)
+                        settings().transition(.blurInTop)
+                    }
+                    if let footer { footer }
                 }
-                if let footer { footer }
             }
         }
         // De-emphasise unselected cards in batch-select mode by dimming the
@@ -164,10 +221,11 @@ struct PreviewCard<Settings: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // What the resize facade needs to know about this card's shape.
         .preference(key: CardFacadeMetricsKey.self, value: CardFacadeMetrics(
-            expanded: expanded,
+            expanded: expanded && showsSettings,
             analyzing: isAnalyzing,
-            hasChevron: collapseButtonInHeader && isExpanded != nil && !collapseLocked && !isAnalyzing,
-            hasLink: expanded && !isAnalyzing && !secondaryTitle.isEmpty,
+            buttonCount: buttonCount,
+            hasStatus: inlineStatus != nil,
+            hasLink: expanded && showsSettings && !isAnalyzing && !secondaryTitle.isEmpty,
             reported: true
         ))
         // The analyzing card has exactly the finished card's shape (radius, padding, header
@@ -177,15 +235,35 @@ struct PreviewCard<Settings: View>: View {
         .liveGlassCard(cornerRadius: DesignTokens.Radius.large, isActive: isAnalyzing)
         .animation(.easeOut(duration: 0.15), value: isSelected)
         .animation(.easeOut(duration: 0.15), value: showCheckbox)
-        .animation(.easeInOut(duration: 0.35), value: isAnalyzing)
+        // Every state change (analyzing -> ready -> downloading -> finished) animates in place:
+        // the same card, its contents adjusting.
+        .animation(.easeInOut(duration: 0.35), value: StateKey(
+            analyzing: isAnalyzing, settings: showsSettings, status: inlineStatus != nil, buttons: buttonCount
+        ))
         .transition(.glassPopInOnly)
+    }
+
+    private struct StateKey: Equatable {
+        var analyzing: Bool
+        var settings: Bool
+        var status: Bool
+        var buttons: Int
+    }
+
+    /// Buttons on the header's trailing edge, for the resize facade.
+    private var buttonCount: Int {
+        if trailingControls != nil { return trailingControlCount }
+        if isAnalyzing { return 1 }
+        return (collapseButtonInHeader && isExpanded != nil && !collapseLocked ? 1 : 0) + 1
     }
 
     // MARK: Shared header
 
-    private var canRevealAnalyzed: Bool {
-        !isAnalyzing || (title.isEmpty == false && revealTimerElapsed)
-    }
+    /// The thumbnail comes out of its blur once the card has been up long enough not to flash.
+    private var canRevealThumb: Bool { !isAnalyzing || revealTimerElapsed }
+    /// The title bar is showing until the title has faded in.
+    private var showsTitleBar: Bool { isAnalyzing || titleWasPending }
+    private var titleRevealed: Bool { !showsTitleBar || titlePhase >= 2 }
 
     @Environment(\.contentColumnWidth) private var columnWidth
     /// In a narrow column the thumbnail + title row keeps its place, but the
@@ -198,13 +276,7 @@ struct PreviewCard<Settings: View>: View {
     private var cardHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             cardHeaderRow
-            if narrow {
-                if isAnalyzing {
-                    AnalyzingCapsule().transition(.blurIn)
-                } else if let sub = subtitle {
-                    sub.transition(.blurIn)
-                }
-            }
+            if narrow { capsuleSlot }
             // The link / file path lives on its own line, and only while the
             // card is expanded -- collapsed cards stay a single compact row.
             if expanded, !isAnalyzing, !secondaryTitle.isEmpty {
@@ -214,6 +286,16 @@ struct PreviewCard<Settings: View>: View {
                     .lineLimit(1).truncationMode(.middle)
                     .transition(.blurInTop)
             }
+        }
+    }
+
+    /// The metadata capsule: the card's own persistent one, or (Convert) the caller's subtitle.
+    @ViewBuilder
+    private var capsuleSlot: some View {
+        if let capsule {
+            PersistentCapsule(content: capsule)
+        } else if let subtitle {
+            subtitle.transition(.blurIn)
         }
     }
 
@@ -227,7 +309,7 @@ struct PreviewCard<Settings: View>: View {
         //
         // Same HStack shell for both the analyzing and analyzed states --
         // only the content INSIDE each slot changes based on isAnalyzing/
-        // canRevealAnalyzed. Keeping one shared header means SwiftUI is
+        // the reveal state. Keeping one shared header means SwiftUI is
         // always updating the same view identity in place (this is the
         // fix for cards visually "popping in" as a replacement once analyze
         // finishes, instead of smoothly settling) rather than unmounting an
@@ -252,17 +334,17 @@ struct PreviewCard<Settings: View>: View {
                 // during analyze never remounts/re-renders once analyze
                 // finishes -- only the skeleton's opacity animates out from
                 // underneath an image that was already there.
-                ThumbnailSkeleton(isPulsing: !canRevealAnalyzed)
-                    .opacity(canRevealAnalyzed ? 0 : 1)
+                ThumbnailSkeleton(isPulsing: !canRevealThumb)
+                    .opacity(canRevealThumb ? 0 : 1)
                 if let thumb = thumbnail {
                     // Sharpens out of a blur as the skeleton pulses away
                     // underneath, like a progressive image load.
                     thumb
                         .scaledToFill()
                         .clipped()
-                        .blur(radius: canRevealAnalyzed ? 0 : 10)
-                        .scaleEffect(canRevealAnalyzed ? 1 : 1.08)
-                        .opacity(canRevealAnalyzed ? 1 : 0)
+                        .blur(radius: canRevealThumb ? 0 : 10)
+                        .scaleEffect(canRevealThumb ? 1 : 1.08)
+                        .opacity(canRevealThumb ? 1 : 0)
                 } else if !isAnalyzing {
                     Image(systemName: thumbnailPlaceholder)
                         .font(.system(size: 16, weight: .thin))
@@ -271,64 +353,50 @@ struct PreviewCard<Settings: View>: View {
             }
             .frame(width: CardMetrics.thumbWidth, height: CardMetrics.thumbHeight)
             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
-            .animation(.easeInOut(duration: 0.5), value: canRevealAnalyzed)
+            .animation(.easeInOut(duration: 0.5), value: canRevealThumb)
 
-            // Title is a single, always-mounted Text -- never branch-swapped
-            // between a skeleton bar and a real Text, so the same text that
-            // was already visible while analyzing never remounts once
-            // analyze finishes. It just animates its own font/weight/color
-            // from the analyzing look to the resolved look, and the
-            // "Analyzing\u{2026}" caption fades out while the real subtitle (URL +
-            // chips) fades in underneath it -- the title visually "moves up"
-            // into the subtitle's old spot because that line's content
-            // cross-fades in place rather than the whole block swapping.
+            // The title is ONE always-mounted Text, with a redacted bar over it until it can be
+            // shown. While the link is analyzed the bar waits at a default length; the moment the
+            // real title is known (an early oEmbed answer or the final result) the bar takes its
+            // length, and only then does the title fade in over it -- so what is revealed is
+            // already the size of the bar, and a card whose title was known from the start (a
+            // redownload) has no bar at all. The capsule below is one persistent capsule too (see
+            // PersistentCapsule): its contents change, it does not get replaced.
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                 ZStack(alignment: .leading) {
-                    // Redacted placeholder bar with the same slow pulse the
-                    // old standalone TitleSkeletonBar had, just inlined here
-                    // so it can share one Text underneath instead of a
-                    // second, separately-mounted Text.
-                    if isAnalyzing {
-                        // A Core Animation pulse that stops as soon as the title can be
-                        // revealed (a SwiftUI repeatForever here used to keep the whole window
-                        // redrawing at idle).
-                        PulsingSkeleton(cornerRadius: 4, isPulsing: !canRevealAnalyzed)
-                            // Width now matches the real, resolved title's
-                            // own measured width (see measuredTitleWidth
-                            // below) instead of a fixed guess -- falls back
-                            // to a reasonable default only until a title
-                            // has actually arrived and been measured once.
-                            // Clamped so a very long title doesn't blow the
-                            // skeleton out past a sane single-line width.
-                            .frame(width: min(max(measuredTitleWidth, 120), 260), height: 14)
-                            .opacity(canRevealAnalyzed ? 0 : 1)
-                            .animation(.easeInOut(duration: 0.25), value: measuredTitleWidth)
+                    if showsTitleBar {
+                        // A Core Animation pulse (a SwiftUI repeatForever here kept the whole
+                        // window redrawing at idle), still once the title is showing.
+                        PulsingSkeleton(cornerRadius: 4, isPulsing: !titleRevealed)
+                            .frame(width: titlePhase >= 1 ? min(max(measuredTitleWidth, 60), 520) : Self.defaultTitleBarWidth, height: 14)
+                            .opacity(titleRevealed ? 0 : 1)
                     }
                     Text(title.isEmpty ? "Fetching title metadata" : title)
                         .font(.appMono(size: 13, weight: .semibold))
                         .foregroundColor(.white.opacity(
-                            !canRevealAnalyzed ? 0 :
+                            !titleRevealed ? 0 :
                             (isAnalyzing ? DesignTokens.Text.secondary :
                                 ((showCheckbox && !isSelected) ? DesignTokens.Text.disabled : DesignTokens.Text.primary))
                         ))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .blur(radius: canRevealAnalyzed ? 0 : 6)
-                        // Measures this Text's own intrinsic single-line
-                        // width (ignoring the lineLimit/truncation applied
-                        // above, which would otherwise clip the reported
-                        // width to whatever space happens to be available)
-                        // so the skeleton bar above can match the width
-                        // the resolved title will actually render at.
+                        .blur(radius: titleRevealed ? 0 : 6)
+                        // Measures this Text's own intrinsic single-line width (ignoring the
+                        // lineLimit/truncation above, which would clip the reported width to
+                        // whatever space happens to be available), so the bar can take exactly
+                        // the length the title will have.
                         .background(
                             Text(title.isEmpty ? "Fetching title metadata" : title)
                                 .font(.appMono(size: 13, weight: .semibold))
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
                                 .hidden()
-                                // The facade draws its title bar this long.
-                                .reportsToFacade { metrics, size in metrics.titleWidth = size.width }
+                                // The facade draws its title bar this long (a default one while
+                                // the title is still the pasted link).
+                                .reportsToFacade { metrics, size in
+                                    metrics.titleWidth = titleKnown ? size.width : Self.defaultTitleBarWidth
+                                }
                                 .background(
                                     GeometryReader { geo in
                                         Color.clear.preference(key: WidthPreferenceKey.self, value: geo.size.width)
@@ -336,31 +404,44 @@ struct PreviewCard<Settings: View>: View {
                                 )
                         )
                         .onPreferenceChange(WidthPreferenceKey.self) { width in
-                            guard !title.isEmpty else { return }
+                            // Only the real title counts: until then the text is the pasted link.
+                            guard titleKnown, !title.isEmpty else { return }
                             measuredTitleWidth = width
                         }
                 }
-                .animation(.easeInOut(duration: 0.3), value: canRevealAnalyzed)
-                .animation(.easeInOut(duration: 0.35), value: isAnalyzing)
+                .animation(.easeInOut(duration: 0.3), value: titleRevealed)
+                .animation(.easeInOut(duration: 0.3), value: titlePhase)
                 .layoutPriority(1)
                 }
 
-                if !narrow {
-                    if isAnalyzing {
-                        AnalyzingCapsule().transition(.blurIn)
-                    } else if let sub = subtitle {
-                        sub.transition(.blurIn)
-                    }
-                }
+                if !narrow { capsuleSlot }
             }
-            .animation(.easeInOut(duration: 0.35), value: isAnalyzing)
 
             Spacer()
 
-            if isAnalyzing {
-                // Spinner → X on hover, exactly like AnalyzingCard.
-                SkeletonCancelButton(action: onCancelAnalyze)
-            } else {
+            if let inlineStatus {
+                inlineStatus.transition(.blurIn)
+            }
+
+            trailingArea
+        }
+    }
+
+    /// Where the bar waits until the real title is known.
+    private static var defaultTitleBarWidth: CGFloat { 190 }
+
+    /// The header's buttons: the caller's own while a download is under way or finished, the
+    /// analyze cancel while analyzing, otherwise collapse + remove.
+    @ViewBuilder
+    private var trailingArea: some View {
+        if let trailingControls {
+            trailingControls.transition(.blurIn)
+        } else if isAnalyzing {
+            // Spinner -> X on hover, in the remove button's own slot.
+            SkeletonCancelButton(action: onCancelAnalyze).transition(.blurIn)
+        } else {
+            // Spaced like the buttons of the header row were before they were grouped here.
+            HStack(spacing: 12) {
                 if let headerAccessory { headerAccessory }
                 if collapseButtonInHeader, let isExpanded, !collapseLocked {
                     HoverIconButton(
@@ -382,6 +463,7 @@ struct PreviewCard<Settings: View>: View {
                     onRemove()
                 }
             }
+            .transition(.blurIn)
         }
     }
 }

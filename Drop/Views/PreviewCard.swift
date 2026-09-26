@@ -17,6 +17,9 @@ private struct WidthPreferenceKey: PreferenceKey {
 enum CardMetrics {
     static let thumbWidth: CGFloat = 56
     static let thumbHeight: CGFloat = 38
+    /// Height of the IN / OUT metadata capsule (two rows). The analyzing placeholder is drawn
+    /// at the same height, so a card keeps its size as it resolves.
+    static let metaCapsuleHeight: CGFloat = 41
 }
 
 // MARK: - Shared card chrome
@@ -167,12 +170,11 @@ struct PreviewCard<Settings: View>: View {
             hasLink: expanded && !isAnalyzing && !secondaryTitle.isEmpty,
             reported: true
         ))
-        // While analyzing: smaller corner radius + the Tron-beam active rim
-        // (matches the old AnalyzingCard's own glassCard call exactly).
-        // Once resolved: back to the normal large radius, no active rim.
+        // The analyzing card has exactly the finished card's shape (radius, padding, header
+        // height); the Tron-beam rim is what marks it as working, and goes when it resolves.
         // Same view, same identity -- this just animates the chrome rather
         // than swapping to a different card.
-        .liveGlassCard(cornerRadius: isAnalyzing ? DesignTokens.Radius.medium : DesignTokens.Radius.large, isActive: isAnalyzing)
+        .liveGlassCard(cornerRadius: DesignTokens.Radius.large, isActive: isAnalyzing)
         .animation(.easeOut(duration: 0.15), value: isSelected)
         .animation(.easeOut(duration: 0.15), value: showCheckbox)
         .animation(.easeInOut(duration: 0.35), value: isAnalyzing)
@@ -196,7 +198,13 @@ struct PreviewCard<Settings: View>: View {
     private var cardHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             cardHeaderRow
-            if narrow, !isAnalyzing, let sub = subtitle { sub.transition(.blurIn) }
+            if narrow {
+                if isAnalyzing {
+                    AnalyzingCapsule().transition(.blurIn)
+                } else if let sub = subtitle {
+                    sub.transition(.blurIn)
+                }
+            }
             // The link / file path lives on its own line, and only while the
             // card is expanded -- collapsed cards stay a single compact row.
             if expanded, !isAnalyzing, !secondaryTitle.isEmpty {
@@ -298,7 +306,7 @@ struct PreviewCard<Settings: View>: View {
                             .animation(.easeInOut(duration: 0.25), value: measuredTitleWidth)
                     }
                     Text(title.isEmpty ? "Fetching title metadata" : title)
-                        .font(.appMono(size: isAnalyzing ? 12 : 13, weight: isAnalyzing ? .medium : .semibold))
+                        .font(.appMono(size: 13, weight: .semibold))
                         .foregroundColor(.white.opacity(
                             !canRevealAnalyzed ? 0 :
                             (isAnalyzing ? DesignTokens.Text.secondary :
@@ -315,7 +323,7 @@ struct PreviewCard<Settings: View>: View {
                         // the resolved title will actually render at.
                         .background(
                             Text(title.isEmpty ? "Fetching title metadata" : title)
-                                .font(.appMono(size: isAnalyzing ? 12 : 13, weight: isAnalyzing ? .medium : .semibold))
+                                .font(.appMono(size: 13, weight: .semibold))
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
                                 .hidden()
@@ -337,14 +345,12 @@ struct PreviewCard<Settings: View>: View {
                 .layoutPriority(1)
                 }
 
-                if isAnalyzing {
-                    Text("Analyzing\u{2026}")
-                        .font(.appMono(size: 10))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        .transition(.blurIn)
-                } else if let sub = subtitle, !narrow {
-                    sub
-                        .transition(.blurIn)
+                if !narrow {
+                    if isAnalyzing {
+                        AnalyzingCapsule().transition(.blurIn)
+                    } else if let sub = subtitle {
+                        sub.transition(.blurIn)
+                    }
                 }
             }
             .animation(.easeInOut(duration: 0.35), value: isAnalyzing)

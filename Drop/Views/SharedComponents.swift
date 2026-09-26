@@ -345,23 +345,46 @@ struct CardFacade: View {
     }
 }
 
-/// Keeps the facade's left edge on the sidebar's edge while the sidebar collapses or
-/// expands during a drag. The real cards are laid out for where the sidebar is HEADING
-/// (`pinned`, which jumps in one step), so a facade that simply filled the column would
-/// snap by the sidebar's width the moment it starts to move. `live` is the sidebar's
-/// animated inset, interpolated by SwiftUI (the same trick LiveOutline uses for the
-/// real cards' outlines), so `live - pinned` is how far the facade must start inside
-/// (collapse) or outside (expand) the column, easing to 0 as the sidebar lands.
+/// Puts the facade where the content column WOULD be for the sidebar's current position,
+/// while the sidebar collapses or expands. The real cards are laid out for where the
+/// sidebar is HEADING (`pinned`, which jumps in one step), so a facade that simply filled
+/// that column would snap by the sidebar's width the moment it starts to move. `live` is
+/// the sidebar's animated inset, interpolated by SwiftUI, so the column for `live` is a
+/// frame that glides from the old layout to the new one.
+///
+/// Worked out from the column's own rule (`WindowLayout.columnWidth`, centered in what is
+/// left of `area` after the sidebar), NOT by sliding the left edge along with the sidebar:
+/// that is only right while the column fills the space. Once it is capped (850pt) and
+/// centered, the column keeps its width and only its position shifts, and a facade that
+/// followed the sidebar's edge grew wider than any real card.
 private struct FacadeFollowsSidebar: ViewModifier, Animatable {
     var live: CGFloat
     var pinned: CGFloat
+    /// The page container's width with the sidebar collapsed; 0 until measured.
+    var area: CGFloat
     var animatableData: CGFloat {
         get { live }
         set { live = newValue }
     }
 
+    /// Left edge and width of the content column when the sidebar's inset is `inset`.
+    private func column(at inset: CGFloat) -> (left: CGFloat, width: CGFloat) {
+        let offered = max(area - inset, 0)
+        let width = min(WindowLayout.columnWidth(mainWidth: offered), offered)
+        return (inset + (offered - width) / 2, width)
+    }
+
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content.padding(.leading, live - pinned)
+        if area > 0 {
+            let now = column(at: live)
+            let laidOut = column(at: pinned)
+            content
+                .padding(.leading, now.left - laidOut.left)
+                .padding(.trailing, (laidOut.left + laidOut.width) - (now.left + now.width))
+        } else {
+            content.padding(.leading, live - pinned)
+        }
     }
 }
 
@@ -383,7 +406,7 @@ struct FrozenDuringResize: ViewModifier {
                 .animation(nil, value: frozen)
                 .allowsHitTesting(!frozen)
             CardFacade()
-                .modifier(FacadeFollowsSidebar(live: sidebarLive, pinned: sidebarPinned))
+                .modifier(FacadeFollowsSidebar(live: sidebarLive, pinned: sidebarPinned, area: LiveResizeState.shared.pageAreaWidth))
                 .opacity(frozen ? 1 : 0)
         }
         // The start is always a cut (nil while freezing): during a drag the window is already

@@ -1592,6 +1592,17 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
     }
 
+    /// A real release number ("1.2", "1.2.1") as opposed to the "dev" every build
+    /// from source carries (the project's default MARKETING_VERSION). Only the
+    /// release pipeline stamps a number, so the running build is a dev build
+    /// unless this says otherwise. Dev builds also default CURRENT_PROJECT_VERSION
+    /// high (999999), so Sparkle never sees a published release as newer than them.
+    static func isReleaseVersion(_ version: String) -> Bool {
+        version.range(of: #"^\d+(\.\d+)+$"#, options: .regularExpression) != nil
+    }
+
+    var isDevBuild: Bool { !Self.isReleaseVersion(currentAppVersion) }
+
     /// Thin wrapper around Sparkle's standard updater. Sparkle itself owns
     /// checking (per SUEnableAutomaticChecks/SUScheduledCheckInterval in
     /// Info.plist), signature verification (against SUPublicEDKey), and the
@@ -1652,6 +1663,9 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             let shownKey = "whatsNewShownVersions"
             let legacyKey = "lastSeenAppVersion"
             let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+            // A dev build has no published release notes to announce (and no
+            // v<current> tag to fetch them from).
+            guard DownloadManager.isReleaseVersion(current) else { return }
             var shown = Set(UserDefaults.standard.stringArray(forKey: shownKey) ?? [])
 
             // One-time migration from the old single-version tracker: a

@@ -31,10 +31,6 @@ enum MenuBarClipboard: Equatable {
 
 final class MenuBarModel: ObservableObject {
     @Published private(set) var clipboard: MenuBarClipboard = .empty
-    /// Drives the panel's focus-in / focus-out (scale + blur, never opacity: see
-    /// FocusEffect). The panel window itself is only ordered out once the exit
-    /// has played.
-    @Published var isShown = false
     /// Right after a successful paste, until it reverts on its own.
     @Published private(set) var queued = false
     /// A paste the clipboard no longer supported when the button was pressed
@@ -124,8 +120,8 @@ struct MenuBarQuickView: View {
     var onCheckForUpdates: () -> Void
     var onQuit: () -> Void
 
-    /// Transparent margin around the card: room for its shadow and for the focus-in
-    /// blur/scale, neither of which may be clipped by the window's edge.
+    /// Transparent margin around the card: room for its shadow, which the window's edge
+    /// must not clip.
     static let margin: CGFloat = 24
     static let cardWidth: CGFloat = 292
 
@@ -142,8 +138,6 @@ struct MenuBarQuickView: View {
         .frame(width: Self.cardWidth)
         .glassCard(cornerRadius: DesignTokens.Radius.large)
         .shadow(color: .black.opacity(0.45), radius: 14, y: 6)
-        .modifier(FocusEffect(blur: model.isShown ? 0 : 6, scale: model.isShown ? 1 : 0.95, anchor: .top))
-        .animation(model.isShown ? .easeOut(duration: 0.24) : .easeIn(duration: 0.14), value: model.isShown)
         .padding(Self.margin)
         .preferredColorScheme(.dark)
     }
@@ -276,11 +270,6 @@ final class MenuBarController: NSObject {
     /// the click, which would reopen it -- so a click right after a hide is the
     /// click that closed it, not a request to open.
     private var lastHide = Date.distantPast
-    /// Bumped by every show and hide. The deferred halves of each (flip to shown,
-    /// order out after the exit) only run if no newer show/hide has happened since,
-    /// so a fast open-close-open can never leave the window and the model
-    /// disagreeing about whether the panel is up.
-    private var generation = 0
 
     func install() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -305,7 +294,7 @@ final class MenuBarController: NSObject {
     }
 
     private func showMenu() {
-        hidePanel(animated: false)
+        hidePanel()
         let menu = NSMenu()
         menu.addItem(menuItem("Open Drop", symbol: "arrow.up.forward.app", action: #selector(openDrop)))
         menu.addItem(.separator())
@@ -354,7 +343,7 @@ final class MenuBarController: NSObject {
     // MARK: Panel
 
     private func togglePanel() {
-        if let panel, panel.isVisible, model.isShown {
+        if let panel, panel.isVisible {
             hidePanel()
         } else if Date().timeIntervalSince(lastHide) > 0.25 {
             showPanel()
@@ -378,13 +367,15 @@ final class MenuBarController: NSObject {
         panel.contentView = hosting
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        // The card draws its own shadow (it animates with the card).
+        // The card draws its own shadow.
         panel.hasShadow = false
         panel.level = .popUpMenu
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
-        panel.animationBehavior = .none
+        // Appears and goes away with the system's own window animation (a quick fade),
+        // not a custom one: the scale-and-blur exit this used to play read as clunky.
+        panel.animationBehavior = .utilityWindow
         panel.appearance = NSAppearance(named: .darkAqua)
         panel.onCancel = { [weak self] in self?.hidePanel() }
         // Clicking anywhere else -- another window, another app, the desktop --
@@ -401,7 +392,6 @@ final class MenuBarController: NSObject {
         self.panel = panel
 
         model.refreshClipboard()
-        model.isShown = false
 
         // Under the status item, centred on it, kept on its screen.
         let size = (panel.contentView as? NSHostingView<MenuBarQuickView>)?.fittingSize ?? panel.frame.size
@@ -418,12 +408,6 @@ final class MenuBarController: NSObject {
         panel.orderFrontRegardless()
         panel.makeKey()
         button.highlight(true)
-        generation += 1
-        let token = generation
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.generation == token else { return }
-            self.model.isShown = true
-        }
     }
 
     /// Where the status item is on screen. Its window's frame is normally exact, but
@@ -442,22 +426,11 @@ final class MenuBarController: NSObject {
         return NSRect(x: mouse.x - 12, y: top - 24, width: 24, height: 24)
     }
 
-    private func hidePanel(animated: Bool = true) {
+    private func hidePanel() {
         guard let panel, panel.isVisible else { return }
         lastHide = Date()
         statusItem?.button?.highlight(false)
-        generation += 1
-        let token = generation
-        model.isShown = false
-        guard animated else {
-            panel.orderOut(nil)
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { [weak self] in
-            // Reopened (or hidden again) during the exit? That newer call owns it.
-            guard let self, self.generation == token else { return }
-            self.panel?.orderOut(nil)
-        }
+        panel.orderOut(nil)
     }
 
     @objc private func panelResignedKey(_ note: Notification) {

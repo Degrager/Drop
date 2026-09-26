@@ -162,6 +162,14 @@ struct PreviewCard<Settings: View>: View {
         // without this the card just hugs its own content and reads
         // narrower than everything else stacked above/below it.
         .frame(maxWidth: .infinity, alignment: .leading)
+        // What the resize facade needs to know about this card's shape.
+        .preference(key: CardFacadeMetricsKey.self, value: CardFacadeMetrics(
+            expanded: expanded,
+            analyzing: isAnalyzing,
+            hasChevron: collapseButtonInHeader && isExpanded != nil && !collapseLocked && !isAnalyzing,
+            hasLink: expanded && !isAnalyzing && !secondaryTitle.isEmpty,
+            reported: true
+        ))
         // While analyzing: smaller corner radius + the Tron-beam active rim
         // (matches the old AnalyzingCard's own glassCard call exactly).
         // Once resolved: back to the normal large radius, no active rim.
@@ -317,6 +325,8 @@ struct PreviewCard<Settings: View>: View {
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
                                 .hidden()
+                                // The facade draws its title bar this long.
+                                .reportsToFacade { metrics, size in metrics.titleWidth = size.width }
                                 .background(
                                     GeometryReader { geo in
                                         Color.clear.preference(key: WidthPreferenceKey.self, value: geo.size.width)

@@ -363,7 +363,7 @@ struct HistoryRow: View {
                         thumbnail
                         VStack(alignment: .leading, spacing: 5) {
                             titleLine
-                            MetaLine(chips: entry.chips)
+                            MetaLine(chips: entry.chips, inCapsule: true)
                             errorLine
                         }
                     }
@@ -374,7 +374,7 @@ struct HistoryRow: View {
                     thumbnail
                     VStack(alignment: .leading, spacing: 5) {
                         titleLine
-                        MetaLine(chips: entry.chips)
+                        MetaLine(chips: entry.chips, inCapsule: true)
                         errorLine
                     }
                     actionButtons

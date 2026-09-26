@@ -270,6 +270,79 @@ extension View {
 final class SizeMemory {
     var width: CGFloat = 0
     var height: CGFloat = 0
+    var metrics = CardFacadeMetrics()
+}
+
+/// What a card's facade needs to know about the real card it stands in for, measured from
+/// the real card while it is laid out normally and remembered by SizeMemory: the facade then
+/// draws a title bar as long as the title and a capsule the size of the metadata's, from
+/// these numbers alone -- nothing real is laid out while the window or sidebar moves.
+struct CardFacadeMetrics: Equatable {
+    /// Intrinsic width of the title text.
+    var titleWidth: CGFloat = 0
+    /// The IN / OUT (or error) capsule.
+    var metaSize: CGSize = .zero
+    var expanded = false
+    var analyzing = false
+    var hasChevron = false
+    /// The link line under the header, shown while a card is expanded.
+    var hasLink = false
+    /// True once the card itself (not just a piece of it) has reported.
+    var reported = false
+}
+
+/// The card's own state (expanded, analyzing, which buttons it has), published by PreviewCard
+/// as a preference. The MEASURED parts (title width, capsule size) do not travel this way:
+/// preferences emitted from inside a GeometryReader never reached the freeze wrapper, so
+/// they are written straight into the card's SizeMemory (see `reportsToFacade`).
+struct CardFacadeMetricsKey: PreferenceKey {
+    static var defaultValue = CardFacadeMetrics()
+    static func reduce(value: inout CardFacadeMetrics, nextValue: () -> CardFacadeMetrics) {
+        let next = nextValue()
+        if next.reported { value = next }
+    }
+}
+
+private struct CardFacadeMemoryKey: EnvironmentKey { static let defaultValue: SizeMemory? = nil }
+
+extension EnvironmentValues {
+    /// The SizeMemory of the card this view belongs to, provided by FrozenDuringResize.
+    var cardFacadeMemory: SizeMemory? {
+        get { self[CardFacadeMemoryKey.self] }
+        set { self[CardFacadeMemoryKey.self] = newValue }
+    }
+}
+
+private struct FacadeReporter: ViewModifier {
+    @Environment(\.cardFacadeMemory) private var memory
+    let apply: (inout CardFacadeMetrics, CGSize) -> Void
+
+    func body(content: Content) -> some View {
+        content.background(GeometryReader { geo in
+            Color.clear
+                .onAppear { report(geo.size) }
+                .onChange(of: geo.size) { _, size in report(size) }
+        })
+    }
+
+    private func report(_ size: CGSize) {
+        // A frozen card is given no room, so what it measures then is not its size.
+        guard let memory, !LiveResizeState.shared.freezesCards, size.width > 1 else { return }
+        apply(&memory.metrics, size)
+    }
+}
+
+extension View {
+    /// Reports this view's size into its card's SizeMemory as one part of the facade metrics
+    /// (a plain write into a class: nothing re-renders because of it).
+    func reportsToFacade(_ apply: @escaping (inout CardFacadeMetrics, CGSize) -> Void) -> some View {
+        modifier(FacadeReporter(apply: apply))
+    }
+
+    /// This view is the card's metadata capsule.
+    func reportsFacadeMeta() -> some View {
+        reportsToFacade { metrics, size in metrics.metaSize = size }
+    }
 }
 
 /// Two children: [0] a real card, [1] its facade. Normally it is exactly the real card
@@ -313,33 +386,123 @@ struct FreezeLayout: Layout {
     }
 }
 
-/// The placeholder drawn in a card's place during a window drag: the card's outline plus
-/// a thumbnail box, a title bar and a metadata bar. Plain shapes only (no material, no
-/// animation), so it is cheap to lay out and draw at any width.
+/// The placeholder drawn in a card's place while the window or sidebar moves: the card's
+/// outline, its thumbnail box, a title bar as long as the title, a capsule the size of the
+/// metadata's, the header buttons, and -- for an expanded card -- placeholder settings rows.
+/// Plain shapes only (no material, no animation, nothing measured), drawn from the sizes
+/// SizeMemory remembered.
+///
+/// Built so that as little as possible changes on each frame of a drag: the left-anchored
+/// pieces (thumbnail, title bar, capsule, link line) have FIXED sizes -- a card's title and
+/// metadata do not change length as the window narrows, and a card narrower than they are
+/// simply clips them -- so SwiftUI never has to touch them again. Only what tracks the card's
+/// width moves: the outline, the header buttons on its right edge, and the settings rows.
 struct CardFacade: View {
+    var metrics: CardFacadeMetrics
+    @Environment(\.contentColumnWidth) private var columnWidth
+
+    /// Same rule as PreviewCard: in a narrow column the capsule moves below the thumbnail row.
+    private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint }
+    private var titleWidth: CGFloat { metrics.titleWidth > 0 ? metrics.titleWidth : 200 }
+    private var metaSize: CGSize { metrics.metaSize.width > 0 ? metrics.metaSize : CGSize(width: 320, height: 36) }
+    private var capsuleBesideTitle: Bool { !narrow && !metrics.analyzing }
+
+    /// Height of the thumbnail / title row, which the header buttons centre on.
+    private var headerHeight: CGFloat {
+        let text: CGFloat = 12 + (metrics.analyzing ? 4 + 9 : (capsuleBesideTitle ? 4 + metaSize.height : 0))
+        return max(CardMetrics.thumbHeight, text)
+    }
+
+    private func button(_ side: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+            .fill(Color.white.opacity(0.06))
+            .frame(width: side, height: side)
+    }
+
+    private var capsule: some View {
+        RoundedRectangle(cornerRadius: 17, style: .continuous)
+            .fill(Color.white.opacity(0.05))
+            .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.75))
+            .frame(width: metaSize.width, height: metaSize.height)
+    }
+
+    /// Everything on the left: fixed sizes, never re-laid-out while the card resizes.
+    private var leading: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .frame(width: CardMetrics.thumbWidth, height: CardMetrics.thumbHeight)
+                VStack(alignment: .leading, spacing: 4) {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.white.opacity(0.09))
+                        .frame(width: metrics.analyzing ? 150 : titleWidth, height: 12)
+                    if metrics.analyzing {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(Color.white.opacity(0.05))
+                            .frame(width: 70, height: 9)
+                    } else if capsuleBesideTitle {
+                        capsule
+                    }
+                }
+            }
+            if narrow, !metrics.analyzing { capsule }
+            if metrics.hasLink {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+                    .frame(width: 300, height: 9)
+            }
+        }
+        .fixedSize()
+    }
+
+    /// The only pieces that stretch with the card.
+    private var settingsRows: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5)
+            ForEach(0..<3, id: \.self) { _ in
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(Color.white.opacity(0.07))
+                        .frame(width: 76, height: 8)
+                        .frame(width: 100, alignment: .leading)
+                    Capsule()
+                        .fill(Color.white.opacity(0.05))
+                        .frame(height: 28)
+                }
+            }
+        }
+    }
+
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
+        let radius = metrics.analyzing ? DesignTokens.Radius.medium : DesignTokens.Radius.large
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         shape
             .fill(Color(white: 0.075))
             .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 0.75))
             .overlay(alignment: .topLeading) {
-                HStack(alignment: .top, spacing: 12) {
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                        .fill(Color.white.opacity(0.06))
-                        .frame(width: CardMetrics.thumbWidth, height: CardMetrics.thumbHeight)
-                    VStack(alignment: .leading, spacing: 8) {
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color.white.opacity(0.09))
-                            .frame(maxWidth: 200)
-                            .frame(height: 11)
-                        Capsule()
-                            .fill(Color.white.opacity(0.05))
-                            .frame(maxWidth: 320)
-                            .frame(height: 28)
-                    }
-                    Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 9) {
+                    leading
+                    if metrics.expanded, !metrics.analyzing { settingsRows }
                 }
-                .padding(16)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
+            }
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 6) {
+                    if metrics.analyzing {
+                        Circle().fill(Color.white.opacity(0.05)).frame(width: 24, height: 24)
+                    } else {
+                        if metrics.hasChevron { button(24) }
+                        button(28)
+                    }
+                }
+                .frame(height: headerHeight)
+                .padding(.top, 10)
+                .padding(.trailing, 12)
             }
             .allowsHitTesting(false)
     }
@@ -402,12 +565,23 @@ struct FrozenDuringResize: ViewModifier {
         let frozen = live.freezesCards
         FreezeLayout(frozen: frozen, memory: memory) {
             content
+                .environment(\.cardFacadeMemory, memory)
                 .opacity(frozen ? 0 : 1)
                 .animation(nil, value: frozen)
                 .allowsHitTesting(!frozen)
-            CardFacade()
+            CardFacade(metrics: memory.metrics)
                 .modifier(FacadeFollowsSidebar(live: sidebarLive, pinned: sidebarPinned, area: LiveResizeState.shared.pageAreaWidth))
                 .opacity(frozen ? 1 : 0)
+        }
+        // The card's own state (expanded, analyzing, buttons). Only while it is really laid
+        // out, like the measurements: a frozen card is given no room.
+        .onPreferenceChange(CardFacadeMetricsKey.self) { state in
+            guard !frozen, state.reported else { return }
+            memory.metrics.expanded = state.expanded
+            memory.metrics.analyzing = state.analyzing
+            memory.metrics.hasChevron = state.hasChevron
+            memory.metrics.hasLink = state.hasLink
+            memory.metrics.reported = true
         }
         // The start is always a cut (nil while freezing): during a drag the window is already
         // moving under the pointer, and a toggle must not dip through an empty frame while a
@@ -955,6 +1129,7 @@ struct MetaLines: View {
             .padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
             .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
+            .reportsFacadeMeta()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -981,6 +1156,7 @@ struct ErrorNote: View {
         .padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
         .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
+        .reportsFacadeMeta()
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

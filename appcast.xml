@@ -3,45 +3,32 @@
     <channel>
         <title>Drop</title>
         <item>
-            <title>1.1</title>
-            <pubDate>Mon, 14 Sep 2026 03:44:43 -0700</pubDate>
-            <sparkle:version>1.1</sparkle:version>
-            <sparkle:shortVersionString>1.1</sparkle:shortVersionString>
+            <title>1.2</title>
+            <pubDate>Fri, 25 Sep 2026 22:45:13 -0700</pubDate>
+            <sparkle:version>1.2</sparkle:version>
+            <sparkle:shortVersionString>1.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[Big changes to the convert tab for an improved workflow and consistency across pages
+            <description><![CDATA[Performance Improvements, Cleaner Design, Bug Fixes and More...
 
 ## What's New
-- Rebuilt the Convert tab around an Analyze + Queue workflow: review one file's settings at a time, then commit it to a reorderable queue
-- Added a Reveal in Finder button to Bottom Card
+- History entries can be removed one at a time, and History and Log rows are more compact, with History metadata in the same capsule as the cards.
+- Sidebar: choose a collapse animation in View > Sidebar Animation, plus tab counters and labels that type in.
+
+## Changed
+- Reworked Convert: Add to Queue moved to the bottom of the analyze card, simpler queue rows with Cancel on the one converting, files convert one at a time, and AV1, VP9 and Opus removed from the pickers.
+- Performance: faster launch, near-zero idle CPU with a card open, and smoother file imports.
+- New window and layout: opens at 1050×800 centered, pages share one content column (max 850pt), the sidebar auto-collapses below 1000pt, and there's a new gradient background.
+- Redesigned cards: metadata in one capsule showing full resolution (like 3840×2160), titles in the app font, simpler option rows with tighter spacing, compact collapsed cards, and smaller Select / Collapse All / Clear All buttons.
+- Redesigned bottom bars: one card with a folder capsule, icon buttons for Browse, Reveal and Auto-open, and no SAVE TO label.
+- Redesigned the sidebar update block: tool pills like the tabs, one status badge on Check for Updates, and Up to Date returns to Check for Updates after a few seconds.
+- Smoother sidebar collapse and expand: no slowdown with cards on screen, and the bars, hints and icons move with it instead of jumping.
 
 ## Fixes
-- The Convert button stays visible at all times, and turns into Cancel All while conversions are running
-- Fixed missing output size/duration chips for source files ffprobe can't fully read
-- Fixed a hover-expand bug where icon buttons flickered at their edge and shifted neighboring buttons (Edit no longer moves Remove)]]></description>
-            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.1.dmg" length="3496764" type="application/octet-stream" sparkle:edSignature="KdKV/zQHAqRrn2GCiazUGlPQP+sAKWXRv6YYggbQLQyYeE5k611yg975pmQ/2HenZvoaCKe0toyIbS/PYQTUAQ=="/>
-            <sparkle:deltas>
-                <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop1.1-1.delta" sparkle:deltaFrom="1" length="595670" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="943248" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="+/1qQJMToGd2DT51GlK+CQM/AEbZTBXgwxKlj4NDNwovVi1y83sClUKyvPFJluvKEC+C/c9Nz6Nfd3q8KcIjBg=="/>
-            </sparkle:deltas>
-        </item>
-        <item>
-            <title>1.0</title>
-            <pubDate>Sun, 13 Sep 2026 11:45:53 -0700</pubDate>
-            <sparkle:version>1</sparkle:version>
-            <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[First public release of Drop — a fast, native macOS app for downloading and converting online video and audio using yt-dlp and ffmpeg.
-
-Features:
-- Paste-and-go downloading with automatic link analysis
-- Quality selection up to 4K, MP4/MKV output, audio-only extraction
-- Smart MP4 codec compatibility (avoids VP9/AV1-in-MP4 playback failures)
-- Menu bar quick paste
-- Download history with one-click redownload/retry
-- Self-updating bundled yt-dlp/ffmpeg
-- In-app self-update via this Releases page]]></description>
-            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.0.dmg" length="3315554" type="application/octet-stream" sparkle:edSignature="R78biLMakgZ7CHriZZOqw6n1+7sjJ0zHEbt2m/Gt03DjJ+2X1RrScAlFtdJLgjZv/0ypyVxj0A+8nWqsbpkSBg=="/>
+- Fixed several Convert bugs: WAV sources failing to convert, Same as Source getting stuck, H.265 files not playing in QuickTime and Final Cut, and MP3 from surround sources.
+- Fixed a brief popup flashing next to the paste field at launch.
+- Fixed chips overlapping in narrow windows and Convert making the window grow taller.]]></description>
+            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.2.dmg" length="3693234" type="application/octet-stream" sparkle:edSignature="rWk/leOXdNV4Qe9zrkcqV6eTuO0XJm12cPOnpZhPjKbMJ84RcDmU8z5aAIVQtHSRbshj5TouaxZVof0Aod75BQ=="/>
         </item>
     </channel>
 </rss>

@@ -22,6 +22,16 @@ enum CardMetrics {
     static let metaCapsuleHeight: CGFloat = 41
 }
 
+/// A control in a card's header, in the button slot beside the remove button. The same
+/// HoverIconButton stays in its slot as a card changes state (collapse -> cancel -> redownload) and
+/// just takes on the next control's icon and colour, so the swap happens in place.
+struct CardControl {
+    var icon: String
+    var color: Color = .white
+    var help: String = ""
+    var action: () -> Void
+}
+
 // MARK: - Shared card chrome
 //
 // Both PreviewCard and CompletedCard share the same header row:
@@ -29,7 +39,7 @@ enum CardMetrics {
 //
 //  PreviewCard   — Download's card for a link's WHOLE life (analyzing, ready with its
 //                  settings, downloading, finished, failed): one card whose contents change
-//                  with the state (see the `capsule`, `inlineStatus`, `trailingControls` and
+//                  with the state (see the `capsule`, `inlineStatus`, `primaryControl` and
 //                  `showsSettings` inputs), never replaced by another view. Also Convert's
 //                  analyze card.
 //
@@ -119,10 +129,10 @@ struct PreviewCard<Settings: View>: View {
     /// A status column between the text and the buttons on the header's trailing side (a
     /// download's progress).
     var inlineStatus: AnyView? = nil
-    /// Replaces the collapse and remove buttons (a download's cancel / reveal / redownload).
-    var trailingControls: AnyView? = nil
-    /// How many buttons `trailingControls` holds (the resize facade draws that many).
-    var trailingControlCount: Int = 0
+    /// Takes the collapse button's slot (a download's cancel, then redownload / retry).
+    var primaryControl: CardControl? = nil
+    /// A control to the left of the primary one (Reveal in Finder, once a download is done).
+    var secondaryControl: CardControl? = nil
     /// False hides everything below the header (belowHeader, settings, footer): a download
     /// under way or finished.
     var showsSettings: Bool = true
@@ -140,11 +150,17 @@ struct PreviewCard<Settings: View>: View {
     /// 0: the bar at its default length. 1: the bar has taken the title's length. 2: the title
     /// itself is showing.
     @State private var titlePhase = 0
+    /// The card has been analyzing and has only just stopped: the metadata that arrives then
+    /// waits for the capsule to finish growing (and the title to appear) before it shows.
+    @State private var sawAnalyzing = false
     // Measured width of the real title Text once it has actual content --
     // the skeleton bar sizes itself to this instead of a fixed guess, so it
     // reads as a placeholder for THIS title rather than a generic bar.
     // Falls back to a reasonable default (below) until a title arrives.
     @State private var measuredTitleWidth: CGFloat = 0
+    /// The title `measuredTitleWidth` was measured for, so the bar never sizes itself to a
+    /// width measured for some other text (the pasted link that stood in for the title).
+    @State private var measuredTitle = ""
 
     private var expanded: Bool { isExpanded?.wrappedValue ?? true }
 
@@ -158,6 +174,14 @@ struct PreviewCard<Settings: View>: View {
                 }
             }
             .task(id: TitleProgress(known: titleKnown, analyzing: isAnalyzing)) { await advanceTitle() }
+            .task(id: isAnalyzing) {
+                if isAnalyzing {
+                    sawAnalyzing = true
+                } else if sawAnalyzing {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    if !Task.isCancelled { sawAnalyzing = false }
+                }
+            }
     }
 
     private struct TitleProgress: Hashable {
@@ -174,6 +198,14 @@ struct PreviewCard<Settings: View>: View {
         guard titleWasPending, titlePhase < 2 else { return }
         // Still waiting for the real title: the bar just stays at its default length.
         guard titleKnown || !isAnalyzing else { return }
+        // The bar takes the title's length, so wait until that length has been measured (a
+        // frame or two) rather than growing toward a stale one.
+        var waited = 0
+        while titleKnown, measuredTitle != title, waited < 15, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            waited += 1
+        }
+        guard !Task.isCancelled else { return }
         if titlePhase < 1 {
             withAnimation(.easeInOut(duration: 0.3)) { titlePhase = 1 }
         }
@@ -252,9 +284,8 @@ struct PreviewCard<Settings: View>: View {
 
     /// Buttons on the header's trailing edge, for the resize facade.
     private var buttonCount: Int {
-        if trailingControls != nil { return trailingControlCount }
         if isAnalyzing { return 1 }
-        return (collapseButtonInHeader && isExpanded != nil && !collapseLocked ? 1 : 0) + 1
+        return (secondaryControl != nil ? 1 : 0) + (primaryTrailingControl != nil ? 1 : 0) + 1
     }
 
     // MARK: Shared header
@@ -293,7 +324,7 @@ struct PreviewCard<Settings: View>: View {
     @ViewBuilder
     private var capsuleSlot: some View {
         if let capsule {
-            PersistentCapsule(content: capsule)
+            PersistentCapsule(content: capsule, revealDelay: sawAnalyzing && !isAnalyzing ? Self.metadataRevealDelay : 0)
         } else if let subtitle {
             subtitle.transition(.blurIn)
         }
@@ -369,7 +400,7 @@ struct PreviewCard<Settings: View>: View {
                         // A Core Animation pulse (a SwiftUI repeatForever here kept the whole
                         // window redrawing at idle), still once the title is showing.
                         PulsingSkeleton(cornerRadius: 4, isPulsing: !titleRevealed)
-                            .frame(width: titlePhase >= 1 ? min(max(measuredTitleWidth, 60), 520) : Self.defaultTitleBarWidth, height: 14)
+                            .frame(width: titlePhase >= 1 ? min(max(measuredTitleWidth, 60), Self.titleMaxWidth) : Self.defaultTitleBarWidth, height: 14)
                             .opacity(titleRevealed ? 0 : 1)
                     }
                     Text(title.isEmpty ? "Fetching title metadata" : title)
@@ -381,6 +412,9 @@ struct PreviewCard<Settings: View>: View {
                         ))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        // The same cap in every state, so the title never has to shorten itself
+                        // when the progress column appears next to it.
+                        .frame(maxWidth: Self.titleMaxWidth, alignment: .leading)
                         .blur(radius: titleRevealed ? 0 : 6)
                         // Measures this Text's own intrinsic single-line width (ignoring the
                         // lineLimit/truncation above, which would clip the reported width to
@@ -395,7 +429,7 @@ struct PreviewCard<Settings: View>: View {
                                 // The facade draws its title bar this long (a default one while
                                 // the title is still the pasted link).
                                 .reportsToFacade { metrics, size in
-                                    metrics.titleWidth = titleKnown ? size.width : Self.defaultTitleBarWidth
+                                    metrics.titleWidth = titleKnown ? min(size.width, Self.titleMaxWidth) : Self.defaultTitleBarWidth
                                 }
                                 .background(
                                     GeometryReader { geo in
@@ -407,6 +441,7 @@ struct PreviewCard<Settings: View>: View {
                             // Only the real title counts: until then the text is the pasted link.
                             guard titleKnown, !title.isEmpty else { return }
                             measuredTitleWidth = width
+                            measuredTitle = title
                         }
                 }
                 .animation(.easeInOut(duration: 0.3), value: titleRevealed)
@@ -427,43 +462,53 @@ struct PreviewCard<Settings: View>: View {
         }
     }
 
-    /// Where the bar waits until the real title is known.
-    private static var defaultTitleBarWidth: CGFloat { 190 }
+    /// Where the title bar waits until the real title is known: short, so it visibly grows to the
+    /// title's length.
+    private static var defaultTitleBarWidth: CGFloat { 120 }
+    /// The most a title is allowed to take, in every state.
+    private static var titleMaxWidth: CGFloat { 420 }
+    /// How long the metadata of a card that was analyzing waits before it shows: the capsule
+    /// grows for 0.3s and the title's text starts to appear just after that.
+    private static var metadataRevealDelay: Double { 0.55 }
 
-    /// The header's buttons: the caller's own while a download is under way or finished, the
-    /// analyze cancel while analyzing, otherwise collapse + remove.
+    /// The control that takes the collapse button's slot: the caller's (a download's cancel /
+    /// redownload / retry), else the collapse chevron itself.
+    private var primaryTrailingControl: CardControl? {
+        if let primaryControl { return primaryControl }
+        guard !isAnalyzing, collapseButtonInHeader, let isExpanded, !collapseLocked else { return nil }
+        return CardControl(icon: isExpanded.wrappedValue ? "chevron.up" : "chevron.down",
+                           help: isExpanded.wrappedValue ? "Hide options" : "Show options") {
+            withAnimation(.easeOut(duration: 0.22)) { isExpanded.wrappedValue.toggle() }
+        }
+    }
+
+    private func controlButton(_ control: CardControl) -> some View {
+        HoverIconButton(icon: control.icon, size: 16, color: control.color, help: control.help) { control.action() }
+    }
+
+    /// The header's buttons, each in its own place: [secondary] [primary] [remove], remove
+    /// always last. Every one is the same 28pt capsule, and the primary one stays put while its
+    /// icon changes (collapse -> cancel -> redownload).
     @ViewBuilder
     private var trailingArea: some View {
-        if let trailingControls {
-            trailingControls.transition(.blurIn)
-        } else if isAnalyzing {
-            // Spinner -> X on hover, in the remove button's own slot.
-            SkeletonCancelButton(action: onCancelAnalyze).transition(.blurIn)
-        } else {
-            // Spaced like the buttons of the header row were before they were grouped here.
-            HStack(spacing: 12) {
-                if let headerAccessory { headerAccessory }
-                if collapseButtonInHeader, let isExpanded, !collapseLocked {
-                    HoverIconButton(
-                        icon: isExpanded.wrappedValue ? "chevron.up" : "chevron.down", size: 12,
-                        help: isExpanded.wrappedValue ? "Hide options" : "Show options"
-                    ) {
-                        withAnimation(.easeOut(duration: 0.22)) { isExpanded.wrappedValue.toggle() }
-                    }
-                }
-
-                // Destructive action -- red tint so its intent is unambiguous at
-                // a glance, matching SkeletonCancelButton's cancel treatment,
-                // instead of blending in with neutral chrome controls.
-                // Only expandable when CollapseToggleButton isn't also
-                // showing right beside it -- that one already has its own
-                // permanent text label, and this one's hover caption would
-                // render right on top of it otherwise.
-                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: !(collapseButtonInHeader && isExpanded != nil && !collapseLocked)) {
+        HStack(spacing: 12) {
+            if let headerAccessory { headerAccessory }
+            if let secondaryControl {
+                controlButton(secondaryControl).transition(.blurIn)
+            }
+            if let primary = primaryTrailingControl {
+                controlButton(primary).transition(.blurIn)
+            }
+            if isAnalyzing {
+                // Spinner -> X on hover, in the remove button's own slot.
+                SkeletonCancelButton(action: onCancelAnalyze).transition(.blurIn)
+            } else {
+                // Destructive action -- red tint so its intent is unambiguous at a glance.
+                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: primaryTrailingControl == nil && secondaryControl == nil) {
                     onRemove()
                 }
+                .transition(.blurIn)
             }
-            .transition(.blurIn)
         }
     }
 }

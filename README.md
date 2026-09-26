@@ -3,10 +3,6 @@
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-0A0A0A?style=flat-square&logo=apple&logoColor=white)](#system-requirements)
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-0A0A0A?style=flat-square)](#system-requirements)
 [![Swift](https://img.shields.io/badge/Swift-SwiftUI-0A0A0A?style=flat-square&logo=swift&logoColor=white)](#how-it-works)
-[![yt-dlp](https://img.shields.io/badge/engine-yt--dlp-0A0A0A?style=flat-square)](https://github.com/yt-dlp/yt-dlp)
-[![FFmpeg](https://img.shields.io/badge/FFmpeg-fetched%20or%20linked%20on%20first%20launch-0A0A0A?style=flat-square)](#first-launch)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-0A0A0A?style=flat-square)](LICENSE)
-
 
 Drop is a fast, native macOS app for downloading and converting online video and audio. Paste a link, pick a quality, and Drop handles the rest — powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [ffmpeg](https://ffmpeg.org/), wrapped in a clean SwiftUI interface with a dark liquid-glass design.
 

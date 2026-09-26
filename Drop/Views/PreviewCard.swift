@@ -296,7 +296,7 @@ struct PreviewCard<Settings: View>: View {
                             }
                     }
                     Text(title.isEmpty ? "Fetching title metadata" : title)
-                        .font(.system(size: isAnalyzing ? 11.5 : 12.5, weight: isAnalyzing ? .medium : .semibold))
+                        .font(.appMono(size: isAnalyzing ? 12 : 13, weight: isAnalyzing ? .medium : .semibold))
                         .foregroundColor(.white.opacity(
                             !canRevealAnalyzed ? 0 :
                             (isAnalyzing ? DesignTokens.Text.secondary :
@@ -313,7 +313,7 @@ struct PreviewCard<Settings: View>: View {
                         // the resolved title will actually render at.
                         .background(
                             Text(title.isEmpty ? "Fetching title metadata" : title)
-                                .font(.system(size: isAnalyzing ? 11.5 : 12.5, weight: isAnalyzing ? .medium : .semibold))
+                                .font(.appMono(size: isAnalyzing ? 12 : 13, weight: isAnalyzing ? .medium : .semibold))
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
                                 .hidden()
@@ -335,7 +335,7 @@ struct PreviewCard<Settings: View>: View {
 
                 if isAnalyzing {
                     Text("Analyzing\u{2026}")
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.appMono(size: 10))
                         .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                         .transition(.blurIn)
                 } else if let sub = subtitle, !narrow {
@@ -467,7 +467,7 @@ struct CollapseToggleButton: View {
                 // (media mode / quality / format settings), and "Hide" is a
                 // shorter, plainer counterpart than "Collapse" once open.
                 Text(isExpanded ? "Hide" : "Options")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.appMono(size: 10, weight: .semibold))
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -624,7 +624,7 @@ struct CompletedCard<Status: View>: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(title)
-                        .font(.system(size: compact ? 11.5 : 12.5, weight: .semibold))
+                        .font(.appMono(size: compact ? 12 : 13, weight: .semibold))
                         .foregroundColor(.white.opacity((showCheckbox && !isSelected) ? DesignTokens.Text.disabled : DesignTokens.Text.primary))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -704,7 +704,7 @@ struct InputOutputRow: View {
     private func column(path: String, chips: [ChipData], alignChips: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(path)
-                .font(.system(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                 .lineLimit(1).truncationMode(.middle)
             if !chips.isEmpty {
                 if alignChips {

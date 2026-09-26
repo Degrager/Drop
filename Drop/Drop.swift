@@ -6577,31 +6577,27 @@ struct ContentView: View {
         // AnalyzingCard/PreviewCard so the queue doesn't jump around as
         // cards resolve.
         if let err = p.analyzeError {
-            HStack(spacing: 10) {
-                Image(systemName: p.analyzeErrorIsForbidden ? "lock.slash" : "exclamationmark.triangle")
-                    .font(.system(size: 18))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    .frame(width: 80, height: 52)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(p.url)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(err)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                        .lineLimit(2)
-                }
-                Spacer()
-                HoverIconButton(icon: "xmark", help: "Remove", expandable: true) {
+            // The real PreviewCard, header only -- the same chrome (corner radius,
+            // padding, thumbnail box, fonts, sidebar-following outline, remove
+            // button) as every other card, so the two can't drift apart. The
+            // link takes the title's place and the reason sits where the IN / OUT
+            // capsule would.
+            PreviewCard(
+                isSelected: false,
+                onToggleSelect: {},
+                onRemove: {
                     withAnimation(.spring(response: 0.3)) { linkPreviews.removeAll { $0.id == p.id } }
-                }
+                },
+                showCheckbox: false,
+                thumbnail: nil,
+                thumbnailPlaceholder: p.analyzeErrorIsForbidden ? "lock.slash" : "exclamationmark.triangle",
+                title: p.url,
+                subtitle: AnyView(ErrorNote(icon: p.analyzeErrorIsForbidden ? "lock.slash" : "exclamationmark.triangle", text: err)),
+                isExpanded: .constant(false),
+                collapseLocked: true
+            ) {
+                EmptyView()
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .glassCard(cornerRadius: DesignTokens.Radius.medium)
-            .transition(.glassPopInOnly)
         } else {
         PreviewCard(
             isSelected: p.isSelected,

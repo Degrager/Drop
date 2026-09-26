@@ -934,6 +934,31 @@ struct MetaLines: View {
     }
 }
 
+/// Why a link could not be analyzed, in the capsule MetaLines uses for IN / OUT --
+/// what a failed Download card shows where a resolved one shows its metadata.
+struct ErrorNote: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Image(systemName: icon)
+                .font(.appMono(size: 9, weight: .semibold))
+                .foregroundColor(DesignTokens.Accent.warning)
+            Text(text)
+                .font(.appMono(size: 10))
+                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 /// A single line of metadata (History rows, Convert queue rows): the same
 /// symbols and text as MetaLines, separated by thin dividers.
 struct MetaLine: View {

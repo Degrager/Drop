@@ -111,9 +111,6 @@ struct PreviewCard<Settings: View>: View {
     // hold before the real thumbnail/title are allowed to show, even if
     // they're already known instantly (e.g. redownloading from History).
     @State private var revealTimerElapsed = false
-    // Drives the slow pulse on the title's redacted skeleton bar while
-    // analyzing -- mirrors the old standalone TitleSkeletonBar's own pulse.
-    @State private var titleSkeletonPulse = false
     // Measured width of the real title Text once it has actual content --
     // the skeleton bar sizes itself to this instead of a fixed guess, so it
     // reads as a placeholder for THIS title rather than a generic bar.
@@ -247,7 +244,7 @@ struct PreviewCard<Settings: View>: View {
                 // during analyze never remounts/re-renders once analyze
                 // finishes -- only the skeleton's opacity animates out from
                 // underneath an image that was already there.
-                ThumbnailSkeleton()
+                ThumbnailSkeleton(isPulsing: !canRevealAnalyzed)
                     .opacity(canRevealAnalyzed ? 0 : 1)
                 if let thumb = thumbnail {
                     // Sharpens out of a blur as the skeleton pulses away
@@ -285,8 +282,10 @@ struct PreviewCard<Settings: View>: View {
                     // so it can share one Text underneath instead of a
                     // second, separately-mounted Text.
                     if isAnalyzing {
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color.white.opacity(titleSkeletonPulse ? DesignTokens.Interactive.fillRest * 1.6 : DesignTokens.Interactive.fillRest * 0.6))
+                        // A Core Animation pulse that stops as soon as the title can be
+                        // revealed (a SwiftUI repeatForever here used to keep the whole window
+                        // redrawing at idle).
+                        PulsingSkeleton(cornerRadius: 4, isPulsing: !canRevealAnalyzed)
                             // Width now matches the real, resolved title's
                             // own measured width (see measuredTitleWidth
                             // below) instead of a fixed guess -- falls back
@@ -297,11 +296,6 @@ struct PreviewCard<Settings: View>: View {
                             .frame(width: min(max(measuredTitleWidth, 120), 260), height: 14)
                             .opacity(canRevealAnalyzed ? 0 : 1)
                             .animation(.easeInOut(duration: 0.25), value: measuredTitleWidth)
-                            .onAppear {
-                                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                                    titleSkeletonPulse = true
-                                }
-                            }
                     }
                     Text(title.isEmpty ? "Fetching title metadata" : title)
                         .font(.appMono(size: isAnalyzing ? 12 : 13, weight: isAnalyzing ? .medium : .semibold))

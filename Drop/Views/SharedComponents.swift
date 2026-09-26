@@ -284,7 +284,10 @@ struct CardFacadeMetrics: Equatable {
     var metaSize: CGSize = .zero
     var expanded = false
     var analyzing = false
-    var hasChevron = false
+    /// Buttons on the header's trailing edge (the last one is the card's main control).
+    var buttonCount = 0
+    /// The progress / status column between the text and the buttons (downloading, finished).
+    var hasStatus = false
     /// The link line under the header, shown while a card is expanded.
     var hasLink = false
     /// True once the card itself (not just a piece of it) has reported.
@@ -450,6 +453,19 @@ struct CardFacade: View {
         .fixedSize()
     }
 
+    /// The progress column of a downloading / finished card: a status line over a slim bar.
+    private var statusColumn: some View {
+        VStack(alignment: .trailing, spacing: 5) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Color.white.opacity(0.07))
+                .frame(width: 70, height: 8)
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+                .frame(width: 128, height: 4)
+        }
+        .frame(width: 128, alignment: .trailing)
+    }
+
     /// The only pieces that stretch with the card.
     private var settingsRows: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -484,9 +500,15 @@ struct CardFacade: View {
                 .clipped()
             }
             .overlay(alignment: .topTrailing) {
-                HStack(spacing: 6) {
-                    if metrics.hasChevron { button(24) }
-                    button(28)
+                HStack(spacing: 10) {
+                    if metrics.hasStatus { statusColumn }
+                    HStack(spacing: 12) {
+                        // The last button is the card's main one (remove, cancel); any before
+                        // it are the smaller controls beside it.
+                        ForEach(0..<max(metrics.buttonCount, 1), id: \.self) { index in
+                            button(index == max(metrics.buttonCount, 1) - 1 ? 28 : 24)
+                        }
+                    }
                 }
                 .frame(height: headerHeight)
                 .padding(.top, 10)
@@ -567,7 +589,8 @@ struct FrozenDuringResize: ViewModifier {
             guard !frozen, state.reported else { return }
             memory.metrics.expanded = state.expanded
             memory.metrics.analyzing = state.analyzing
-            memory.metrics.hasChevron = state.hasChevron
+            memory.metrics.buttonCount = state.buttonCount
+            memory.metrics.hasStatus = state.hasStatus
             memory.metrics.hasLink = state.hasLink
             memory.metrics.reported = true
         }
@@ -1049,6 +1072,23 @@ struct MetaLines: View {
     let input: [ChipData]
     let output: [ChipData]
 
+    var body: some View {
+        if input.isEmpty && output.isEmpty {
+            EmptyView()
+        } else {
+            MetaLinesContent(input: input, output: output)
+                .metaCapsuleChrome()
+                .reportsFacadeMeta()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// The IN / OUT grid itself, with no capsule around it (see PersistentCapsule).
+struct MetaLinesContent: View {
+    let input: [ChipData]
+    let output: [ChipData]
+
     private func tag(_ text: String, out: Bool) -> some View {
         Text(text)
             .font(.appMono(size: 8.5, weight: .bold))
@@ -1100,32 +1140,30 @@ struct MetaLines: View {
     }
 
     var body: some View {
-        if input.isEmpty && output.isEmpty {
-            EmptyView()
-        } else {
-            // The padding is inside the fit test, so the grid is only picked when
-            // it fits with its capsule around it; the capsule hugs its content.
-            ViewThatFits(in: .horizontal) {
-                grid(withTime: true)
-                grid(withTime: false)
-                VStack(alignment: .leading, spacing: 3) {
-                    if !input.isEmpty { wrapped(input, "IN", out: false) }
-                    if !output.isEmpty { wrapped(output, "OUT", out: true) }
-                }
+        ViewThatFits(in: .horizontal) {
+            grid(withTime: true)
+            grid(withTime: false)
+            VStack(alignment: .leading, spacing: 3) {
+                if !input.isEmpty { wrapped(input, "IN", out: false) }
+                if !output.isEmpty { wrapped(output, "OUT", out: true) }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
-            .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
-            .reportsFacadeMeta()
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
 
-/// Why a link could not be analyzed, in the capsule MetaLines uses for IN / OUT --
-/// what a failed Download card shows where a resolved one shows its metadata.
-struct ErrorNote: View {
+extension View {
+    /// The rounded capsule every card's metadata sits in.
+    func metaCapsuleChrome() -> some View {
+        self
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
+    }
+}
+
+/// An icon and a reason, wrapped to two lines at most (the note a card's capsule can hold).
+struct NoteContent: View {
     let icon: String
     let text: String
 
@@ -1140,33 +1178,85 @@ struct ErrorNote: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
-        .reportsFacadeMeta()
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// What the metadata capsule is while a link is still being analyzed: the same rounded
-/// capsule, at the same height, breathing (a Core Animation pulse) with "Analyzing..." in it. The
-/// card therefore has its finished size from the start and does not grow when the real
-/// IN / OUT lines arrive.
-struct AnalyzingCapsule: View {
+/// What a card's metadata capsule holds.
+enum CardCapsule: Equatable {
+    /// The link is still being analyzed.
+    case analyzing
+    /// The source and what will be produced, on two aligned lines.
+    case inOut(input: [ChipData], output: [ChipData])
+    /// What is being produced, on one line (a download under way or finished).
+    case output([ChipData])
+    /// A reason instead of metadata.
+    case note(icon: String, text: String)
+
+    /// Which kind of contents this is. Moving between kinds animates; a change WITHIN a kind
+    /// (the output line following the Video / Audio toggle) does not, as before.
+    enum Kind { case analyzing, inOut, output, note }
+    var kind: Kind {
+        switch self {
+        case .analyzing: return .analyzing
+        case .inOut:     return .inOut
+        case .output:    return .output
+        case .note:      return .note
+        }
+    }
+}
+
+/// The metadata capsule of a card that keeps its state changes in place: ONE capsule that
+/// stays mounted while its contents change (analyzing -> IN / OUT -> the output line), so
+/// it grows or shrinks to fit what is inside it and only the text within is replaced,
+/// instead of one capsule being swapped for another.
+struct PersistentCapsule: View {
+    let content: CardCapsule
+
+    private var isAnalyzing: Bool {
+        if case .analyzing = content { return true }
+        return false
+    }
+
     var body: some View {
         ZStack(alignment: .leading) {
-            PulsingSkeleton(cornerRadius: 17)
-            Text("Analyzing\u{2026}")
-                .font(.appMono(size: 10))
-                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                .padding(.horizontal, 12)
+            switch content {
+            case .analyzing:
+                Text("Analyzing\u{2026}")
+                    .font(.appMono(size: 10))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                    .transition(.blurIn)
+            case .inOut(let input, let output):
+                MetaLinesContent(input: input, output: output)
+                    .transition(.blurIn)
+            case .output(let chips):
+                MetaLineContent(chips: chips)
+                    .transition(.blurIn)
+            case .note(let icon, let text):
+                NoteContent(icon: icon, text: text)
+                    .transition(.blurIn)
+            }
         }
-        .frame(width: 260, height: CardMetrics.metaCapsuleHeight)
-        .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+        // As tall as the two-line capsule while it waits for its contents, so the card has
+        // its size from the start.
+        .frame(minWidth: isAnalyzing ? 260 : nil, minHeight: isAnalyzing ? CardMetrics.metaCapsuleHeight - 12 : nil, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05))
+                // Breathes only while it waits: a Core Animation pulse, gone with the view.
+                if isAnalyzing {
+                    PulsingSkeleton(cornerRadius: 17).transition(.opacity)
+                }
+            }
+        )
         .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
         .reportsFacadeMeta()
+        // Inner: a change of kind animates. Outer: any other change of contents does not (the
+        // outer one is applied first, the inner one after it, so a change of kind still wins).
+        .animation(.easeInOut(duration: 0.3), value: content.kind)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(nil, value: content)
     }
 }
 
@@ -1176,6 +1266,26 @@ struct MetaLine: View {
     let chips: [ChipData]
     /// Draws the line inside the same capsule MetaLines uses (Convert queue rows).
     var inCapsule: Bool = false
+
+    var body: some View {
+        if chips.isEmpty {
+            EmptyView()
+        } else if inCapsule {
+            // The capsule hugs its content.
+            MetaLineContent(chips: chips)
+                .metaCapsuleChrome()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            MetaLineContent(chips: chips)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// One line of metadata chips, wrapping onto more lines only when it has to (no capsule
+/// around it; see MetaLine, PersistentCapsule).
+struct MetaLineContent: View {
+    let chips: [ChipData]
 
     private var separator: some View {
         Rectangle().fill(Color.white.opacity(0.2)).frame(width: 0.75, height: 10)
@@ -1197,24 +1307,9 @@ struct MetaLine: View {
     }
 
     var body: some View {
-        if chips.isEmpty {
-            EmptyView()
-        } else if inCapsule {
-            // The padding is inside the fit test, so the line is only picked when it
-            // fits with its capsule around it; the capsule hugs its content.
-            ViewThatFits(in: .horizontal) {
-                oneLine.padding(.horizontal, 12).padding(.vertical, 6)
-                wrapped.padding(.horizontal, 12).padding(.vertical, 6)
-            }
-            .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
-            .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            ViewThatFits(in: .horizontal) {
-                oneLine
-                wrapped
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        ViewThatFits(in: .horizontal) {
+            oneLine
+            wrapped
         }
     }
 }

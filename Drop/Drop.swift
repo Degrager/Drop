@@ -861,6 +861,7 @@ struct DownloadSnapshot {
     var sourceHeightPx: Int = 0
     var sourceASR: Int = 0
     var sourceABR: Int = 0
+    var sourceContainer: String? = nil
     var sourceVideoCodec: String? = nil
     var sourceAudioCodec: String? = nil
     var sourceChannelLabel: String? = nil
@@ -929,13 +930,16 @@ struct Download: Identifiable {
     /// detection didn't resolve anything, so the row never silently disappears.
     var inputChips: [ChipData] {
         var result: [ChipData] = []
-        if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: snapshot.durationSeconds, raw: snapshot.duration), size: nil) {
+        let sourceSize = sourceSizeLabel(hasVideo: snapshot.hasVideo, sourceMaxHeight: snapshot.sourceMaxHeight,
+                                         fileSizeByQuality: snapshot.fileSizeByQuality, fileSizeBytes: snapshot.fileSizeBytes)
+        if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: snapshot.durationSeconds, raw: snapshot.duration), size: sourceSize) {
             result.append(length)
         }
         if mediaMode == .videoAndAudio {
-            result.append(.video([snapshot.sourceVideoCodec, fullResolutionLabel(width: snapshot.sourceWidthPx, height: snapshot.sourceHeightPx, tierHeight: snapshot.sourceMaxHeight)]) ?? .videoPlaceholder)
+            result.append(.video([snapshot.sourceContainer, snapshot.sourceVideoCodec, fullResolutionLabel(width: snapshot.sourceWidthPx, height: snapshot.sourceHeightPx, tierHeight: snapshot.sourceMaxHeight)]) ?? .videoPlaceholder)
         }
-        if let audio = ChipData.audio([snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, bitrateLabel(kbps: snapshot.sourceABR)]) {
+        // An audio-only source has no video chip to carry its container, so the audio chip does.
+        if let audio = ChipData.audio([snapshot.hasVideo ? nil : snapshot.sourceContainer, snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, bitrateLabel(kbps: snapshot.sourceABR)]) {
             result.append(audio)
         } else if mediaMode == .audioOnly {
             result.append(.audioPlaceholder)
@@ -1037,6 +1041,18 @@ func lengthChipValue(seconds: Int, raw: String) -> String? {
 }
 
 func bitrateLabel(kbps: Int) -> String? { kbps > 0 ? "\(kbps)kbps" : nil }
+
+/// The size of the SOURCE for the input side of a card's metadata: the exact combined
+/// (video + audio) size at the source's top tier when yt-dlp reported one, else the best
+/// stream's approximate size, else "n/a" -- so the size cell is never just blank.
+func sourceSizeLabel(hasVideo: Bool, sourceMaxHeight: Int, fileSizeByQuality: [Int: Int], fileSizeBytes: Int?) -> String {
+    if hasVideo, sourceMaxHeight > 0,
+       let exact = fileSizeByQuality[VideoQuality.highest(for: sourceMaxHeight).maxHeight], exact > 0 {
+        return "~" + formatByteSize(exact)
+    }
+    if let approx = fileSizeBytes, approx > 0 { return "~" + formatByteSize(approx) }
+    return "n/a"
+}
 
 enum DownloadStatus {
     case pending, downloading, done, error, cancelled
@@ -6504,17 +6520,11 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder
+    /// ONE card for a link's whole life -- analyzing, ready, downloading, finished, failed. The
+    /// state only changes what is INSIDE it (see downloadCard); the card itself is never
+    /// replaced by a different view.
     func linkPreviewCard(preview: Binding<LinkPreview>) -> some View {
-        let p = preview.wrappedValue
-
-        if p.downloadID != nil {
-            // ── CompletedCard: download is active / done / failed ─────────
-            downloadCompletedCard(preview: preview)
-        } else {
-            // ── PreviewCard: item waiting, show settings ───────────────────
-            downloadPreviewCard(preview: preview)
-        }
+        downloadCard(preview: preview)
     }
 
     // Shared by downloadPreviewCard and downloadCompletedCard, which used to
@@ -6546,78 +6556,62 @@ struct ContentView: View {
         )
     }
 
-    // MARK: Download — settings card (queued state)
+    // MARK: Download — the card (one card for every state)
 
-    @ViewBuilder
-    func downloadPreviewCard(preview: Binding<LinkPreview>) -> some View {
+    /// The card for a link, whatever state it is in. Analyzing, ready (with its settings),
+    /// downloading, finished and failed are all this one PreviewCard: what changes is what is
+    /// inside it -- the metadata capsule's contents, the title bar, the status column, the
+    /// buttons, the settings -- so a state change adjusts the card instead of swapping it for
+    /// another. (A download's progress sits on the right, like a Convert queue row.)
+    func downloadCard(preview: Binding<LinkPreview>) -> some View {
         let p = preview.wrappedValue
+        let dl: Download? = p.downloadID.flatMap { id in manager.downloads.first(where: { $0.id == id }) }
+        let failedAnalyze = p.analyzeError != nil
+        let analyzing = p.isPending && dl == nil && !failedAnalyze
+        let failureIcon = p.analyzeErrorIsForbidden ? "lock.slash" : "exclamationmark.triangle"
 
-        let thumbView = thumbnailView(urlString: p.thumbnailURL)
-
-        // The IN / OUT metadata (what you have -> what you'll get) sits in the
-        // header, always visible, collapsed or expanded. Switching the media
-        // mode never touches the input side, it only changes what outputChips
-        // reports. The mode toggle itself is the first row of the expanded
-        // settings below.
-        let subtitleWithMeta = AnyView(
-            MetaLines(input: p.inputChips, output: p.outputChips)
-                .animation(nil, value: p.mediaMode)
-        )
-
-        // State 1: Analyzing → State 2: PreviewCard (analyzed, waiting)
-        // Error state: analyze itself failed -- either a detected HTTP 403
-        // at analyze time, or a generic "no usable output" failure (most
-        // often an incompatible/unsupported source) -- shown instead of
-        // silently dropping the card, reusing the same row layout/height as
-        // AnalyzingCard/PreviewCard so the queue doesn't jump around as
-        // cards resolve.
-        if let err = p.analyzeError {
-            // The real PreviewCard, header only -- the same chrome (corner radius,
-            // padding, thumbnail box, fonts, sidebar-following outline, remove
-            // button) as every other card, so the two can't drift apart. The
-            // link takes the title's place and the reason sits where the IN / OUT
-            // capsule would.
-            PreviewCard(
-                isSelected: false,
-                onToggleSelect: {},
-                onRemove: {
-                    withAnimation(.spring(response: 0.3)) { linkPreviews.removeAll { $0.id == p.id } }
-                },
-                showCheckbox: false,
-                thumbnail: nil,
-                thumbnailPlaceholder: p.analyzeErrorIsForbidden ? "lock.slash" : "exclamationmark.triangle",
-                title: p.url,
-                subtitle: AnyView(ErrorNote(icon: p.analyzeErrorIsForbidden ? "lock.slash" : "exclamationmark.triangle", text: err)),
-                isExpanded: .constant(false),
-                collapseLocked: true
-            ) {
-                EmptyView()
+        // What the capsule holds in this state.
+        let capsule: CardCapsule = {
+            if let err = p.analyzeError { return .note(icon: failureIcon, text: err) }
+            if let dl {
+                if dl.status == .error, let message = dl.errorMessage, !message.isEmpty {
+                    return .note(icon: "exclamationmark.triangle", text: message)
+                }
+                return .output(dl.outputChips)
             }
-        } else {
-        PreviewCard(
+            if analyzing { return .analyzing }
+            return .inOut(input: p.inputChips, output: p.outputChips)
+        }()
+        // The pasted link stands in for the title until a real one arrives.
+        let titleKnown = !analyzing || (!p.title.isEmpty && p.title != p.url)
+        let controls = dl.map { downloadControls($0, preview: p) }
+        let cardLocked = isBatchMode || failedAnalyze || dl != nil
+
+        return PreviewCard(
             isSelected: p.isSelected,
             onToggleSelect: {
                 withAnimation(.spring(response: 0.2)) { preview.isSelected.wrappedValue.toggle() }
             },
             onRemove: {
+                // Cancel first if this download is still in flight -- removing the card alone
+                // left yt-dlp/ffmpeg running headless with nothing on screen to show for it,
+                // and no partial-file cleanup (see manager.cancel(download:)) ever ran.
+                if let dl, dl.status == .downloading { manager.cancel(download: dl) }
                 withAnimation(.spring(response: 0.3)) { linkPreviews.removeAll { $0.id == p.id } }
             },
-            showCheckbox: isBatchMode,
-            thumbnail: thumbView,
+            showCheckbox: isBatchMode && !failedAnalyze,
+            thumbnail: failedAnalyze ? nil : thumbnailView(urlString: p.thumbnailURL),
+            thumbnailPlaceholder: failedAnalyze ? failureIcon : "doc",
             title: p.title,
-            secondaryTitle: p.url,
-            subtitle: subtitleWithMeta, // IN / OUT lines -- always visible, even collapsed
-            isExpanded: isBatchMode ? .constant(false) : Binding(
+            // The link and the path are only shown while the settings are (expanded).
+            secondaryTitle: dl == nil ? p.url : "",
+            belowHeader: dl.flatMap { downloadErrorDetails($0) },
+            isExpanded: cardLocked ? .constant(false) : Binding(
                 get: { preview.wrappedValue.isExpanded },
                 set: { preview.isExpanded.wrappedValue = $0 }
             ),
-            collapseLocked: isBatchMode,
-            // While still analyzing, this same PreviewCard instance renders
-            // the skeleton/spinner header instead of real content -- no more
-            // separate AnalyzingCard view swapped in via if/else, so the
-            // card updates in place (expands/fills in) once analyze
-            // completes instead of being removed and replaced.
-            isAnalyzing: p.isPending,
+            collapseLocked: cardLocked,
+            isAnalyzing: analyzing,
             onCancelAnalyze: {
                 // Matched by this card's own id, not its url -- pasting the
                 // same link multiple times at once creates several pending
@@ -6639,7 +6633,13 @@ struct ContentView: View {
                 withAnimation(.spring(response: 0.35)) {
                     linkPreviews.removeAll { $0.id == p.id }
                 }
-            }
+            },
+            capsule: capsule,
+            titleKnown: titleKnown,
+            inlineStatus: dl.map { downloadStatusColumn($0) },
+            trailingControls: controls?.view,
+            trailingControlCount: controls?.count ?? 0,
+            showsSettings: dl == nil && !failedAnalyze
         ) {
             // Expanded settings, as labelled rows shared with Convert's card:
             // DOWNLOAD AS (the Video+Audio / Audio Only toggle), then FORMAT
@@ -6690,8 +6690,6 @@ struct ContentView: View {
                 .animation(.easeOut(duration: 0.2), value: p.mediaMode)
             }
         }
-        .transition(.glassPopInOnly)
-        } // end else (not pending)
     }
 
     // MARK: Download — segmented option builders
@@ -6798,189 +6796,130 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Download — completed card (active/done/failed state)
+    // MARK: Download — what the one card shows once a download exists
 
-    @ViewBuilder
-    func downloadCompletedCard(preview: Binding<LinkPreview>) -> some View {
-        let p = preview.wrappedValue
-        if let did = p.downloadID,
-           let dl = manager.downloads.first(where: { $0.id == did }) {
-
-        let thumbView = thumbnailView(urlString: p.thumbnailURL)
-
-        // ORIGINAL link/file info chips (length + Source codec/resolution) —
-        // unchanged, reads the source file. Matches Convert's input-row chip
-        // treatment exactly.
-        let originalInfoChips: [ChipData] = dl.inputChips
-
-        // Output info: destination path (directory + final filename once
-        // known) + output info chips (length/size/format-quality).
-        let outputInfoChips: [ChipData] = dl.outputChips
-        let outputPath: String = dl.outputFilePath ?? dl.outputDir
-
-        // Status icon + pill — lives in the actions row now, to the left of
-        // the Cancel/Reveal/Redownload/Retry buttons, not in the header.
-        let statusView = AnyView(
-            HStack(spacing: 6) {
-                Group {
-                    switch dl.status {
-                    case .done:      Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                    case .error:     Image(systemName: "xmark.circle.fill").foregroundColor(.red)
-                    case .cancelled: Image(systemName: "slash.circle.fill").foregroundColor(.orange)
-                    case .downloading, .pending:
-                        Image(systemName: "arrow.down.circle").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                    }
-                }.font(.appMono(size: 14))
-
-                StatusBadge(status: dl.status)
+    /// The progress column on the right of a downloading / finished card, like a Convert queue
+    /// row's: the status (percentage and time left while it runs), and a slim bar beneath it
+    /// while it is in flight.
+    private func downloadStatusColumn(_ dl: Download) -> AnyView {
+        let label: String = {
+            switch dl.status {
+            case .pending:     return "Waiting"
+            case .downloading:
+                if !dl.etaText.isEmpty { return dl.etaText }
+                return dl.activityText.isEmpty ? "Downloading" : dl.activityText
+            case .done:        return "Done"
+            case .error:       return "Failed"
+            case .cancelled:   return "Cancelled"
             }
-        )
-
-        // Combined subtitle: input info (URL + chips) on the left, a big
-        // centered arrow, then output info (destination path + chips) on
-        // the right — both halves live in the SAME header row now, at the
-        // same visual level, instead of output info being its own row
-        // below the divider.
-        let subtitleWithURL = AnyView(
-            VStack(alignment: .leading, spacing: 4) {
-                MetaLines(input: originalInfoChips, output: outputInfoChips)
-                Text(outputPath)
-                    .font(.appMono(size: 10))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    .lineLimit(1).truncationMode(.middle)
+        }()
+        let color: Color = {
+            switch dl.status {
+            case .pending:     return .white.opacity(DesignTokens.Text.tertiary)
+            case .downloading: return .white
+            case .done:        return .green
+            case .error:       return .red
+            case .cancelled:   return .orange
             }
-        )
-
-        CompletedCard(
-            isSelected: p.isSelected,
-            onToggleSelect: {
-                withAnimation(.spring(response: 0.2)) { preview.isSelected.wrappedValue.toggle() }
-            },
-            onRemove: {
-                // Cancel first if this download is still in flight -- removing
-                // the card alone left yt-dlp/ffmpeg running headless with
-                // nothing on screen to show for it, and no partial-file
-                // cleanup (see manager.cancel(download:)) ever ran.
-                if dl.status == .downloading {
-                    manager.cancel(download: dl)
-                }
-                withAnimation(.spring(response: 0.3)) { linkPreviews.removeAll { $0.id == p.id } }
-            },
-            showCheckbox: isBatchMode,
-            thumbnail: thumbView,
-            title: p.title,
-            secondaryTitle: p.url,
-            subtitle: subtitleWithURL
-        ) {
-
-            // Actions row — buttons stretch to fill the full card width (each
-            // GlassButton defaults to maxWidth: .infinity), so this HStack
-            // itself must also claim the full width. A leading Spacer() here
-            // previously ate the extra space and left a gap on the left with
-            // the buttons hugging the right edge instead of spanning the card.
-            HStack(spacing: 10) {
-                    statusView
-                    if dl.status == .downloading {
-                        // No hover growth -- this pill sits right at the card's
-                        // trailing edge, and the default hover scale-up clipped
-                        // its right side against the card boundary.
-                        GlassButton(label: "Cancel", icon: "stop.fill", tint: .red, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
-                            manager.cancel(download: dl)
-                        }
-                    }
-                    // No hover growth on any of these -- same trailing-edge
-                    // pill row as Cancel above, same clipping issue against
-                    // the card boundary if the default hover scale-up is
-                    // left on.
-                    if dl.status == .cancelled {
-                        restoreActionButton(label: "Redownload", tint: DesignTokens.Accent.warning, dl: dl, replacingID: p.id)
-                    }
-                    if dl.status == .error {
-                        restoreActionButton(label: "Retry", tint: DesignTokens.Accent.danger, dl: dl, replacingID: p.id)
-                    }
-                    if dl.status == .done {
-                        GlassButton(label: "Reveal in Finder", icon: "folder.fill", tint: DesignTokens.Accent.primary, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
-                            if let filePath = dl.outputFilePath {
-                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: filePath)])
-                            } else {
-                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dl.outputDir)])
-                            }
-                        }
-                        restoreActionButton(label: "Redownload", tint: DesignTokens.Accent.warning, dl: dl, replacingID: p.id)
-                    }
-            }
-            .frame(maxWidth: .infinity)
-
-            // Progress bar (downloading only)
-            if dl.status == .pending {
+        }()
+        return AnyView(
+            VStack(alignment: .trailing, spacing: 5) {
                 HStack(spacing: 5) {
-                    Image(systemName: "clock").font(.appMono(size: 10))
-                    Text("Waiting to download\u{2026}").font(.appMono(size: 11))
-                }
-                .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                // Dim, slow shimmer -- visually distinct from the brighter/
-                // faster one used for "downloading, no % yet" below, so
-                // waiting reads as a calmer pre-download state rather than
-                // looking like it's already actively transferring.
-                GeometryReader { geo in
-                    ShimmerBar(width: geo.size.width, color: .white, glow: false, duration: 1.8)
-                }
-                .frame(height: 4)
-            } else if dl.status == .downloading {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(DesignTokens.Interactive.fillRest)).frame(height: 4)
-                        if let pct = dl.progress, pct > 0 {
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(LinearGradient(colors: [Color.green.opacity(0.6), Color.green.opacity(1.0)],
-                                                     startPoint: .leading, endPoint: .trailing))
-                                .frame(width: geo.size.width * CGFloat(pct), height: 4)
-                                .shadow(color: Color.green.opacity(0.8), radius: 4)
-                                .shadow(color: Color.green.opacity(0.4), radius: 8)
-                                .animation(.easeOut(duration: 0.25), value: pct)
-                        }
-                        // Pre-download gap (process launching / URL still
-                        // resolving): the bar itself just stays at its dim
-                        // resting fill -- the bouncing dots below, in the
-                        // same spot the real percentage label will occupy,
-                        // carry the "actively working" signal instead.
+                    switch dl.status {
+                    case .done:        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                    case .error:       Image(systemName: "xmark.circle.fill").foregroundColor(.red)
+                    case .cancelled:   Image(systemName: "slash.circle.fill").foregroundColor(.orange)
+                    case .pending:     Image(systemName: "clock").foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                    case .downloading: Image(systemName: "arrow.down.circle").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
                     }
+                    Text(label)
+                        .foregroundColor(color)
+                        .lineLimit(1)
                 }
-                .frame(height: 4)
-                if !dl.activityText.isEmpty || !dl.etaText.isEmpty {
-                    let hasRealProgress = (dl.progress ?? 0) > 0
-                    HStack(spacing: 6) {
-                        if let pct = dl.progress, pct == 0 {
-                            BouncingDots()
-                        }
-                        if !dl.etaText.isEmpty {
-                            // Once there's a real percentage, style it to match
-                            // the bouncing dots / progress fill -- green with
-                            // a soft glow -- instead of the dim disabled tint.
-                            Text(dl.etaText)
-                                .font(.appMono(size: 10, design: .monospaced))
-                                .foregroundColor(hasRealProgress ? Color.green.opacity(0.95) : .white.opacity(DesignTokens.Text.disabled))
-                                .shadow(color: hasRealProgress ? Color.green.opacity(0.6) : .clear, radius: 4)
-                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
-                                .transition(.blurIn)
-                        }
-                        if !dl.activityText.isEmpty {
-                            Text(dl.activityText)
-                                .font(.appMono(size: 10, design: .monospaced))
-                                .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                                .lineLimit(1).truncationMode(.tail)
-                                .transition(.blurIn)
-                        }
-                        Spacer(minLength: 4)
-                    }
+                .font(.appMono(size: 10, weight: .semibold))
+                if dl.status == .pending || dl.status == .downloading {
+                    downloadProgressBar(dl)
                 }
             }
+            .frame(width: 128, alignment: .trailing)
+        )
+    }
 
-            // Error details
-            if dl.status == .error {
-                if let err = dl.errorMessage {
-                    Text(err).font(.appMono(size: 11)).foregroundColor(.red.opacity(0.75)).lineLimit(2)
+    /// Filled and animated once a percentage is known, a shimmer before that (dim while waiting
+    /// to start, green once it is transferring).
+    private func downloadProgressBar(_ dl: Download) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(DesignTokens.Interactive.fillRest)).frame(height: 4)
+                if dl.status == .pending {
+                    ShimmerBar(width: geo.size.width, color: .white, glow: false, duration: 1.8)
+                } else if let pct = dl.progress, pct > 0 {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(LinearGradient(colors: [Color.green.opacity(0.6), Color.green.opacity(1.0)],
+                                             startPoint: .leading, endPoint: .trailing))
+                        .frame(width: geo.size.width * CGFloat(pct), height: 4)
+                        .shadow(color: Color.green.opacity(0.6), radius: 4)
+                        .animation(.easeOut(duration: 0.25), value: pct)
+                } else {
+                    ShimmerBar(width: geo.size.width, color: .green, glow: true, duration: 1.2)
                 }
+            }
+        }
+        .frame(height: 4)
+    }
+
+    /// The buttons a download has, as icon capsules in the header's trailing corner: Cancel
+    /// while it runs, Reveal in Finder and Redownload when it is done, Redownload / Retry when it
+    /// was cancelled or failed -- and Remove, always last.
+    private func downloadControls(_ dl: Download, preview p: LinkPreview) -> (view: AnyView, count: Int) {
+        var count = 1
+        let view = AnyView(
+            HStack(spacing: 12) {
+                switch dl.status {
+                case .pending, .downloading:
+                    HoverIconButton(icon: "stop.circle.fill", size: 16, color: .orange, help: "Cancel") {
+                        manager.cancel(download: dl)
+                    }
+                case .done:
+                    HoverIconButton(icon: "folder.fill", size: 14, color: DesignTokens.Accent.primaryLight, help: "Reveal in Finder") {
+                        if let filePath = dl.outputFilePath {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: filePath)])
+                        } else {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dl.outputDir)])
+                        }
+                    }
+                    HoverIconButton(icon: "arrow.uturn.down", size: 14, color: DesignTokens.Accent.warning, help: "Redownload") {
+                        restorePreviewCard(from: dl, replacing: p.id)
+                    }
+                case .cancelled:
+                    HoverIconButton(icon: "arrow.uturn.down", size: 14, color: DesignTokens.Accent.warning, help: "Redownload") {
+                        restorePreviewCard(from: dl, replacing: p.id)
+                    }
+                case .error:
+                    HoverIconButton(icon: "arrow.uturn.down", size: 14, color: DesignTokens.Accent.danger, help: "Retry") {
+                        restorePreviewCard(from: dl, replacing: p.id)
+                    }
+                }
+                // Removing an in-flight download cancels it first (see downloadCard's onRemove).
+                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove") {
+                    if dl.status == .downloading { manager.cancel(download: dl) }
+                    withAnimation(.spring(response: 0.3)) { linkPreviews.removeAll { $0.id == p.id } }
+                }
+            }
+        )
+        switch dl.status {
+        case .done: count = 3
+        default:    count = 2
+        }
+        return (view, count)
+    }
+
+    /// A failed download's hint and its fix button, below the header (the reason itself is in
+    /// the capsule).
+    private func downloadErrorDetails(_ dl: Download) -> AnyView? {
+        guard dl.status == .error, dl.fixHint != nil || dl.fixAction != .none else { return nil }
+        return AnyView(
+            VStack(alignment: .leading, spacing: 8) {
                 if let hint = dl.fixHint {
                     HStack(alignment: .top, spacing: 5) {
                         Image(systemName: "lightbulb.fill").font(.appMono(size: 10)).foregroundColor(.yellow.opacity(0.8))
@@ -7010,8 +6949,8 @@ struct ContentView: View {
                     }.buttonStyle(.plain)
                 }
             }
-        }
-        } // end if let did
+            .frame(maxWidth: .infinity, alignment: .leading)
+        )
     }
 
     func fixActionLabel(_ action: FixAction) -> String {
@@ -7060,6 +6999,7 @@ struct ContentView: View {
         var sourceHeightPx: Int = 0
         var sourceASR: Int = 0              // audio sample rate in Hz (0 = unknown)
         var sourceABR: Int = 0              // audio bitrate in kbps (0 = unknown)
+        var sourceContainer: String? = nil   // e.g. "WEBM", "MP4", "M4A": the container the source stream is hosted in
         var sourceVideoCodec: String? = nil  // e.g. "AV1", "H264" (nil = unknown/audio-only)
         var sourceAudioCodec: String? = nil  // e.g. "OPUS", "AAC"
         var sourceChannelLabel: String? = nil // e.g. "2.0", "5.1"
@@ -7112,17 +7052,20 @@ struct ContentView: View {
         var inputChips: [ChipData] {
             var result: [ChipData] = []
             let playlistSize = isPlaylist ? "\(playlistCount) tracks" : nil
-            if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: durationSeconds, raw: duration), size: playlistSize) {
+            let size = playlistSize ?? sourceSizeLabel(hasVideo: hasVideo, sourceMaxHeight: sourceMaxHeight,
+                                                        fileSizeByQuality: fileSizeByQuality, fileSizeBytes: fileSizeBytes)
+            if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: durationSeconds, raw: duration), size: size) {
                 result.append(length)
             }
             // Blue: source video info (codec + resolution) — gated on hasVideo
             // (the source's actual capability), NOT mediaMode (the user's
             // current output choice).
             if hasVideo {
-                result.append(.video([sourceVideoCodec, fullResolutionLabel(width: sourceWidthPx, height: sourceHeightPx, tierHeight: sourceMaxHeight)]) ?? .videoPlaceholder)
+                result.append(.video([sourceContainer, sourceVideoCodec, fullResolutionLabel(width: sourceWidthPx, height: sourceHeightPx, tierHeight: sourceMaxHeight)]) ?? .videoPlaceholder)
             }
-            // Green: source audio info (codec + channels + bitrate)
-            if let audio = ChipData.audio([sourceAudioCodec, sourceChannelLabel, bitrateLabel(kbps: sourceABR)]) {
+            // Green: source audio info (codec + channels + bitrate); an audio-only source carries
+            // its container here, since it has no video chip to.
+            if let audio = ChipData.audio([hasVideo ? nil : sourceContainer, sourceAudioCodec, sourceChannelLabel, bitrateLabel(kbps: sourceABR)]) {
                 result.append(audio)
             } else if !hasVideo {
                 result.append(.audioPlaceholder)
@@ -7397,7 +7340,7 @@ struct ContentView: View {
                     // Line 1: playlist_count (NA for single video)
                     "--print", "%(playlist_count)s",
                     // Line 2: metadata
-                    "--print", "%(title)s|||%(vcodec)s|||%(width)s|||%(thumbnail)s|||%(duration_string)s|||%(duration)s|||%(filesize_approx)s|||%(height)s|||%(asr)s|||%(abr)s|||%(acodec)s|||%(audio_channels)s",
+                    "--print", "%(title)s|||%(vcodec)s|||%(width)s|||%(thumbnail)s|||%(duration_string)s|||%(duration)s|||%(filesize_approx)s|||%(height)s|||%(asr)s|||%(abr)s|||%(acodec)s|||%(audio_channels)s|||%(ext)s",
                     // Line 3: formats JSON for per-resolution file size
                     "--print", "%(formats.:.{height,filesize,filesize_approx,tbr,vbr,abr,acodec,vcodec,audio_channels})j",
                     "--playlist-items", "1",  // only process first item — gets count + metadata fast
@@ -7472,7 +7415,7 @@ struct ContentView: View {
                         "--yes-playlist", "--playlist-items", "1",
                         "--format", "bestaudio",
                         "--print", "%(playlist_count)s",
-                        "--print", "%(title)s|||none|||0|||%(thumbnail)s|||%(duration_string)s|||%(duration)s|||%(filesize_approx)s|||0|||%(asr)s|||%(abr)s|||%(acodec)s|||%(audio_channels)s",
+                        "--print", "%(title)s|||none|||0|||%(thumbnail)s|||%(duration_string)s|||%(duration)s|||%(filesize_approx)s|||0|||%(asr)s|||%(abr)s|||%(acodec)s|||%(audio_channels)s|||%(ext)s",
                         "--impersonate", "chrome",
                         "--write-info-json",
                         "-o", infoJSONCachePath
@@ -7554,6 +7497,9 @@ struct ContentView: View {
                     let abrRaw       = parts.count > 9 ? parts[9].trimmingCharacters(in: .whitespacesAndNewlines) : "0"
                     let acodecRaw    = parts.count > 10 ? parts[10].trimmingCharacters(in: .whitespacesAndNewlines) : "none"
                     let channelsRaw  = parts.count > 11 ? parts[11].trimmingCharacters(in: .whitespacesAndNewlines) : "0"
+                    // The container the source stream is hosted in (WEBM, MP4, M4A...): what the
+                    // input side of the metadata shows, like the output side shows its format.
+                    let extRaw       = parts.count > 12 ? parts[12].trimmingCharacters(in: .whitespacesAndNewlines) : ""
                     let fileSizeB    = Int(fileSizeRaw)  // yt-dlp returns bytes as int string, "NA" if unknown
                     let rawHeight    = Int(heightRaw) ?? 0
                     let sourceW      = Int(width) ?? 0
@@ -7624,6 +7570,7 @@ struct ContentView: View {
                     lp.sourceASR = sourceASR
                     lp.sourceABR = sourceABR
                     lp.sourceVideoCodec = hasVideo ? normVideoCodec : nil
+                    lp.sourceContainer = ["", "NA", "none"].contains(extRaw) ? nil : extRaw.uppercased()
                     // sourceAudioCodec / sourceChannelLabel assigned after formats JSON parsing
                     // below, since the real values come from the best audio-only stream there.
                     // Set per-format quality based on source capabilities
@@ -7914,6 +7861,7 @@ struct ContentView: View {
                     sourceHeightPx:   preview.sourceHeightPx,
                     sourceASR:        preview.sourceASR,
                     sourceABR:        preview.sourceABR,
+                    sourceContainer:  preview.sourceContainer,
                     sourceVideoCodec: preview.sourceVideoCodec,
                     sourceAudioCodec: preview.sourceAudioCodec,
                     sourceChannelLabel: preview.sourceChannelLabel,
@@ -7932,16 +7880,6 @@ struct ContentView: View {
             .filter { !$0.isEmpty }
         guard !urls.isEmpty else { return }
         manager.add(urls: urls, config: config)
-    }
-
-    /// Shared shape for Cancelled's "Redownload", Error's "Retry", and Done's
-    /// "Redownload" -- same icon/action/no-hover-growth treatment, only the
-    /// label and tint differ per status.
-    @ViewBuilder
-    private func restoreActionButton(label: String, tint: Color, dl: Download, replacingID: UUID) -> some View {
-        GlassButton(label: label, icon: "arrow.uturn.down", tint: tint, scaleOverride: (hover: 1.0, press: DesignTokens.Interactive.scalePress)) {
-            restorePreviewCard(from: dl, replacing: replacingID)
-        }
     }
 
     /// Restore a full PreviewCard from a Download's stored analyze snapshot.
@@ -7964,6 +7902,7 @@ struct ContentView: View {
         lp.sourceHeightPx    = snap.sourceHeightPx
         lp.sourceASR         = snap.sourceASR
         lp.sourceABR         = snap.sourceABR
+        lp.sourceContainer   = snap.sourceContainer
         lp.sourceVideoCodec  = snap.sourceVideoCodec
         lp.sourceAudioCodec  = snap.sourceAudioCodec
         lp.sourceChannelLabel = snap.sourceChannelLabel
@@ -7977,6 +7916,8 @@ struct ContentView: View {
         withAnimation(.spring(response: 0.25)) {
             manager.downloads.removeAll { $0.id == dl.id }
             if let idx = linkPreviews.firstIndex(where: { $0.id == oldID }) {
+                // The same card (same id) goes back to its ready state, rather than being replaced.
+                lp.id = oldID
                 linkPreviews[idx] = lp
             } else {
                 linkPreviews.append(lp)

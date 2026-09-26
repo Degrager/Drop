@@ -1,16 +1,13 @@
 # Drop
 
-Drop is a fast, native macOS app for downloading and converting online video and audio. Paste a link, pick a quality, and Drop handles the rest — powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [ffmpeg](https://ffmpeg.org/) under the hood, wrapped in a clean SwiftUI interface with a black frosted-glass design.
+Drop is a fast, native macOS app for downloading and converting online video and audio. Paste a link, pick a quality, and Drop handles the rest — powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [ffmpeg](https://ffmpeg.org/), wrapped in a clean SwiftUI interface with a dark liquid-glass design.
 
 ## Features
 
-- **Paste-and-go downloading** — paste any supported link (YouTube and hundreds of other sites via yt-dlp) and Drop analyzes it automatically.
-- **Quality and format selection** — choose resolution up to 4K, pick between MP4 and MKV output, and select audio-only extraction when you just want the sound.
-- **Smart format compatibility** — Drop's MP4 pipeline automatically avoids VP9/AV1-in-MP4 combinations that fail to play back in QuickTime, falling back to MKV when a source needs a codec MP4 can't reliably carry.
+- **Paste-and-go downloading** — paste any supported link (YouTube, Soundcloud, and Vimeo via yt-dlp), choose your quality and format, and download.
 - **Menu bar quick access** — paste a link from anywhere and Drop picks it up without stealing focus from what you're doing.
 - **Download history** — every past download is tracked with one-click redownload/retry that reuses the original analyzed link, no need to re-paste.
-- **Bundled, self-updating tools** — yt-dlp and ffmpeg are bundled and kept up to date automatically, so you always get the latest site support and codec fixes without manual maintenance.
-- **In-app updates** — Drop checks GitHub Releases for new versions and can update itself in place from the same panel that manages the yt-dlp/ffmpeg tooling.
+- **In-app updates** — Drop can detect latest GitHub Releases and can update itself, it also keeps yt-dlp and ffmpeg updated, all integrated directly into the app.
 
 ## Requirements
 

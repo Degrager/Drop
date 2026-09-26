@@ -4458,6 +4458,12 @@ struct CheckForUpdatesButton: View {
     var disabledUntilSetup: Bool = false
     let action: () -> Void
     @Environment(\.isCompactSidebar) private var compact
+    /// What the label and tint actually show. `isUpToDate` stays true until the next check
+    /// starts, so on its own "Up to Date" would sit there indefinitely; this follows it for
+    /// a few seconds and then lets the button rest back on "Check for Updates" (the green
+    /// check badge, driven by `allUpToDate`, keeps saying everything is current).
+    @State private var upToDateShown = false
+    private static let upToDateHold: UInt64 = 4_000_000_000
 
     /// The badge: nothing while a check runs.
     private var statusBadge: (icon: String, color: Color)? {
@@ -4469,7 +4475,7 @@ struct CheckForUpdatesButton: View {
 
     private var accentColor: Color {
         if hasUpdate { return .orange }
-        if isUpToDate { return DesignTokens.Accent.success }
+        if upToDateShown { return DesignTokens.Accent.success }
         return .white
     }
     private var tint: Color {
@@ -4477,7 +4483,7 @@ struct CheckForUpdatesButton: View {
     }
     private var isDisabled: Bool { isChecking || disabledUntilSetup }
     private var labelText: String {
-        isChecking ? "Checking…" : (disabledUntilSetup ? "Tools Missing" : (hasUpdate ? "Update Available" : (isUpToDate ? "Up to Date" : "Check for Updates")))
+        isChecking ? "Checking…" : (disabledUntilSetup ? "Tools Missing" : (hasUpdate ? "Update Available" : (upToDateShown ? "Up to Date" : "Check for Updates")))
     }
     var body: some View {
         // Sits straight on the sidebar now (no card behind it), so its rim is a
@@ -4523,6 +4529,15 @@ struct CheckForUpdatesButton: View {
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .clipped()
+        }
+        // Shows "Up to Date" for a few seconds after a check confirms it, then rests
+        // back on "Check for Updates". Restarts (and cancels the wait) whenever a new
+        // check flips `isUpToDate`.
+        .task(id: isUpToDate) {
+            upToDateShown = isUpToDate
+            guard isUpToDate else { return }
+            try? await Task.sleep(nanoseconds: Self.upToDateHold)
+            if !Task.isCancelled { upToDateShown = false }
         }
         // Same Tron-style light beam as the cards' rims while real work is in
         // progress; RimBeam clamps its radius to min(width, height)/2, so a

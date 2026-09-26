@@ -4659,12 +4659,6 @@ struct CheckForUpdatesButton: View {
             try? await Task.sleep(nanoseconds: Self.upToDateHold)
             if !Task.isCancelled { upToDateShown = false }
         }
-        // Same Tron-style light beam as the cards' rims while real work is in
-        // progress; RimBeam clamps its radius to min(width, height)/2, so a
-        // large constant traces a true capsule at any width.
-        .overlay {
-            if isChecking { RimBeam(cornerRadius: 999) }
-        }
         // Collapsed, the badge is gone with the label -- a small dot in the
         // corner says the same thing, exactly as on the tab buttons.
         .overlay(alignment: .topTrailing) {

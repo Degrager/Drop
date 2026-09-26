@@ -394,8 +394,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
-				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = dev;
+				CURRENT_PROJECT_VERSION = 999999;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zanderriley.drop.dev;
 				PRODUCT_NAME = Drop;
 				SDKROOT = macosx;
@@ -430,8 +430,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0;
-				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = dev;
+				CURRENT_PROJECT_VERSION = 999999;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zanderriley.drop;
 				PRODUCT_NAME = Drop;
 				SDKROOT = macosx;

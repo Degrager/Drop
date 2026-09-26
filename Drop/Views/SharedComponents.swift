@@ -407,7 +407,7 @@ struct CardFacade: View {
     /// Same rule as PreviewCard: in a narrow column the capsule moves below the thumbnail row.
     private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint }
     private var titleWidth: CGFloat { metrics.titleWidth > 0 ? metrics.titleWidth : 200 }
-    private var metaSize: CGSize { metrics.metaSize.width > 0 ? metrics.metaSize : CGSize(width: 320, height: 36) }
+    private var metaSize: CGSize { metrics.metaSize.width > 0 ? metrics.metaSize : CGSize(width: 320, height: 26) }
     private var capsuleBesideTitle: Bool { !narrow }
 
     /// Height of the thumbnail / title row, which the header buttons centre on.
@@ -503,10 +503,9 @@ struct CardFacade: View {
                 HStack(spacing: 10) {
                     if metrics.hasStatus { statusColumn }
                     HStack(spacing: 12) {
-                        // The last button is the card's main one (remove, cancel); any before
-                        // it are the smaller controls beside it.
-                        ForEach(0..<max(metrics.buttonCount, 1), id: \.self) { index in
-                            button(index == max(metrics.buttonCount, 1) - 1 ? 28 : 24)
+                        // Every header button is the same 28pt capsule.
+                        ForEach(0..<max(metrics.buttonCount, 1), id: \.self) { _ in
+                            button(28)
                         }
                     }
                 }
@@ -1185,20 +1184,19 @@ struct NoteContent: View {
 enum CardCapsule: Equatable {
     /// The link is still being analyzed.
     case analyzing
-    /// The source and what will be produced, on two aligned lines.
-    case inOut(input: [ChipData], output: [ChipData])
-    /// What is being produced, on one line (a download under way or finished).
+    /// What will be / is being produced, on one line, with dividers between the kinds of
+    /// metadata (length and size | video | audio). Download's card shows only this: the
+    /// input side is Convert's business.
     case output([ChipData])
     /// A reason instead of metadata.
     case note(icon: String, text: String)
 
     /// Which kind of contents this is. Moving between kinds animates; a change WITHIN a kind
     /// (the output line following the Video / Audio toggle) does not, as before.
-    enum Kind { case analyzing, inOut, output, note }
+    enum Kind { case analyzing, output, note }
     var kind: Kind {
         switch self {
         case .analyzing: return .analyzing
-        case .inOut:     return .inOut
         case .output:    return .output
         case .note:      return .note
         }
@@ -1211,34 +1209,43 @@ enum CardCapsule: Equatable {
 /// instead of one capsule being swapped for another.
 struct PersistentCapsule: View {
     let content: CardCapsule
+    /// How long incoming contents hold back before appearing, so the capsule can finish
+    /// growing first (and the title above it can appear before the metadata does).
+    var revealDelay: Double = 0
 
     private var isAnalyzing: Bool {
         if case .analyzing = content { return true }
         return false
     }
 
+    private var incoming: AnyTransition { revealDelay > 0 ? .blurInAfter(revealDelay) : .blurIn }
+
     var body: some View {
         ZStack(alignment: .leading) {
             switch content {
             case .analyzing:
-                Text("Analyzing\u{2026}")
-                    .font(.appMono(size: 10))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    .transition(.blurIn)
-            case .inOut(let input, let output):
-                MetaLinesContent(input: input, output: output)
-                    .transition(.blurIn)
+                // The same icon-and-text row as a metadata cell (MetaCell), so the capsule is
+                // exactly as tall while it waits as it is once the metadata is in it.
+                HStack(spacing: 5) {
+                    Image(systemName: "hourglass")
+                        .font(.appMono(size: 10, weight: .bold))
+                    Text("Analyzing\u{2026}")
+                        .font(.appMono(size: 10.5, weight: .medium))
+                }
+                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                .lineLimit(1)
+                .fixedSize()
+                .transition(.blurIn)
             case .output(let chips):
                 MetaLineContent(chips: chips)
-                    .transition(.blurIn)
+                    .transition(incoming)
             case .note(let icon, let text):
                 NoteContent(icon: icon, text: text)
-                    .transition(.blurIn)
+                    .transition(incoming)
             }
         }
-        // As tall as the two-line capsule while it waits for its contents, so the card has
-        // its size from the start.
-        .frame(minWidth: isAnalyzing ? 260 : nil, minHeight: isAnalyzing ? CardMetrics.metaCapsuleHeight - 12 : nil, alignment: .leading)
+        // A little wider than its label while it waits, so the capsule has somewhere to grow from.
+        .frame(minWidth: isAnalyzing ? 150 : nil, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(

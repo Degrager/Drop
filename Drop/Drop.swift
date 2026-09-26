@@ -3029,6 +3029,17 @@ extension AnyTransition {
             .animation(.easeIn(duration: 0.12))
     )
 
+    /// `blurIn` that holds back for `delay` seconds and stays fully hidden until then (a capsule's
+    /// text waiting for the capsule to finish growing, then for the title above it to appear).
+    static func blurInAfter(_ delay: Double) -> AnyTransition {
+        .asymmetric(
+            insertion: focus(blur: 5, scale: 0.97, opacity: 0)
+                .animation(.easeOut(duration: 0.25).delay(delay)),
+            removal: focus(blur: 4, scale: 0.98, opacity: 0.4)
+                .animation(.easeIn(duration: 0.12))
+        )
+    }
+
     /// Same as `blurIn`, anchored on the top edge -- for sections that unfold
     /// downward inside a card (Options, the format chips) so the content
     /// grows out of the header instead of scaling from its own centre while
@@ -4159,6 +4170,9 @@ struct HoverIconButton: View {
         GlassInteractive(shape: shape, tint: resolvedColor, isActive: isActive, disabled: disabled, action: action) {
             Image(systemName: icon)
                 .font(.appMono(size: size))
+                // A button that changes what it is (collapse -> cancel -> redownload) swaps its
+                // symbol in place instead of being replaced.
+                .contentTransition(.symbolEffect(.replace))
                 .padding(6)
         }
         // Only the hover caption needs the width, and only `expandable` buttons
@@ -6580,7 +6594,8 @@ struct ContentView: View {
                 return .output(dl.outputChips)
             }
             if analyzing { return .analyzing }
-            return .inOut(input: p.inputChips, output: p.outputChips)
+            // Only what will be produced: the input side is Convert's business.
+            return .output(p.outputChips)
         }()
         // The pasted link stands in for the title until a real one arrives.
         let titleKnown = !analyzing || (!p.title.isEmpty && p.title != p.url)
@@ -6637,8 +6652,8 @@ struct ContentView: View {
             capsule: capsule,
             titleKnown: titleKnown,
             inlineStatus: dl.map { downloadStatusColumn($0) },
-            trailingControls: controls?.view,
-            trailingControlCount: controls?.count ?? 0,
+            primaryControl: controls?.primary,
+            secondaryControl: controls?.secondary,
             showsSettings: dl == nil && !failedAnalyze
         ) {
             // Expanded settings, as labelled rows shared with Convert's card:
@@ -6868,50 +6883,36 @@ struct ContentView: View {
         .frame(height: 4)
     }
 
-    /// The buttons a download has, as icon capsules in the header's trailing corner: Cancel
-    /// while it runs, Reveal in Finder and Redownload when it is done, Redownload / Retry when it
-    /// was cancelled or failed -- and Remove, always last.
-    private func downloadControls(_ dl: Download, preview p: LinkPreview) -> (view: AnyView, count: Int) {
-        var count = 1
-        let view = AnyView(
-            HStack(spacing: 12) {
-                switch dl.status {
-                case .pending, .downloading:
-                    HoverIconButton(icon: "stop.circle.fill", size: 16, color: .orange, help: "Cancel") {
-                        manager.cancel(download: dl)
-                    }
-                case .done:
-                    HoverIconButton(icon: "folder.fill", size: 14, color: DesignTokens.Accent.primaryLight, help: "Reveal in Finder") {
-                        if let filePath = dl.outputFilePath {
-                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: filePath)])
-                        } else {
-                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dl.outputDir)])
-                        }
-                    }
-                    HoverIconButton(icon: "arrow.uturn.down", size: 14, color: DesignTokens.Accent.warning, help: "Redownload") {
-                        restorePreviewCard(from: dl, replacing: p.id)
-                    }
-                case .cancelled:
-                    HoverIconButton(icon: "arrow.uturn.down", size: 14, color: DesignTokens.Accent.warning, help: "Redownload") {
-                        restorePreviewCard(from: dl, replacing: p.id)
-                    }
-                case .error:
-                    HoverIconButton(icon: "arrow.uturn.down", size: 14, color: DesignTokens.Accent.danger, help: "Retry") {
-                        restorePreviewCard(from: dl, replacing: p.id)
-                    }
-                }
-                // Removing an in-flight download cancels it first (see downloadCard's onRemove).
-                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove") {
-                    if dl.status == .downloading { manager.cancel(download: dl) }
-                    withAnimation(.spring(response: 0.3)) { linkPreviews.removeAll { $0.id == p.id } }
-                }
-            }
-        )
+    /// A download's controls, in the slots of the header's button row: the PRIMARY one takes the
+    /// collapse button's place and only changes what it is (Cancel while it runs, then
+    /// Redownload / Retry), and Reveal in Finder appears to its left once the file is there.
+    /// Remove is the card's own, always last (removing an in-flight download cancels it first;
+    /// see downloadCard's onRemove).
+    private func downloadControls(_ dl: Download, preview p: LinkPreview) -> (primary: CardControl, secondary: CardControl?) {
         switch dl.status {
-        case .done: count = 3
-        default:    count = 2
+        case .pending, .downloading:
+            return (CardControl(icon: "stop.circle.fill", color: .orange, help: "Cancel") {
+                manager.cancel(download: dl)
+            }, nil)
+        case .done:
+            return (CardControl(icon: "arrow.uturn.down", color: DesignTokens.Accent.warning, help: "Redownload") {
+                restorePreviewCard(from: dl, replacing: p.id)
+            }, CardControl(icon: "folder.fill", color: DesignTokens.Accent.primaryLight, help: "Reveal in Finder") {
+                if let filePath = dl.outputFilePath {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: filePath)])
+                } else {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dl.outputDir)])
+                }
+            })
+        case .cancelled:
+            return (CardControl(icon: "arrow.uturn.down", color: DesignTokens.Accent.warning, help: "Redownload") {
+                restorePreviewCard(from: dl, replacing: p.id)
+            }, nil)
+        case .error:
+            return (CardControl(icon: "arrow.uturn.down", color: DesignTokens.Accent.danger, help: "Retry") {
+                restorePreviewCard(from: dl, replacing: p.id)
+            }, nil)
         }
-        return (view, count)
     }
 
     /// A failed download's hint and its fix button, below the header (the reason itself is in

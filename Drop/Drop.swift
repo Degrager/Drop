@@ -4620,6 +4620,12 @@ final class LiveResizeState: ObservableObject {
     /// dragged or the sidebar is moving.
     var freezesCards: Bool { isActive || sidebarMoving }
 
+    /// The page container's width (ContentView's `mainAreaWidth`: measured as if the sidebar
+    /// were collapsed), kept here for the facade to place itself with. A plain property, NOT
+    /// published: it changes on every tick of a window drag, and nothing may re-run just
+    /// because of it (see the note above `mainAreaWidth`).
+    var pageAreaWidth: CGFloat = 0
+
     func set(_ active: Bool) {
         if active != isActive { isActive = active }
     }
@@ -5251,10 +5257,12 @@ struct ContentView: View {
                     Color.clear
                         .onAppear {
                             mainAreaWidth = geo.size.width
+                            LiveResizeState.shared.pageAreaWidth = geo.size.width
                             columnClass = WindowLayout.columnClass(mainWidth: geo.size.width - (pageInset - WindowLayout.compactSidebarWidth))
                         }
                         .onChange(of: geo.size.width) { _, newWidth in
                             mainAreaWidth = newWidth
+                            LiveResizeState.shared.pageAreaWidth = newWidth
                             // The page's real width: this frame minus the room
                             // the (pinned) sidebar takes.
                             let cls = WindowLayout.columnClass(mainWidth: newWidth - (pageInset - WindowLayout.compactSidebarWidth))

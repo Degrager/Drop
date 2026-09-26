@@ -4611,9 +4611,21 @@ extension Notification.Name {
 final class LiveResizeState: ObservableObject {
     static let shared = LiveResizeState()
     @Published private(set) var isActive = false
+    /// True while the sidebar collapses or expands -- from the toggle until the page has
+    /// taken its final width. Not a window resize, but the same problem: every frame of
+    /// it would lay the cards out again.
+    @Published private(set) var sidebarMoving = false
+
+    /// The cards give way to their facade (see FrozenDuringResize) while the window edge is
+    /// dragged or the sidebar is moving.
+    var freezesCards: Bool { isActive || sidebarMoving }
 
     func set(_ active: Bool) {
         if active != isActive { isActive = active }
+    }
+
+    func setSidebarMoving(_ moving: Bool) {
+        if moving != sidebarMoving { sidebarMoving = moving }
     }
 }
 
@@ -5313,6 +5325,14 @@ struct ContentView: View {
             // exempts it from the live-resize rule below that switches
             // animations off.
             sidebarSequencePlaying = true
+            // The cards stand down for the toggle: a facade takes their place while the
+            // sidebar moves, and they are laid out once, at their final width, when it
+            // has landed (see FrozenDuringResize).
+            LiveResizeState.shared.setSidebarMoving(true)
+            let landed = (sidebarAnimationStyle == .resize ? Self.sidebarResizeDuration : Self.sidebarWidthDuration) + 0.06
+            DispatchQueue.main.asyncAfter(deadline: .now() + landed) {
+                if sidebarToggleGeneration == generation { LiveResizeState.shared.setSidebarMoving(false) }
+            }
             // The page's CONTENT (its cards) takes its new size in ONE step,
             // never live: opening, at the start; collapsing, once the sidebar has
             // finished shrinking. Everything else follows the sidebar's edge

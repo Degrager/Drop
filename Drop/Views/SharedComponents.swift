@@ -365,10 +365,10 @@ private struct FacadeFollowsSidebar: ViewModifier, Animatable {
     }
 }
 
-/// Swaps a card for its facade while the window edge is dragged, and fades the facade
-/// back out on release (the real card is already laid out underneath by then). The real
-/// card is hidden at opacity 0 with animation OFF -- never a partial opacity on glass,
-/// which greys it -- so only the facade's own opacity fades.
+/// Swaps a card for its facade while the window edge is dragged or the sidebar collapses /
+/// expands, and fades the facade back out afterwards (the real card is already laid out
+/// underneath by then). The real card is hidden at opacity 0 with animation OFF -- never a
+/// partial opacity on glass, which greys it -- so only the facade's own opacity fades.
 struct FrozenDuringResize: ViewModifier {
     @ObservedObject private var live = LiveResizeState.shared
     @State private var memory = SizeMemory()
@@ -376,18 +376,21 @@ struct FrozenDuringResize: ViewModifier {
     @Environment(\.cardContentInset) private var sidebarPinned
 
     func body(content: Content) -> some View {
-        FreezeLayout(frozen: live.isActive, memory: memory) {
+        let frozen = live.freezesCards
+        FreezeLayout(frozen: frozen, memory: memory) {
             content
-                .opacity(live.isActive ? 0 : 1)
-                .animation(nil, value: live.isActive)
-                .allowsHitTesting(!live.isActive)
+                .opacity(frozen ? 0 : 1)
+                .animation(nil, value: frozen)
+                .allowsHitTesting(!frozen)
             CardFacade()
                 .modifier(FacadeFollowsSidebar(live: sidebarLive, pinned: sidebarPinned))
-                .opacity(live.isActive ? 1 : 0)
+                .opacity(frozen ? 1 : 0)
         }
-        // The drag start stays a cut (the window is already moving under the pointer);
-        // the release is what animates: facade fades out, height settles.
-        .animation(.easeOut(duration: 0.2), value: live.isActive)
+        // The start is always a cut (nil while freezing): during a drag the window is already
+        // moving under the pointer, and a toggle must not dip through an empty frame while a
+        // facade fades in over a card that has just vanished. The release is what animates:
+        // the facade fades out and the height settles.
+        .animation(frozen ? nil : .easeOut(duration: 0.2), value: frozen)
     }
 }
 

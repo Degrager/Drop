@@ -3708,17 +3708,74 @@ struct GlassCard: ViewModifier {
 /// (no motion cue that it's *loading* vs. just broken/empty); this softly
 /// pulses between two low opacities so the same brief moment reads as
 /// "working on it" rather than a gray glitch.
+///
+/// The pulse runs ONLY while `isPulsing` -- something is really loading -- and it is a Core
+/// Animation layer animation (see PulsingSkeleton), not a SwiftUI `repeatForever`. Driven
+/// from SwiftUI it kept the update cycle re-laying-out and re-rendering the WHOLE window
+/// every frame, even with nothing on screen changing: ~40% of a core at idle for a single
+/// card, because the skeleton stays mounted under every thumbnail. (Writing the resting
+/// value back did not reliably end it either.)
 struct ThumbnailSkeleton: View {
-    @State private var pulse = false
+    var isPulsing: Bool = true
 
     var body: some View {
-        Color.white.opacity(pulse ? DesignTokens.Interactive.fillRest * 1.6 : DesignTokens.Interactive.fillRest * 0.6)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                    pulse = true
-                }
-            }
+        PulsingSkeleton(cornerRadius: 0, isPulsing: isPulsing)
     }
+}
+
+/// A rounded fill that breathes between two faint whites. The breathing is a
+/// CABasicAnimation, run by the render server: no per-frame work in the app, and nothing left
+/// running once it is removed.
+struct PulsingSkeleton: NSViewRepresentable {
+    var cornerRadius: CGFloat
+    var isPulsing: Bool = true
+
+    func makeNSView(context: Context) -> PulsingSkeletonView { PulsingSkeletonView() }
+    func updateNSView(_ view: PulsingSkeletonView, context: Context) {
+        view.cornerRadius = cornerRadius
+        view.setPulsing(isPulsing)
+    }
+}
+
+final class PulsingSkeletonView: NSView {
+    private static let rest = NSColor.white.withAlphaComponent(DesignTokens.Interactive.fillRest * 0.6).cgColor
+    private static let peak = NSColor.white.withAlphaComponent(DesignTokens.Interactive.fillRest * 1.6).cgColor
+    private static let key = "pulse"
+    private var pulsing = false
+
+    var cornerRadius: CGFloat = 0 {
+        didSet { layer?.cornerRadius = cornerRadius }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = Self.rest
+        layer?.cornerCurve = .continuous
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func setPulsing(_ on: Bool) {
+        guard on != pulsing else { return }
+        pulsing = on
+        guard let layer else { return }
+        if on {
+            let animation = CABasicAnimation(keyPath: "backgroundColor")
+            animation.fromValue = Self.rest
+            animation.toValue = Self.peak
+            animation.duration = 0.9
+            animation.autoreverses = true
+            animation.repeatCount = .infinity
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(animation, forKey: Self.key)
+        } else {
+            layer.removeAnimation(forKey: Self.key)
+        }
+    }
+
+    // Purely decorative: never takes a click or a hover.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// Waiting-for-paste cue shown around the field only while it's focused
@@ -3727,20 +3784,69 @@ struct ThumbnailSkeleton: View {
 /// fill, and hit-testing disabled so it never blocks clicks/typing into
 /// the field underneath. Turns off the instant text lands or focus
 /// moves elsewhere.
-struct WaitingPulseGlow: View {
-    @State private var pulse = false
+///
+/// A Core Animation layer, not a SwiftUI `repeatForever`: the pulse runs in the render
+/// server, so the cue costs the app nothing per frame. Driven from SwiftUI it kept the
+/// whole window re-laying-out and re-rendering at the display rate, ~25% of a core, for as
+/// long as the empty field had focus (which is most of the time Drop is open).
+struct WaitingPulseGlow: NSViewRepresentable {
+    func makeNSView(context: Context) -> WaitingPulseGlowView { WaitingPulseGlowView() }
+    func updateNSView(_ nsView: WaitingPulseGlowView, context: Context) {}
+}
 
-    var body: some View {
-        Capsule()
-            .stroke(Color.white.opacity(pulse ? 0.55 : 0.3), lineWidth: 1.5)
-            .shadow(color: Color.white.opacity(pulse ? 0.45 : 0.2), radius: pulse ? 6 : 3)
-            .allowsHitTesting(false)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true)) {
-                    pulse = true
-                }
-            }
+final class WaitingPulseGlowView: NSView {
+    private let ring = CAShapeLayer()
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.masksToBounds = false
+        ring.fillColor = nil
+        ring.lineWidth = 1.5
+        ring.strokeColor = NSColor.white.withAlphaComponent(0.3).cgColor
+        ring.shadowColor = NSColor.white.cgColor
+        ring.shadowOffset = .zero
+        ring.shadowOpacity = 0.2
+        // SwiftUI's shadow radius is twice a layer's, so 3 -> 6 there is 1.5 -> 3 here.
+        ring.shadowRadius = 1.5
+        layer?.addSublayer(ring)
+
+        func pulse(_ keyPath: String, from: Any, to: Any) {
+            let animation = CABasicAnimation(keyPath: keyPath)
+            animation.fromValue = from
+            animation.toValue = to
+            animation.duration = 1.3
+            animation.autoreverses = true
+            animation.repeatCount = .infinity
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            ring.add(animation, forKey: keyPath)
+        }
+        pulse("strokeColor", from: NSColor.white.withAlphaComponent(0.3).cgColor, to: NSColor.white.withAlphaComponent(0.55).cgColor)
+        pulse("shadowOpacity", from: Float(0.2), to: Float(0.45))
+        pulse("shadowRadius", from: CGFloat(1.5), to: CGFloat(3))
     }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func layout() {
+        super.layout()
+        // No implicit animation: the ring must follow the field's edge exactly.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ring.frame = bounds
+        // A capsule traced on the view's own edge, like `Capsule().stroke`.
+        let radius = min(bounds.width, bounds.height) / 2
+        ring.path = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        CATransaction.commit()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        ring.contentsScale = window?.backingScaleFactor ?? 2
+    }
+
+    // Purely decorative: never takes a click or a hover.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// Rim glow for the big capsule header bars (urlCard, Convert's dropZoneView,
@@ -6424,10 +6530,16 @@ struct ContentView: View {
     private func thumbnailView(urlString: String) -> AnyView {
         AnyView(
             AsyncImage(url: URL(string: urlString)) { phase in
+                // Loading = there is a URL and no result yet. With no URL, or once the image
+                // is in (or failed), the skeleton just sits there, still.
+                let loading: Bool = {
+                    if case .empty = phase { return URL(string: urlString) != nil }
+                    return false
+                }()
                 ZStack {
                     RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                         .fill(Color.clear)
-                        .overlay(ThumbnailSkeleton().clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)))
+                        .overlay(ThumbnailSkeleton(isPulsing: loading).clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)))
                     if case .success(let img) = phase {
                         img.resizable()
                             .aspectRatio(contentMode: .fill)

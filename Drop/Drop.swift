@@ -4054,25 +4054,24 @@ struct SkeletonCancelButton: View {
     @State private var hovering = false
 
     var body: some View {
-        ZStack {
-            // Spinner — fades out on hover
-            ProgressView()
-                .scaleEffect(0.7)
-                .frame(width: 24, height: 24)
-                .opacity(hovering ? 0 : 1)
-
-            // X button — fades in on hover
-            GlassInteractive(shape: .circle, tint: .red, action: action) {
-                Image(systemName: "xmark")
-                    .font(.appMono(size: 11, weight: .semibold))
-                    .frame(width: 24, height: 24)
+        // The finished card's remove button, in its place and at its size: the same red
+        // capsule, with the spinner where the X will be until the pointer is over it.
+        GlassInteractive(shape: .roundedRect(DesignTokens.Radius.small), tint: .red, action: action) {
+            ZStack {
+                ProgressView()
+                    .controlSize(.small)
+                    .opacity(hovering ? 0 : 1)
+                Image(systemName: "xmark.circle.fill")
+                    .font(.appMono(size: 16))
+                    .opacity(hovering ? 1 : 0)
             }
-            .opacity(hovering ? 1 : 0)
+            .frame(width: 16, height: 16)
+            .padding(6)
         }
-        .frame(width: 24, height: 24)
         .onHover { h in
             withAnimation(.easeOut(duration: 0.15)) { hovering = h }
         }
+        .help("Cancel")
     }
 }
 

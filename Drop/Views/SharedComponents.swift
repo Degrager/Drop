@@ -405,12 +405,11 @@ struct CardFacade: View {
     private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint }
     private var titleWidth: CGFloat { metrics.titleWidth > 0 ? metrics.titleWidth : 200 }
     private var metaSize: CGSize { metrics.metaSize.width > 0 ? metrics.metaSize : CGSize(width: 320, height: 36) }
-    private var capsuleBesideTitle: Bool { !narrow && !metrics.analyzing }
+    private var capsuleBesideTitle: Bool { !narrow }
 
     /// Height of the thumbnail / title row, which the header buttons centre on.
     private var headerHeight: CGFloat {
-        let text: CGFloat = 12 + (metrics.analyzing ? 4 + 9 : (capsuleBesideTitle ? 4 + metaSize.height : 0))
-        return max(CardMetrics.thumbHeight, text)
+        max(CardMetrics.thumbHeight, 12 + (capsuleBesideTitle ? 4 + metaSize.height : 0))
     }
 
     private func button(_ side: CGFloat) -> some View {
@@ -437,17 +436,11 @@ struct CardFacade: View {
                 VStack(alignment: .leading, spacing: 4) {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(Color.white.opacity(0.09))
-                        .frame(width: metrics.analyzing ? 150 : titleWidth, height: 12)
-                    if metrics.analyzing {
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(Color.white.opacity(0.05))
-                            .frame(width: 70, height: 9)
-                    } else if capsuleBesideTitle {
-                        capsule
-                    }
+                        .frame(width: titleWidth, height: 12)
+                    if capsuleBesideTitle { capsule }
                 }
             }
-            if narrow, !metrics.analyzing { capsule }
+            if narrow { capsule }
             if metrics.hasLink {
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
                     .fill(Color.white.opacity(0.05))
@@ -476,8 +469,7 @@ struct CardFacade: View {
     }
 
     var body: some View {
-        let radius = metrics.analyzing ? DesignTokens.Radius.medium : DesignTokens.Radius.large
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
         shape
             .fill(Color(white: 0.075))
             .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 0.75))
@@ -493,12 +485,8 @@ struct CardFacade: View {
             }
             .overlay(alignment: .topTrailing) {
                 HStack(spacing: 6) {
-                    if metrics.analyzing {
-                        Circle().fill(Color.white.opacity(0.05)).frame(width: 24, height: 24)
-                    } else {
-                        if metrics.hasChevron { button(24) }
-                        button(28)
-                    }
+                    if metrics.hasChevron { button(24) }
+                    button(28)
                 }
                 .frame(height: headerHeight)
                 .padding(.top, 10)
@@ -1155,6 +1143,27 @@ struct ErrorNote: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
+        .reportsFacadeMeta()
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// What the metadata capsule is while a link is still being analyzed: the same rounded
+/// capsule, at the same height, breathing (a Core Animation pulse) with "Analyzing..." in it. The
+/// card therefore has its finished size from the start and does not grow when the real
+/// IN / OUT lines arrive.
+struct AnalyzingCapsule: View {
+    var body: some View {
+        ZStack(alignment: .leading) {
+            PulsingSkeleton(cornerRadius: 17)
+            Text("Analyzing\u{2026}")
+                .font(.appMono(size: 10))
+                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                .padding(.horizontal, 12)
+        }
+        .frame(width: 260, height: CardMetrics.metaCapsuleHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
         .reportsFacadeMeta()
         .frame(maxWidth: .infinity, alignment: .leading)

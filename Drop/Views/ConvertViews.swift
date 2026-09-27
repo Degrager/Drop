@@ -594,6 +594,27 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         pruneChoices()
     }
 
+    /// How many of the five dropdown fields (video codec, resolution, video
+    /// bitrate, audio codec, audio bitrate) differ from Same as Source / Auto
+    /// -- drives the analyze card's "N changed from source" note. CONVERT AS
+    /// and OUTPUT FORMAT aren't counted: they pick what's IN the output, not
+    /// how a kept track is encoded, so Reset (below) leaves them alone.
+    var encodeSettingsChangedCount: Int {
+        [transcodeVideo, chosenResolution != nil, overridesVideoBitrate, transcodeAudio, overridesAudioBitrate]
+            .filter { $0 }.count
+    }
+
+    /// Tapped from the analyze card's Reset link: every dropdown field back
+    /// to Same as Source / Auto, in one step. Leaves CONVERT AS and OUTPUT
+    /// FORMAT exactly as they were -- see encodeSettingsChangedCount.
+    func resetEncodeSettingsToSource() {
+        useSameAsSourceForVideo()
+        useSameAsSourceForAudio()
+        chooseResolution(nil)
+        chosenVideoBitrateKbps = nil
+        chosenAudioBitrateKbps = nil
+    }
+
     var outputFilename: String {
         let base = inputURL.deletingPathExtension().lastPathComponent
         return "\(base)_converted.\(outputFormat.fileExtension)"
@@ -1460,16 +1481,51 @@ struct ConvertView: View {
 
     /// Add to Queue / Add All to Queue -- the last thing in the Analyze card, so
     /// committing a file reads as the final action after reviewing its settings.
-    private func addToQueueButtons(for job: ConvertJob) -> some View {
-        HStack(spacing: 8) {
-            Spacer(minLength: 0)
-            if stagingJobs.count > 1 {
-                GlassButton(label: "Add All to Queue", icon: "tray.and.arrow.down", tint: .white, fitContent: true) {
-                    addAllToQueue()
+    /// A changed count + Reset sits at the leading edge once any dropdown field
+    /// has left Same as Source / Auto, so undoing an experiment never means
+    /// hunting back through each field individually.
+    ///
+    /// A real View struct with its OWN `@ObservedObject job`, not a plain
+    /// function -- this is passed to ConvertPreviewCard as a fixed `footer:
+    /// AnyView` value, built once by `analyzePanel` and never rebuilt just
+    /// because `job`'s dropdown fields change (only ConvertPreviewCard's own
+    /// body, which IS `@ObservedObject`, resubscribes to those). Without its
+    /// own subscription here, "N changed from source" only ever showed the
+    /// job's state at the moment Analyze first opened -- confirmed live: the
+    /// dropdown fields and the IN/OUT capsule updated instantly, but this
+    /// note stayed on "Everything follows the source" until something else
+    /// forced the whole panel to rebuild.
+    private struct AddToQueueFooter: View {
+        @ObservedObject var job: ConvertJob
+        let stagingCount: Int
+        let onAddAll: () -> Void
+        let onAdd: () -> Void
+
+        var body: some View {
+            HStack(spacing: 8) {
+                let changed = job.encodeSettingsChangedCount
+                if changed > 0 {
+                    HStack(spacing: 6) {
+                        Text("\(changed) changed from source")
+                        Button("Reset") {
+                            withAnimation(.spring(response: 0.25)) { job.resetEncodeSettingsToSource() }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(DesignTokens.Accent.primaryLight)
+                        .underline()
+                    }
+                    .font(.appMono(size: 10.5))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                } else {
+                    Text("Everything follows the source")
+                        .font(.appMono(size: 10.5))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
                 }
-            }
-            GlassButton(label: "Add to Queue", icon: "arrow.turn.down.right", tint: DesignTokens.Accent.primary, fitContent: true) {
-                addToQueue(job)
+                Spacer(minLength: 0)
+                if stagingCount > 1 {
+                    GlassButton(label: "Add All to Queue", icon: "tray.and.arrow.down", tint: .white, fitContent: true, action: onAddAll)
+                }
+                GlassButton(label: "Add to Queue", icon: "arrow.turn.down.right", tint: DesignTokens.Accent.primary, fitContent: true, action: onAdd)
             }
         }
     }
@@ -1493,7 +1549,7 @@ struct ConvertView: View {
                 onRemove: { removeFromStaging(job) },
                 isQueueRow: false,
                 headerAccessory: stagingJobs.count > 1 ? AnyView(fileSwitcher) : nil,
-                footer: AnyView(addToQueueButtons(for: job))
+                footer: AnyView(AddToQueueFooter(job: job, stagingCount: stagingJobs.count, onAddAll: addAllToQueue, onAdd: { addToQueue(job) }))
             )
             // In a normal window the card simply hugs its content. The scroll
             // fallback is only for a short window (the window's own minimum
@@ -2283,6 +2339,14 @@ struct ConvertPreviewCard: View {
     /// bottom of the Analyze card itself.
     var footer: AnyView? = nil
 
+    /// Which dropdown field (if any) has its popover open -- shared by every
+    /// DropdownField/DropdownBitrateField on this card via a binding, so
+    /// opening one closes any other, and drawn by `.dropdownPopoverOverlay`
+    /// directly on convertSettingsCard below (never inside it: PreviewCard's
+    /// own `.liveGlassCard()` clips its whole content, popovers included --
+    /// see DropdownPopoverPreferenceKey).
+    @State private var openDropdownID: String? = nil
+
     var body: some View {
         if isQueueRow {
             // Every status (including queued-but-not-started) renders as the
@@ -2291,6 +2355,7 @@ struct ConvertPreviewCard: View {
             convertCompletedCard
         } else {
             convertSettingsCard
+                .dropdownPopoverOverlay(openID: $openDropdownID)
         }
     }
 
@@ -2467,6 +2532,11 @@ struct ConvertPreviewCard: View {
 
     // MARK: Settings card (Analyze panel)
 
+    /// True once the toggle in CONVERT AS is worth showing at all -- an
+    /// audio file only ever has the one "Audio Only" option, so the row
+    /// would just be a single, unpressable segment.
+    private var showsModeRow: Bool { modeOptions.count > 1 }
+
     private var convertSettingsCard: some View {
         PreviewCard(
             isSelected: job.isSelected,
@@ -2481,49 +2551,59 @@ struct ConvertPreviewCard: View {
             headerAccessory: headerAccessory,
             footer: footer
         ) {
-            // Labelled rows, top to bottom: CONVERT AS -> VIDEO CODEC -> RESOLUTION ->
-            // VIDEO BITRATE -> AUDIO CODEC -> AUDIO BITRATE -> OUTPUT FORMAT. Each is shown only
-            // where it means something (no video rows for an audio file, no bitrate for a
-            // lossless codec). The output folder lives in the bottom bar (shared across every
-            // job), not here.
-            VStack(alignment: .leading, spacing: 9) {
-                FormRow(icon: "switch.2", label: "CONVERT AS") {
-                    SegmentedCapsule(options: modeOptions, fill: false)
+            // Two rows instead of one-row-per-option (the redesign approved
+            // 2026-09-26): CONVERT AS and OUTPUT FORMAT share a top strip --
+            // they decide what's IN the output, so they stay full segmented
+            // capsules -- and each included track's codec/resolution/bitrate
+            // become one row of compact dropdown fields, VIDEO then AUDIO.
+            // Every row is still shown only where it means something (no
+            // video row for an audio file, no bitrate for a lossless codec).
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 16) {
+                    if showsModeRow {
+                        VStack(alignment: .leading, spacing: 6) {
+                            FieldCaption(icon: "switch.2", text: "CONVERT AS")
+                            SegmentedCapsule(options: modeOptions, fill: false)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        FieldCaption(icon: "doc.badge.arrow.up", text: "OUTPUT FORMAT")
+                        SegmentedCapsule(options: formatOptions)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if job.mediaMode.isVideo {
-                    FormRow(icon: "video", label: "VIDEO CODEC") {
-                        SegmentedCapsule(options: videoCodecOptions)
-                    }
-                }
-                // Only offered when the source is bigger than a standard size to go down to.
-                if !job.availableResolutions.isEmpty {
-                    FormRow(icon: "aspectratio", label: "RESOLUTION") {
-                        SegmentedCapsule(options: resolutionOptions)
-                    }
-                }
-                if job.supportsVideoBitrate {
-                    FormRow(icon: "speedometer", label: "VIDEO BITRATE") {
-                        SteppedSlider(steps: videoBitrateSteps, selected: videoBitrateSelection) { index in
-                            job.chosenVideoBitrateKbps = index == 0 ? nil : job.videoBitrateChoices[index - 1]
+                    FieldsTrackRow(icon: "video", label: "VIDEO") {
+                        DropdownField(id: "video.codec", caption: "CODEC", options: videoCodecOptions, openID: $openDropdownID)
+                        // Only offered when the source is bigger than a standard size to go down to.
+                        if !job.availableResolutions.isEmpty {
+                            DropdownField(id: "video.resolution", caption: "RESOLUTION", options: resolutionOptions, openID: $openDropdownID)
+                        }
+                        if job.supportsVideoBitrate {
+                            DropdownBitrateField(id: "video.bitrate", caption: "BITRATE", steps: videoBitrateSteps, selected: videoBitrateSelection,
+                                                  isChanged: job.overridesVideoBitrate, openID: $openDropdownID) { index in
+                                job.chosenVideoBitrateKbps = index == 0 ? nil : job.videoBitrateChoices[index - 1]
+                            }
                         }
                     }
                 }
                 // Hidden entirely for video-only mode (no audio track in the
                 // output at all).
                 if job.mediaMode != .videoOnly {
-                    FormRow(icon: "waveform", label: "AUDIO CODEC") {
-                        SegmentedCapsule(options: audioCodecOptions)
-                    }
-                }
-                if job.supportsAudioBitrate {
-                    FormRow(icon: "gauge.with.dots.needle.33percent", label: "AUDIO BITRATE") {
-                        SteppedSlider(steps: audioBitrateSteps, selected: audioBitrateSelection) { index in
-                            job.chosenAudioBitrateKbps = index == 0 ? nil : job.audioCodec.bitrateChoices[index - 1]
+                    FieldsTrackRow(icon: "waveform", label: "AUDIO") {
+                        DropdownField(id: "audio.codec", caption: "CODEC", options: audioCodecOptions, openID: $openDropdownID)
+                        if job.supportsAudioBitrate {
+                            DropdownBitrateField(id: "audio.bitrate", caption: "BITRATE", steps: audioBitrateSteps, selected: audioBitrateSelection,
+                                                  isChanged: job.overridesAudioBitrate, openID: $openDropdownID) { index in
+                                job.chosenAudioBitrateKbps = index == 0 ? nil : job.audioCodec.bitrateChoices[index - 1]
+                            }
+                        } else {
+                            // Keeps the audio row's one field the same width as
+                            // when a bitrate field sits beside it, so the row
+                            // doesn't visibly resize between codecs.
+                            Color.clear.frame(maxWidth: .infinity)
                         }
                     }
-                }
-                FormRow(icon: "doc.badge.arrow.up", label: "OUTPUT FORMAT") {
-                    SegmentedCapsule(options: formatOptions)
                 }
             }
         }

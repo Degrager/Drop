@@ -1302,10 +1302,20 @@ struct MetaLinesContent: View {
     }
 
     /// A cell, or nothing of its width when the row has none in that column.
+    ///
+    /// `.id(chip.value)` forces a fresh MetaCell whenever the text changes --
+    /// AlignedRows is a custom Layout, and when a codec-only edit (e.g. H.265
+    /// back to "Same as Source") produces the same-width monospace string in
+    /// the same cell position, SwiftUI's Layout-driven placement can skip
+    /// repainting that subview's Text even though its `chip` input already
+    /// changed (confirmed live: the value flowing in was correct, only the
+    /// pixels were stale, and any unrelated structural re-layout "healed" it).
+    /// Keying identity to the value sidesteps that by remounting instead of
+    /// updating in place.
     @ViewBuilder
     private func slot(_ chip: ChipData?) -> some View {
         if let chip {
-            MetaCell(chip: chip)
+            MetaCell(chip: chip).id(chip.value)
         } else {
             Color.clear.frame(width: 0, height: 0)
         }

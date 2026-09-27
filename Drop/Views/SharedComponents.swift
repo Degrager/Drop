@@ -292,6 +292,10 @@ struct CardFacadeMetrics: Equatable {
     var hasStatusLabel = false
     /// The link line under the header, shown while a card is expanded.
     var hasLink = false
+    /// A row in the Convert queue: no card of its own (it sits inside the queue's), compact.
+    var flat = false
+    /// A flat row's move controls (the up / down pair before its thumbnail).
+    var hasLeadingControls = false
     /// True once the card itself (not just a piece of it) has reported.
     var reported = false
 }
@@ -431,17 +435,25 @@ struct CardFacade: View {
             .frame(width: metaSize.width, height: metaSize.height)
     }
 
+    private var thumbnailBox: some View {
+        RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+            .fill(Color.white.opacity(0.06))
+            .frame(width: CardMetrics.thumbWidth, height: CardMetrics.thumbHeight)
+    }
+
+    private func titleBar(height: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(Color.white.opacity(0.09))
+            .frame(width: titleWidth, height: height)
+    }
+
     /// Everything on the left: fixed sizes, never re-laid-out while the card resizes.
     private var leading: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
-                RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
-                    .frame(width: CardMetrics.thumbWidth, height: CardMetrics.thumbHeight)
+                thumbnailBox
                 VStack(alignment: .leading, spacing: 4) {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(Color.white.opacity(0.09))
-                        .frame(width: titleWidth, height: 12)
+                    titleBar(height: 12)
                     if capsuleBesideTitle { capsule }
                 }
             }
@@ -494,9 +506,73 @@ struct CardFacade: View {
         }
     }
 
+    // MARK: A Convert queue row
+
+    /// The row's up / down pair: two small round buttons, one above the other.
+    private var moveControls: some View {
+        VStack(spacing: 2) {
+            Circle().fill(Color.white.opacity(0.06)).frame(width: 21, height: 21)
+            Circle().fill(Color.white.opacity(0.06)).frame(width: 21, height: 21)
+        }
+    }
+
+    /// Height of a queue row's header, which its status and buttons centre on.
+    private var flatHeaderHeight: CGFloat {
+        max(CardMetrics.thumbHeight, metrics.hasLeadingControls ? 44 : 0,
+            capsuleBesideTitle ? 11 + 4 + metaSize.height : 0)
+    }
+
+    /// A queue row has no card of its own (it sits in the queue's), so only the pieces are drawn,
+    /// at the compact row's own spacing: fixed ones on the left, the status and buttons anchored
+    /// to the right edge. The same rule as the card's: nothing here is measured or re-laid-out
+    /// while the window moves.
+    private var flatBody: some View {
+        Color.clear
+            .overlay(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .center, spacing: 8) {
+                        if metrics.hasLeadingControls { moveControls }
+                        thumbnailBox
+                        VStack(alignment: .leading, spacing: 4) {
+                            titleBar(height: 11)
+                            if capsuleBesideTitle { capsule }
+                        }
+                    }
+                    if narrow { capsule }
+                }
+                .fixedSize()
+                .padding(4)
+            }
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 8) {
+                    if metrics.hasStatus {
+                        statusColumn
+                    } else if metrics.hasStatusLabel {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(Color.white.opacity(0.07))
+                            .frame(width: 52, height: 8)
+                    }
+                    HStack(spacing: 6) {
+                        ForEach(0..<max(metrics.buttonCount, 1), id: \.self) { _ in button(28) }
+                    }
+                }
+                .frame(height: flatHeaderHeight)
+                .padding(4)
+            }
+            .allowsHitTesting(false)
+    }
+
     var body: some View {
+        if metrics.flat {
+            flatBody
+        } else {
+            cardBody
+        }
+    }
+
+    private var cardBody: some View {
         let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
-        shape
+        return shape
             .fill(Color(white: 0.075))
             .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 0.75))
             .overlay(alignment: .topLeading) {
@@ -544,6 +620,9 @@ private struct FacadeFollowsSidebar: ViewModifier, Animatable {
     var pinned: CGFloat
     /// The page container's width with the sidebar collapsed; 0 until measured.
     var area: CGFloat
+    /// False for a facade inside something that already follows the sidebar itself (the bottom
+    /// bar's queue): shifting it as well would move it twice.
+    var enabled: Bool = true
     var animatableData: CGFloat {
         get { live }
         set { live = newValue }
@@ -558,7 +637,9 @@ private struct FacadeFollowsSidebar: ViewModifier, Animatable {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if area > 0 {
+        if !enabled {
+            content
+        } else if area > 0 {
             let now = column(at: live)
             let laidOut = column(at: pinned)
             content
@@ -575,6 +656,26 @@ private struct FacadeFollowsSidebar: ViewModifier, Animatable {
 /// underneath by then). The real card is hidden at opacity 0 with animation OFF -- never a
 /// partial opacity on glass, which greys it -- so only the facade's own opacity fades.
 struct FrozenDuringResize: ViewModifier {
+    /// Whether the facade glides with the sidebar's edge while it moves (cards pinned in the page).
+    /// Rows inside the bottom bar are already carried along by the bar, so they say no.
+    var followsSidebar = true
+
+    /// A Convert queue row: no card of its own, and carried along by the bottom bar it sits in.
+    /// Its shape is seeded rather than waited for, because a row first laid out DURING a drag
+    /// (one that scrolls into view, a job added) never reports it, and would otherwise be drawn
+    /// as a full card.
+    init(queueRow: Bool = false) {
+        followsSidebar = !queueRow
+        if queueRow {
+            let seeded = SizeMemory()
+            seeded.metrics.flat = true
+            seeded.metrics.hasLeadingControls = true
+            seeded.metrics.hasStatusLabel = true
+            seeded.metrics.buttonCount = 2
+            _memory = State(initialValue: seeded)
+        }
+    }
+
     @ObservedObject private var live = LiveResizeState.shared
     @State private var memory = SizeMemory()
     @Environment(\.sidebarLiveInset) private var sidebarLive
@@ -589,7 +690,8 @@ struct FrozenDuringResize: ViewModifier {
                 .animation(nil, value: frozen)
                 .allowsHitTesting(!frozen)
             CardFacade(metrics: memory.metrics)
-                .modifier(FacadeFollowsSidebar(live: sidebarLive, pinned: sidebarPinned, area: LiveResizeState.shared.pageAreaWidth))
+                .modifier(FacadeFollowsSidebar(live: sidebarLive, pinned: sidebarPinned, area: LiveResizeState.shared.pageAreaWidth,
+                                               enabled: followsSidebar))
                 .opacity(frozen ? 1 : 0)
         }
         // The card's own state (expanded, analyzing, buttons). Only while it is really laid
@@ -602,6 +704,8 @@ struct FrozenDuringResize: ViewModifier {
             memory.metrics.hasStatus = state.hasStatus
             memory.metrics.hasStatusLabel = state.hasStatusLabel
             memory.metrics.hasLink = state.hasLink
+            memory.metrics.flat = state.flat
+            memory.metrics.hasLeadingControls = state.hasLeadingControls
             memory.metrics.reported = true
         }
         // The start is always a cut (nil while freezing): during a drag the window is already
@@ -613,7 +717,9 @@ struct FrozenDuringResize: ViewModifier {
 }
 
 extension View {
-    func frozenDuringResize() -> some View { modifier(FrozenDuringResize()) }
+    func frozenDuringResize(queueRow: Bool = false) -> some View {
+        modifier(FrozenDuringResize(queueRow: queueRow))
+    }
 }
 
 // MARK: - Status Badge
@@ -1130,21 +1236,49 @@ struct MetaLinesContent: View {
             .frame(minWidth: 22, alignment: .leading)
     }
 
+    private func wrapped(_ chips: [ChipData], _ label: String, out: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            tag(label, out: out)
+            DividedCells(chips: chips)
+        }
+    }
+
+    /// A cell, or nothing of its width when the row has none in that column.
     @ViewBuilder
-    private func cell(_ chips: [ChipData], _ column: ChipData.MetaColumn) -> some View {
-        if let chip = chips.first(where: { $0.metaColumn == column }) {
+    private func slot(_ chip: ChipData?) -> some View {
+        if let chip {
             MetaCell(chip: chip)
         } else {
             Color.clear.frame(width: 0, height: 0)
         }
     }
 
-    private func wrapped(_ chips: [ChipData], _ label: String, out: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+    /// A divider, or an empty column of the same width where the row has nothing to divide.
+    @ViewBuilder
+    private func divider(_ show: Bool) -> some View {
+        if show {
+            MetaDivider()
+        } else {
+            Color.clear.frame(width: 0.75, height: 10)
+        }
+    }
+
+    /// One row of the aligned grid. Each divider is a column of its own, so the dividers line up
+    /// from the IN row down to the OUT row, and it is drawn only between two cells that exist
+    /// (a row with no video has nothing to divide the length from).
+    private func gridRow(_ chips: [ChipData], _ label: String, out: Bool, withTime: Bool, hasVideoColumn: Bool) -> some View {
+        let time = withTime ? chips.first(where: { $0.metaColumn == .time }) : nil
+        let video = chips.first(where: { $0.metaColumn == .video })
+        let audio = chips.first(where: { $0.metaColumn == .audio })
+        return GridRow {
             tag(label, out: out)
-            FlowLayout(spacing: 4) {
-                ForEach(chips, id: \.self) { MetaCell(chip: $0) }
+            if withTime {
+                slot(time)
+                if hasVideoColumn { divider(time != nil && video != nil) }
             }
+            if hasVideoColumn { slot(video) }
+            divider(audio != nil && (video != nil || time != nil))
+            slot(audio)
         }
     }
 
@@ -1152,23 +1286,12 @@ struct MetaLinesContent: View {
     /// a narrower place (a Convert queue row) still gets the same two lines of
     /// video and audio before anything has to wrap.
     private func grid(withTime: Bool) -> some View {
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
-            if !input.isEmpty {
-                GridRow {
-                    tag("IN", out: false)
-                    if withTime { cell(input, .time) }
-                    cell(input, .video)
-                    cell(input, .audio)
-                }
-            }
-            if !output.isEmpty {
-                GridRow {
-                    tag("OUT", out: true)
-                    if withTime { cell(output, .time) }
-                    cell(output, .video)
-                    cell(output, .audio)
-                }
-            }
+        // No video column when neither row has video (an audio-only file): an empty column would
+        // still cost its spacing, and push the divider away from the audio it belongs to.
+        let hasVideoColumn = (input + output).contains { $0.metaColumn == .video }
+        return Grid(alignment: .leading, horizontalSpacing: 9, verticalSpacing: 3) {
+            if !input.isEmpty { gridRow(input, "IN", out: false, withTime: withTime, hasVideoColumn: hasVideoColumn) }
+            if !output.isEmpty { gridRow(output, "OUT", out: true, withTime: withTime, hasVideoColumn: hasVideoColumn) }
         }
     }
 
@@ -1315,6 +1438,7 @@ struct MetaLine: View {
             // The capsule hugs its content.
             MetaLineContent(chips: chips)
                 .metaCapsuleChrome()
+                .reportsFacadeMeta()
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             MetaLineContent(chips: chips)
@@ -1323,35 +1447,55 @@ struct MetaLine: View {
     }
 }
 
-/// One line of metadata chips, wrapping onto more lines only when it has to (no capsule
-/// around it; see MetaLine, PersistentCapsule).
-struct MetaLineContent: View {
-    let chips: [ChipData]
-
-    private var separator: some View {
+/// The thin vertical rule between two kinds of metadata.
+struct MetaDivider: View {
+    var body: some View {
         Rectangle().fill(Color.white.opacity(0.2)).frame(width: 0.75, height: 10)
     }
+}
 
-    private var oneLine: some View {
+/// Metadata cells with a divider between neighbours on the same line. Tries them all on one line;
+/// when they do not fit, the last one drops to its own line (length | video over audio), then
+/// every one does. It breaks at the cells rather than flowing, so a divider is never left at
+/// the start or end of a line, which a plain wrapping flow cannot promise.
+struct DividedCells: View {
+    let chips: [ChipData]
+
+    private func line(_ range: Range<Int>) -> some View {
         HStack(spacing: 9) {
-            ForEach(Array(chips.enumerated()), id: \.offset) { index, chip in
-                if index > 0 { separator }
-                MetaCell(chip: chip)
+            ForEach(Array(range), id: \.self) { index in
+                if index > range.lowerBound { MetaDivider() }
+                MetaCell(chip: chips[index])
             }
         }
     }
 
-    private var wrapped: some View {
-        FlowLayout(spacing: 8) {
-            ForEach(chips, id: \.self) { MetaCell(chip: $0) }
+    var body: some View {
+        let n = chips.count
+        if n <= 1 {
+            line(0..<n)
+        } else {
+            ViewThatFits(in: .horizontal) {
+                line(0..<n)
+                VStack(alignment: .leading, spacing: 3) {
+                    line(0..<(n - 1))
+                    line((n - 1)..<n)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(0..<n, id: \.self) { line($0..<($0 + 1)) }
+                }
+            }
         }
     }
+}
+
+/// One line of metadata chips with dividers between the kinds, breaking onto more lines only
+/// when it has to (no capsule around it; see MetaLine, PersistentCapsule).
+struct MetaLineContent: View {
+    let chips: [ChipData]
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            oneLine
-            wrapped
-        }
+        DividedCells(chips: chips)
     }
 }
 

@@ -652,19 +652,21 @@ struct CollapseToggleButton: View {
 /// A row's trailing side: an optional status slot (a job's progress column while it runs, its
 /// outcome label after) followed by the buttons.
 ///
-/// The whole side is `statusWidth + gap + the LAST button` wide in every state, however many
-/// other buttons join that one (Edit comes and goes with a queue row's status): the slot takes
+/// The whole side is `statusWidth + gap + the PERSISTENT buttons` wide in every state, however
+/// many others join them (Edit comes and goes with a queue row's status): the slot takes
 /// whatever they leave. So the text beside it never gets more or less room as the job moves on
-/// and its title never shifts. The slot is worked out from the buttons' own widths, which depend
-/// on their symbols, rather than from a number that only fits some of them. The status is one
-/// child (mark it `statusSlot()`), placed right-aligned against the buttons, so a view that is
-/// still fading out inside it takes no room.
+/// and its title never shifts. Mark the buttons that are always there `persistentButton()`
+/// (none marked: the last one counts). The slot is worked out from the buttons' own widths,
+/// which depend on their symbols, rather than from a number that only fits some of them. The
+/// status is one child (mark it `statusSlot()`), placed right-aligned against the buttons, so a
+/// view that is still fading out inside it takes no room.
 struct StatusBesideButtons: Layout {
     var statusWidth: CGFloat
     var gap: CGFloat
     var buttonSpacing: CGFloat
 
     struct IsStatus: LayoutValueKey { static let defaultValue = false }
+    struct IsPersistent: LayoutValueKey { static let defaultValue = false }
 
     private func split(_ subviews: Subviews) -> (status: LayoutSubview?, buttons: [LayoutSubview]) {
         (subviews.first { $0[IsStatus.self] }, subviews.filter { !$0[IsStatus.self] })
@@ -675,8 +677,11 @@ struct StatusBesideButtons: Layout {
         let sizes = buttons.map { $0.sizeThatFits(.unspecified) }
         let buttonsWidth = sizes.map(\.width).reduce(0, +) + buttonSpacing * CGFloat(max(sizes.count - 1, 0))
         let height = max(sizes.map(\.height).max() ?? 0, status?.sizeThatFits(.unspecified).height ?? 0)
-        guard status != nil, let last = sizes.last else { return CGSize(width: buttonsWidth, height: height) }
-        return CGSize(width: max(statusWidth + gap + last.width, gap + buttonsWidth), height: height)
+        guard status != nil, !sizes.isEmpty else { return CGSize(width: buttonsWidth, height: height) }
+        var kept = buttons.indices.filter { buttons[$0][IsPersistent.self] }.map { sizes[$0].width }
+        if kept.isEmpty, let last = sizes.last { kept = [last.width] }
+        let keptWidth = kept.reduce(0, +) + buttonSpacing * CGFloat(kept.count - 1)
+        return CGSize(width: max(statusWidth + gap + keptWidth, gap + buttonsWidth), height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
@@ -700,6 +705,11 @@ extension View {
     /// Marks the status child of a `StatusBesideButtons`.
     func statusSlot() -> some View {
         layoutValue(key: StatusBesideButtons.IsStatus.self, value: true)
+    }
+
+    /// Marks a button of a `StatusBesideButtons` that is there in every state.
+    func persistentButton() -> some View {
+        layoutValue(key: StatusBesideButtons.IsPersistent.self, value: true)
     }
 }
 
@@ -728,6 +738,10 @@ struct CompletedCard<Status: View>: View {
     /// in the header's trailing corner -- e.g. Convert's per-row Edit icon.
     /// nil (the default) renders nothing extra.
     var trailingAccessory: AnyView? = nil
+    /// A control that is there in every state, beside the remove button (Convert's Reveal in
+    /// Finder). Unlike `trailingAccessory` it does not come and go, so it is part of the width
+    /// the row keeps constant.
+    var revealAccessory: AnyView? = nil
     var thumbnail: AnyView?
     var thumbnailPlaceholder: String = "doc"
     var title: String
@@ -760,6 +774,11 @@ struct CompletedCard<Status: View>: View {
     // Status content
     @ViewBuilder var status: () -> Status
 
+    /// Buttons on the header's trailing edge, for the resize facade.
+    private var buttonCount: Int {
+        (trailingAccessory != nil ? 1 : 0) + (revealAccessory != nil ? 1 : 0) + 1
+    }
+
     private var rowContent: some View {
         VStack(alignment: .leading, spacing: compact ? 8 : 10) {
             cardHeader
@@ -773,6 +792,15 @@ struct CompletedCard<Status: View>: View {
         .padding(flat ? 4 : (compact ? 8 : 12))
         // Same proportional-width fix as PreviewCard.fullCard above.
         .frame(maxWidth: .infinity, alignment: .leading)
+        // What the resize facade needs to know about a queue row (see FrozenDuringResize).
+        .preference(key: CardFacadeMetricsKey.self, value: CardFacadeMetrics(
+            buttonCount: buttonCount,
+            hasStatus: inlineStatus != nil,
+            hasStatusLabel: statusLabel != nil,
+            flat: flat,
+            hasLeadingControls: leadingAccessory != nil,
+            reported: true
+        ))
     }
 
     var body: some View {
@@ -856,6 +884,8 @@ struct CompletedCard<Status: View>: View {
                         // Cut where it runs out of room, never in the middle.
                         .truncationMode(.tail)
                         .layoutPriority(1)
+                        // What is shown of it is the length the facade's title bar takes.
+                        .reportsToFacade { metrics, size in metrics.titleWidth = size.width }
                     if !secondaryTitle.isEmpty, !narrow {
                         Text(secondaryTitle)
                             .font(.appMono(size: 10))
@@ -888,7 +918,8 @@ struct CompletedCard<Status: View>: View {
                         .statusSlot()
                     }
                     if let trailingAccessory { trailingAccessory }
-                    removeButton
+                    if let revealAccessory { revealAccessory.persistentButton() }
+                    removeButton.persistentButton()
                 }
             } else {
                 if let inlineStatus { inlineStatus }

@@ -1440,6 +1440,11 @@ struct PersistentCapsule: View {
     /// growing first (and the title above it can appear before the metadata does).
     var revealDelay: Double = 0
 
+    /// True from the instant "Analyzing…" leaves until `revealDelay` elapses. Caps the
+    /// capsule at the analyzing pill's own width for that whole window -- see the `.frame`
+    /// below for why this exists.
+    @State private var isHolding = false
+
     private var isAnalyzing: Bool {
         if case .analyzing = content { return true }
         return false
@@ -1483,8 +1488,18 @@ struct PersistentCapsule: View {
                     .transition(incoming)
             }
         }
-        // A little wider than its label while it waits, so the capsule has somewhere to grow from.
-        .frame(minWidth: isAnalyzing ? 150 : nil, alignment: .leading)
+        // A little wider than its label while it waits, so the capsule has somewhere to grow
+        // from -- and while isHolding, capped at that SAME width, not just floored there.
+        // Without the cap, the moment analyzing ends this ZStack immediately measures the
+        // real incoming content (MetaLineContent/NoteContent) at its full natural size --
+        // `revealDelay` only holds that content's OPACITY at 0, transitions don't hold back
+        // the LAYOUT SPACE it occupies -- so the capsule jumped straight to its final width
+        // and then just sat there, blank and blurred, for the whole delay: reported live as
+        // "two metadata capsules overlapping" (the title's own placeholder bar above it, and
+        // this now-wide-but-empty one, both blurred pills on screen at once). Holding the
+        // ceiling at 150 until the same instant the content is ready makes the resize and the
+        // reveal a single motion instead of an empty capsule that fills in later.
+        .frame(minWidth: isAnalyzing ? 150 : nil, maxWidth: isHolding ? 150 : nil, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
@@ -1503,6 +1518,15 @@ struct PersistentCapsule: View {
         .animation(.easeInOut(duration: 0.3), value: content.kind)
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(nil, value: content)
+        .task(id: content.kind) {
+            guard revealDelay > 0, content.kind != .analyzing else {
+                isHolding = false
+                return
+            }
+            isHolding = true
+            try? await Task.sleep(nanoseconds: UInt64(revealDelay * 1_000_000_000))
+            if !Task.isCancelled { isHolding = false }
+        }
     }
 }
 
@@ -1636,10 +1660,17 @@ struct SegmentOption: Identifiable {
     var help: String = ""
     var isSelected: Bool
     var tint: Color = DesignTokens.Accent.primary
-    /// A second, smaller line under the label: the source's own value beside "Same as Source".
-    /// When any option in a row has one, every segment of that row takes the taller height, so
-    /// the row stays aligned.
+    /// A second, smaller line under the label: the source's own value beside "Same as Source",
+    /// or (RESOLUTION) a friendly name like "4K Ultra HD" beside every option, not just the
+    /// source's. When any option in a row has one, every segment of that row takes the taller
+    /// height, so the row stays aligned.
     var subtext: String? = nil
+    /// True for the one option that leaves a track untouched ("Same as Source") -- DropdownField
+    /// reads this, not subtext, to decide whether the field counts as "changed" (accent-tinted).
+    /// Kept separate from subtext because RESOLUTION now puts a subtext on every option (not
+    /// just "Same as Source"), which would otherwise have made every resolution read as
+    /// unchanged the moment it had explanatory text of its own.
+    var isSourceDefault: Bool = false
     let action: () -> Void
 }
 
@@ -2115,11 +2146,10 @@ struct DropdownField: View {
     @Binding var openID: String?
 
     private var isOpen: Bool { openID == id }
-    /// Only the "Same as Source" option carries a subtext (the source's own
-    /// value) -- see videoCodecOptions/resolutionOptions/audioCodecOptions --
-    /// so the selected option having one IS it being unchanged.
     private var selected: SegmentOption? { options.first(where: \.isSelected) }
-    private var isChanged: Bool { selected != nil && selected?.subtext == nil }
+    /// "Same as Source" is the one option marked isSourceDefault -- everything else (including a
+    /// resolution option, which now carries its own explanatory subtext too) counts as changed.
+    private var isChanged: Bool { selected != nil && !(selected?.isSourceDefault ?? false) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {

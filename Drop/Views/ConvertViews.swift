@@ -2572,6 +2572,13 @@ struct ConvertPreviewCard: View {
                     if showsModeRow {
                         VStack(alignment: .leading, spacing: 6) {
                             FieldCaption(icon: "switch.2", text: "CONVERT AS")
+                                // Both caption rows are pinned to the SAME height (see the
+                                // matching frame below) -- CONVERT AS's is a bare FieldCaption,
+                                // OUTPUT FORMAT's now also carries the legend beside it, and
+                                // without this the two rows' natural heights differed by a
+                                // point or two (legend text is 8.5pt vs the caption's 10pt),
+                                // enough to visibly un-level the pills sitting right below them.
+                                .frame(height: 15, alignment: .leading)
                             SegmentedCapsule(options: modeOptions, fill: false)
                         }
                     }
@@ -2584,6 +2591,7 @@ struct ConvertPreviewCard: View {
                             // from beside the caption).
                             nativeLegend(positiveLabel: "Original", showReencodeHint: false)
                         }
+                        .frame(height: 15, alignment: .leading)
                         SegmentedCapsule(options: formatOptions)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

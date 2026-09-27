@@ -403,7 +403,7 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
             DropLogger.shared.write("Convert size chip: unusable .size attr for \(url.path): \(String(describing: attrs[.size]))")
             return nil
         }
-        return ByteCountFormatter.string(fromByteCount: sizeNumber.int64Value, countStyle: .file)
+        return formatByteSize(Int(sizeNumber.int64Value))
     }
 
     func useSameAsSourceForVideo() {
@@ -493,14 +493,8 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
             if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
                let bytes = attrs[.size] as? Int64 {
                 info.fileSizeBytes = Int(bytes)
-                let mb = Double(bytes) / 1_048_576
-                if mb >= 1000 {
-                    info.fileSize = String(format: "%.1f GB", mb / 1024)
-                } else if mb >= 0.1 {
-                    info.fileSize = String(format: "%.1f MB", mb)
-                } else {
-                    info.fileSize = String(format: "%.0f KB", mb * 1024)
-                }
+                // Decimal, like Finder: the same units as the finished file's size and the estimate.
+                info.fileSize = formatByteSize(Int(bytes))
             }
 
             // ffprobe for codec/resolution/duration
@@ -680,16 +674,11 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         return max(Double(w * h) / Double(1920 * 1080), 0.1)
     }
 
+    /// "~"-prefixed, in the same style as the exact size that replaces it once the job is done
+    /// (it used to be whole MiB written as "MB", against a decimal one-place figure).
     var estimatedOutputSizeLabel: String? {
         guard let bytes = estimatedOutputBytes else { return nil }
-        let mb = Double(bytes) / 1_048_576
-        if mb >= 1000 {
-            return String(format: "~%.1f GB", mb / 1024)
-        } else if mb >= 0.1 {
-            return String(format: "~%.0f MB", mb)
-        } else {
-            return String(format: "~%.0f KB", mb * 1024)
-        }
+        return "~" + formatByteSize(bytes)
     }
 
     // MARK: Input/output chip rows -- same visual language as Download's
@@ -722,7 +711,10 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     var outputChips: [ChipData] {
         var result: [ChipData] = []
         let dur = mediaInfo?.durationSeconds.flatMap { formatDurationChip(seconds: Int($0)) } ?? mediaInfo?.duration
-        if let length = ChipData.lengthAndSize(length: dur, size: estimatedOutputSizeLabel) { result.append(length) }
+        // The estimate until the file exists, then its real size. The "~" keeps its slot either
+        // way, so a queue row's capsule does not change width when the real size lands.
+        let size = status == .done ? (outputSizeLabel ?? estimatedOutputSizeLabel) : estimatedOutputSizeLabel
+        if let length = ChipData.lengthAndSize(length: dur, size: size, reservesEstimateMark: true) { result.append(length) }
         if mediaMode != .audio {
             // Frame rate and resolution are unchanged by conversion (Convert
             // never retimes or resizes), so they carry over from the source.
@@ -943,11 +935,7 @@ struct ConvertView: View {
             .compactMap { $0.estimatedOutputBytes }
             .reduce(0, +)
         guard bytes > 0 else { return nil }
-        let d = Double(bytes)
-        if d >= 1_073_741_824 { return String(format: "~%.1f GB", d / 1_073_741_824) }
-        if d >= 1_048_576     { return String(format: "~%.0f MB", d / 1_048_576) }
-        if d >= 1_024         { return String(format: "~%.0f KB", d / 1_024) }
-        return "~\(bytes) B"
+        return "~" + formatByteSize(bytes)
     }
 
     private var convertButtonLabel: String {
@@ -2415,35 +2403,45 @@ struct ConvertPreviewCard: View {
         )
     }
 
-    /// The row's status, in line with everything else: "Converting" with the
-    /// percentage and a slim progress bar beneath while it runs, otherwise a
-    /// glyph and a word.
-    private var queueInlineStatus: AnyView {
-        AnyView(
+    /// The progress column, only while the job runs: "Converting" (or its percentage and time
+    /// left) with a slim bar beneath. Where it goes next (Done, Failed...) is its own label
+    /// (queueOutcomeLabel) beside the buttons, not this column changing shape.
+    private var queueProgressColumn: AnyView? {
+        guard job.visibleStatus == .converting else { return nil }
+        return AnyView(
             VStack(alignment: .trailing, spacing: 5) {
                 HStack(spacing: 5) {
-                    switch job.visibleStatus {
-                    case .done:
-                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                    case .failed:
-                        Image(systemName: "xmark.circle.fill").foregroundColor(.red)
-                    case .cancelled:
-                        Image(systemName: "slash.circle.fill").foregroundColor(.orange)
-                    case .converting:
-                        Image(systemName: "arrow.triangle.2.circlepath").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                    case .queued:
-                        Image(systemName: "clock").foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    }
-                    Text(job.visibleStatus == .converting && !job.etaText.isEmpty ? job.etaText : queueStatusLabel)
-                        .foregroundColor(job.visibleStatus == .queued ? .white.opacity(DesignTokens.Text.tertiary) : queueStatusColor)
+                    Image(systemName: "arrow.triangle.2.circlepath").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                    Text(job.etaText.isEmpty ? queueStatusLabel : job.etaText)
+                        .foregroundColor(queueStatusColor)
                         .lineLimit(1)
                 }
                 .font(.appMono(size: 10, weight: .semibold))
-                if job.visibleStatus == .converting {
-                    inlineProgressBar
-                }
+                inlineProgressBar
             }
-            .frame(width: 128, alignment: .trailing)
+            .frame(width: CardMetrics.statusWidth, alignment: .trailing)
+        )
+    }
+
+    /// Where the row stands when it is not converting: a glyph and a word, to the left of the
+    /// buttons.
+    private var queueOutcomeLabel: AnyView? {
+        let icon: String, color: Color
+        switch job.visibleStatus {
+        case .converting: return nil
+        case .done:       (icon, color) = ("checkmark.circle.fill", .green)
+        case .failed:     (icon, color) = ("xmark.circle.fill", .red)
+        case .cancelled:  (icon, color) = ("slash.circle.fill", .orange)
+        case .queued:     (icon, color) = ("clock", .white.opacity(DesignTokens.Text.tertiary))
+        }
+        return AnyView(
+            HStack(spacing: 5) {
+                Image(systemName: icon).foregroundColor(color)
+                Text(queueStatusLabel)
+                    .foregroundColor(job.visibleStatus == .queued ? .white.opacity(DesignTokens.Text.tertiary) : queueStatusColor)
+                    .lineLimit(1)
+            }
+            .font(.appMono(size: 10, weight: .semibold))
         )
     }
 
@@ -2509,7 +2507,8 @@ struct ConvertPreviewCard: View {
             thumbnailPlaceholder: job.isVideoFile ? "video" : "waveform",
             title: job.inputURL.deletingPathExtension().lastPathComponent,
             subtitle: isQueueRow ? queueRowSubtitle : outputLayer,
-            inlineStatus: isQueueRow ? queueInlineStatus : nil,
+            inlineStatus: isQueueRow ? queueProgressColumn : nil,
+            statusLabel: isQueueRow ? queueOutcomeLabel : nil,
             hasStatusContent: isQueueRow ? false : hasCompletedCardStatusContent,
             compact: isQueueRow,
             // Queue rows sit inside the bottom bar's grey card, told apart by

@@ -647,6 +647,62 @@ struct CollapseToggleButton: View {
     }
 }
 
+// MARK: - StatusBesideButtons
+
+/// A row's trailing side: an optional status slot (a job's progress column while it runs, its
+/// outcome label after) followed by the buttons.
+///
+/// The whole side is `statusWidth + gap + the LAST button` wide in every state, however many
+/// other buttons join that one (Edit comes and goes with a queue row's status): the slot takes
+/// whatever they leave. So the text beside it never gets more or less room as the job moves on
+/// and its title never shifts. The slot is worked out from the buttons' own widths, which depend
+/// on their symbols, rather than from a number that only fits some of them. The status is one
+/// child (mark it `statusSlot()`), placed right-aligned against the buttons, so a view that is
+/// still fading out inside it takes no room.
+struct StatusBesideButtons: Layout {
+    var statusWidth: CGFloat
+    var gap: CGFloat
+    var buttonSpacing: CGFloat
+
+    struct IsStatus: LayoutValueKey { static let defaultValue = false }
+
+    private func split(_ subviews: Subviews) -> (status: LayoutSubview?, buttons: [LayoutSubview]) {
+        (subviews.first { $0[IsStatus.self] }, subviews.filter { !$0[IsStatus.self] })
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (status, buttons) = split(subviews)
+        let sizes = buttons.map { $0.sizeThatFits(.unspecified) }
+        let buttonsWidth = sizes.map(\.width).reduce(0, +) + buttonSpacing * CGFloat(max(sizes.count - 1, 0))
+        let height = max(sizes.map(\.height).max() ?? 0, status?.sizeThatFits(.unspecified).height ?? 0)
+        guard status != nil, let last = sizes.last else { return CGSize(width: buttonsWidth, height: height) }
+        return CGSize(width: max(statusWidth + gap + last.width, gap + buttonsWidth), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (status, buttons) = split(subviews)
+        var x = bounds.maxX
+        for button in buttons.reversed() {
+            let size = button.sizeThatFits(.unspecified)
+            x -= size.width
+            button.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(size))
+            x -= buttonSpacing
+        }
+        if let status {
+            let size = status.sizeThatFits(.unspecified)
+            let right = buttons.isEmpty ? bounds.maxX : x + buttonSpacing - gap
+            status.place(at: CGPoint(x: right, y: bounds.midY), anchor: .trailing, proposal: ProposedViewSize(size))
+        }
+    }
+}
+
+extension View {
+    /// Marks the status child of a `StatusBesideButtons`.
+    func statusSlot() -> some View {
+        layoutValue(key: StatusBesideButtons.IsStatus.self, value: true)
+    }
+}
+
 // MARK: - CompletedCard
 
 /// Universal status card. Used while a job is active (downloading /
@@ -682,6 +738,9 @@ struct CompletedCard<Status: View>: View {
     /// Convert queue's "Converting 64%" with its progress bar), instead of in a
     /// section below a divider.
     var inlineStatus: AnyView? = nil
+    /// How the row's work ended or where it stands (Done, Failed, Queued...), beside the buttons in
+    /// the progress column's place. Its own label, not the column changing shape.
+    var statusLabel: AnyView? = nil
     /// False hides the divider + status() section entirely -- for rows
     /// where that section would otherwise render as an empty divider with
     /// nothing beneath it (e.g. a freshly-queued Convert job with no
@@ -751,17 +810,13 @@ struct CompletedCard<Status: View>: View {
         }
     }
 
-    /// Remove, or Cancel while the row's work is in flight.
-    @ViewBuilder
+    /// Remove, or Cancel while the row's work is in flight. One button either way, so the icon
+    /// swaps in place (see HoverIconButton) instead of one button replacing another.
     private var removeOrCancelButton: some View {
-        if let onCancel {
-            HoverIconButton(icon: "stop.circle.fill", size: 16, color: .orange, help: "Cancel", expandable: true) {
-                onCancel()
-            }
-        } else {
-            HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: true) {
-                onRemove()
-            }
+        let cancelling = onCancel != nil
+        return HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 16,
+                               color: cancelling ? .orange : .red, help: cancelling ? "Cancel" : "Remove", expandable: true) {
+            if let onCancel { onCancel() } else { onRemove() }
         }
     }
 
@@ -798,7 +853,8 @@ struct CompletedCard<Status: View>: View {
                         .font(.appMono(size: compact ? 12 : 13, weight: .semibold))
                         .foregroundColor(.white.opacity((showCheckbox && !isSelected) ? DesignTokens.Text.disabled : DesignTokens.Text.primary))
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        // Cut where it runs out of room, never in the middle.
+                        .truncationMode(.tail)
                         .layoutPriority(1)
                     if !secondaryTitle.isEmpty, !narrow {
                         Text(secondaryTitle)
@@ -813,20 +869,29 @@ struct CompletedCard<Status: View>: View {
 
             Spacer()
 
-            if let inlineStatus { inlineStatus }
-
             // Destructive action -- same red treatment as PreviewCard's
             // remove control, so "this deletes the item" reads identically
             // everywhere in the app. trailingAccessory (e.g. Edit) stacks
             // directly beneath it rather than living in its own row/section.
             let removeButton = removeOrCancelButton
             if flat {
-                // Beside each other, so the row stays one line tall.
-                HStack(spacing: 6) {
+                // Beside each other, so the row stays one line tall. The status (progress
+                // column, then the outcome label) and the buttons are one group of a constant
+                // width (see StatusBesideButtons): Edit comes and goes with the status, and the
+                // title must not.
+                StatusBesideButtons(statusWidth: CardMetrics.statusWidth, gap: compact ? 8 : 12, buttonSpacing: 6) {
+                    if inlineStatus != nil || statusLabel != nil {
+                        ZStack(alignment: .trailing) {
+                            if let inlineStatus { inlineStatus.transition(.blurIn) }
+                            if let statusLabel { statusLabel.transition(.blurIn) }
+                        }
+                        .statusSlot()
+                    }
                     if let trailingAccessory { trailingAccessory }
                     removeButton
                 }
             } else {
+                if let inlineStatus { inlineStatus }
                 VStack(spacing: 6) {
                     removeButton
                     if let trailingAccessory { trailingAccessory }

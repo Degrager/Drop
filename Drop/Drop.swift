@@ -303,11 +303,20 @@ func effectiveVideoResolutionLabel(_ quality: VideoQuality, sourceMaxHeight: Int
 /// inconsistency (one used "%.1f MB", the other "%.0f MB"), so the same byte
 /// count could read as two different sizes depending on which chip showed it.
 ///
-/// Decimal units (1 MB = 1,000,000 bytes), exactly as Finder and a finished download's own
-/// size are written: it used to divide by 1024 while still saying "MB", so even a perfect
-/// estimate read about 5% under the size that replaced it (106.2 MB, then 111.4 MB).
+/// Decimal units (1 MB = 1,000,000 bytes), as Finder writes them: it used to divide by 1024 while
+/// still saying "MB", so even a perfect estimate read about 5% under the size that replaced it
+/// (106.2 MB, then 111.4 MB).
+///
+/// The SHAPE is fixed -- always one decimal for MB, two for GB -- because an estimate and the
+/// real size that replaces it are both written here and must be the same length: the system's
+/// own formatter drops a decimal that is nearly whole ("8 MB" for 8.03 MB, against "~7.9 MB"),
+/// which made a capsule shrink (and re-wrap) the moment a job finished.
 func formatByteSize(_ bytes: Int) -> String {
-    ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    let b = Double(max(bytes, 0))
+    if b < 1_000 { return "\(Int(b)) B" }
+    if b < 999_500 { return String(format: "%.0f KB", b / 1_000) }
+    if b < 999_950_000 { return String(format: "%.1f MB", b / 1_000_000) }
+    return String(format: "%.2f GB", b / 1_000_000_000)
 }
 
 /// Best guess at one stream's size in bytes, from yt-dlp's format list.
@@ -840,7 +849,7 @@ class HistoryStore: ObservableObject {
             // Real file size from disk.
             if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
                let bytes = attrs[.size] as? Int {
-                snapshot[i].fileSize = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+                snapshot[i].fileSize = formatByteSize(Int(bytes))
             }
 
             // Probe codec/resolution/bitrate with ffprobe to rebuild the quality descriptor.
@@ -2577,7 +2586,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 if let path = confirmedPath,
                    let attrs = try? fm.attributesOfItem(atPath: path),
                    let bytes = attrs[.size] as? Int64 {
-                    fileSize = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+                    fileSize = formatByteSize(Int(bytes))
                 }
 
                 // Verify the REAL resulting resolution against what was requested --

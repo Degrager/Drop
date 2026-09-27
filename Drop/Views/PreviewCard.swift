@@ -20,6 +20,12 @@ enum CardMetrics {
     /// Height of the IN / OUT metadata capsule (two rows). The analyzing placeholder is drawn
     /// at the same height, so a card keeps its size as it resolves.
     static let metaCapsuleHeight: CGFloat = 41
+    /// Room between a download card's text and its buttons for the progress column, and, once
+    /// the download has finished, for the outcome label plus the Reveal button that joins the
+    /// buttons then: the total is the same either way, so the title never has to give way.
+    static let statusWidth: CGFloat = 128
+    /// One header button (28pt) and the 12pt gap that follows it.
+    static let buttonSlot: CGFloat = 40
 }
 
 /// A control in a card's header, in the button slot beside the remove button. The same
@@ -127,8 +133,12 @@ struct PreviewCard<Settings: View>: View {
     /// bar first takes the title's length and only then gives way to the title.
     var titleKnown: Bool = true
     /// A status column between the text and the buttons on the header's trailing side (a
-    /// download's progress).
+    /// download's progress while it runs).
     var inlineStatus: AnyView? = nil
+    /// A download's outcome (Done, Failed, Cancelled), to the left of the buttons once the
+    /// progress column has gone. Not part of the progress column: it is its own label, so
+    /// nothing that was in the column moves.
+    var statusLabel: AnyView? = nil
     /// Takes the collapse button's slot (a download's cancel, then redownload / retry).
     var primaryControl: CardControl? = nil
     /// A control to the left of the primary one (Reveal in Finder, once a download is done).
@@ -257,6 +267,7 @@ struct PreviewCard<Settings: View>: View {
             analyzing: isAnalyzing,
             buttonCount: buttonCount,
             hasStatus: inlineStatus != nil,
+            hasStatusLabel: statusLabel != nil,
             hasLink: expanded && showsSettings && !isAnalyzing && !secondaryTitle.isEmpty,
             reported: true
         ))
@@ -270,7 +281,7 @@ struct PreviewCard<Settings: View>: View {
         // Every state change (analyzing -> ready -> downloading -> finished) animates in place:
         // the same card, its contents adjusting.
         .animation(.easeInOut(duration: 0.35), value: StateKey(
-            analyzing: isAnalyzing, settings: showsSettings, status: inlineStatus != nil, buttons: buttonCount
+            analyzing: isAnalyzing, settings: showsSettings, status: inlineStatus != nil, label: statusLabel != nil, buttons: buttonCount
         ))
         .transition(.glassPopInOnly)
     }
@@ -279,7 +290,14 @@ struct PreviewCard<Settings: View>: View {
         var analyzing: Bool
         var settings: Bool
         var status: Bool
+        var label: Bool
         var buttons: Int
+    }
+
+    /// The room the status slot takes: what the progress column needs, less the Reveal button
+    /// that shares the trailing side once a download is done.
+    private var statusSlotWidth: CGFloat {
+        CardMetrics.statusWidth - (secondaryControl != nil ? CardMetrics.buttonSlot : 0)
     }
 
     /// Buttons on the header's trailing edge, for the resize facade.
@@ -411,7 +429,8 @@ struct PreviewCard<Settings: View>: View {
                                 ((showCheckbox && !isSelected) ? DesignTokens.Text.disabled : DesignTokens.Text.primary))
                         ))
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        // Cut where it runs out of room, never in the middle.
+                        .truncationMode(.tail)
                         // The same cap in every state, so the title never has to shorten itself
                         // when the progress column appears next to it.
                         .frame(maxWidth: Self.titleMaxWidth, alignment: .leading)
@@ -454,8 +473,23 @@ struct PreviewCard<Settings: View>: View {
 
             Spacer()
 
-            if let inlineStatus {
-                inlineStatus.transition(.blurIn)
+            if inlineStatus != nil || statusLabel != nil {
+                // A download's progress column, then (in its place) its outcome label. The room
+                // they share is worked out from the buttons that come after it -- the Reveal button
+                // that joins them when a download finishes takes 40pt of it -- so the whole
+                // trailing side is the same width in every download state and the title never
+                // gets more or less room. That width is a spacer that never animates; the two
+                // views swap inside it (as an overlay, so the outgoing one takes no room while it
+                // fades) and stay right-aligned against the buttons.
+                Color.clear
+                    .frame(width: statusSlotWidth, height: 1)
+                    .animation(nil, value: statusSlotWidth)
+                    .overlay(alignment: .trailing) {
+                        ZStack(alignment: .trailing) {
+                            if let inlineStatus { inlineStatus.transition(.blurIn) }
+                            if let statusLabel { statusLabel.transition(.blurIn) }
+                        }
+                    }
             }
 
             trailingArea

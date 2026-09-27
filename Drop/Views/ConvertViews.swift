@@ -294,8 +294,10 @@ struct ConvertMediaInfo {
     var pixelHeight: Int? = nil
     var fileSizeBytes: Int? = nil  // raw source size, for stream-copy size estimation
     var videoFrameRateLabel: String? = nil  // e.g. "30fps", "29.97fps" -- from r_frame_rate
-    var audioBitrateKbps: Int? = nil        // from the audio stream's own bit_rate
-    var videoBitrateKbps: Int? = nil        // from the video stream's own bit_rate (not every container reports it)
+    var audioBitrateKbps: Int? = nil        // from the audio stream's own bit_rate, or estimated -- see loadMediaInfo
+    var videoBitrateKbps: Int? = nil        // from the video stream's own bit_rate, or estimated -- see loadMediaInfo
+    var audioBitrateIsEstimated: Bool = false  // derived from the container total, not read directly -- "~" in the UI
+    var videoBitrateIsEstimated: Bool = false
 }
 
 enum ConvertJobStatus { case queued, converting, done, failed, cancelled }
@@ -729,6 +731,39 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
                             }
                         }
                     }
+                    // Fallback for a stream that doesn't report its own bit_rate (common for
+                    // some MOV/AAC combinations, and plenty of encoders never write the field
+                    // at all): the container's own bit_rate (format.bit_rate) -- the combined
+                    // rate of everything in the file -- is present almost universally even when
+                    // a per-stream figure is missing. For a file with only one meaningful stream
+                    // (video-only, or audio-only) that total already IS this stream's own rate;
+                    // with both a video and an audio track, subtracting whichever side IS known
+                    // leaves a reasonable estimate of the other. Either result is marked
+                    // estimated (sourceVideo/AudioBitrateSubtext adds a "~") -- never presented
+                    // as if ffprobe reported it directly, and never attempted when NEITHER side
+                    // is known (nothing to subtract from the combined total).
+                    let containerBitrateKbps: Int? = (json["format"] as? [String: Any])
+                        .flatMap { $0["bit_rate"] as? String }
+                        .flatMap { Int($0) }
+                        .map { $0 / 1000 }
+                    if info.videoBitrateKbps == nil, info.videoCodec != nil, let container = containerBitrateKbps {
+                        if info.audioCodec == nil {
+                            info.videoBitrateKbps = container
+                            info.videoBitrateIsEstimated = true
+                        } else if let audio = info.audioBitrateKbps, container > audio {
+                            info.videoBitrateKbps = container - audio
+                            info.videoBitrateIsEstimated = true
+                        }
+                    }
+                    if info.audioBitrateKbps == nil, info.audioCodec != nil, let container = containerBitrateKbps {
+                        if info.videoCodec == nil {
+                            info.audioBitrateKbps = container
+                            info.audioBitrateIsEstimated = true
+                        } else if let video = info.videoBitrateKbps, container > video {
+                            info.audioBitrateKbps = container - video
+                            info.audioBitrateIsEstimated = true
+                        }
+                    }
                     // The container-level format.duration can come back
                     // missing or "N/A" for some files (e.g. certain MKVs
                     // without a Duration element, or anything ffprobe can't
@@ -955,8 +990,19 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     var sourceAudioCodecLabel: String? {
         mediaInfo?.audioCodec.map { Self.prettyCodec($0, matching: ConvertAudioCodec.allCases, probeNames: { $0.probeNames }) }
     }
-    var sourceVideoBitrateSubtext: String? { mediaInfo?.videoBitrateKbps.map { bitrateChoiceLabel($0) } }
-    var sourceAudioBitrateSubtext: String? { mediaInfo?.audioBitrateKbps.map { bitrateChoiceLabel($0) } }
+    /// "~" marks a bitrate ConvertMediaInfo derived from the container total rather than reading
+    /// directly off the stream (see loadMediaInfo) -- same convention as the download size
+    /// estimate's own reserved "~" slot.
+    var sourceVideoBitrateSubtext: String? {
+        guard let kbps = mediaInfo?.videoBitrateKbps else { return nil }
+        let label = bitrateChoiceLabel(kbps)
+        return mediaInfo?.videoBitrateIsEstimated == true ? "~\(label)" : label
+    }
+    var sourceAudioBitrateSubtext: String? {
+        guard let kbps = mediaInfo?.audioBitrateKbps else { return nil }
+        let label = bitrateChoiceLabel(kbps)
+        return mediaInfo?.audioBitrateIsEstimated == true ? "~\(label)" : label
+    }
 
     /// "Original: " subtext for the VIDEO layer -- pretty-printed source codec
     /// plus resolution, e.g. "H.264 · 1920x1080".
@@ -2447,7 +2493,7 @@ struct ConvertPreviewCard: View {
     /// Lets you change only the audio (or only the video) on a clip without
     /// touching the other track.
     private var videoCodecOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeVideo, subtext: job.sourceVideoCodecLabel) {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeVideo, subtext: job.sourceVideoCodecLabel, isSourceDefault: true) {
             withAnimation(.spring(response: 0.25)) { job.useSameAsSourceForVideo() }
         }]
         options += job.availableVideoCodecs.filter(\.isOffered).map { codec in
@@ -2467,7 +2513,7 @@ struct ConvertPreviewCard: View {
     /// Same as Source vs. that one codec, and picking the format already implies
     /// the latter).
     private var audioCodecOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeAudio, subtext: job.sourceAudioCodecLabel) {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeAudio, subtext: job.sourceAudioCodecLabel, isSourceDefault: true) {
             withAnimation(.spring(response: 0.25)) { job.useSameAsSourceForAudio() }
         }]
         let codecs = job.availableAudioCodecs.filter(\.isOffered)
@@ -2486,17 +2532,35 @@ struct ConvertPreviewCard: View {
 
     /// RESOLUTION -- the usual sizes smaller than the source's (never upscaled), by the short side.
     /// "Same as Source" leaves the video alone; anything else re-encodes it (like for like, with
-    /// the source's own codec, while "Same as Source" is selected on VIDEO CODEC).
+    /// the source's own codec, while "Same as Source" is selected on VIDEO CODEC). Every real
+    /// size carries the common marketing name as its subtext ("4K Ultra HD" beside "2160p") --
+    /// unlike the codec/format rows, this subtext does NOT mean "unchanged" (see
+    /// SegmentOption.isSourceDefault, which only "Same as Source" sets).
     private var resolutionOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledShortSide == nil, subtext: job.mediaInfo?.resolution) {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledShortSide == nil, subtext: job.mediaInfo?.resolution, isSourceDefault: true) {
             withAnimation(.spring(response: 0.25)) { job.chooseResolution(nil) }
         }]
         options += job.availableResolutions.map { side in
-            SegmentOption(id: "\(side)", label: "\(side)p", isSelected: job.scaledShortSide == side) {
+            SegmentOption(id: "\(side)", label: "\(side)p", isSelected: job.scaledShortSide == side, subtext: Self.resolutionMarketingName(side)) {
                 withAnimation(.spring(response: 0.25)) { job.chooseResolution(side) }
             }
         }
         return options
+    }
+
+    /// The common name for one of the fixed ladder sizes in ConvertJob.availableResolutions
+    /// (2160/1440/1080/720/480) -- "2K"/"4K" only where that nickname is unambiguous; 1080 and
+    /// below use their well-known name alone, the way Download's own quality ladder is described
+    /// everywhere else (Netflix, YouTube, Apple).
+    private static func resolutionMarketingName(_ shortSide: Int) -> String? {
+        switch shortSide {
+        case 2160: return "4K Ultra HD"
+        case 1440: return "2K Quad HD"
+        case 1080: return "Full HD"
+        case 720: return "HD"
+        case 480: return "SD"
+        default: return nil
+        }
     }
 
     /// VIDEO BITRATE -- a stepped slider: Auto (today's behaviour, the encoder's own quality target or

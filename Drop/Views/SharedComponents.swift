@@ -1223,6 +1223,64 @@ struct MetaLines: View {
     }
 }
 
+/// Rows of cells in aligned columns (the IN / OUT lines): every row has `columns` cells, a column
+/// is as wide as its widest cell, cells are leading-aligned and centred in their row.
+///
+/// Replaces `Grid` here. Inside a ViewThatFits, `Grid` measured every cell several times for each
+/// size its parents asked about, and that was most of what a click in the Convert card cost (about
+/// 130 ms of layout per click: taking the block out cut a burst of clicks by two thirds). The
+/// cells' ideal sizes do not depend on the proposal, so they are measured ONCE per change of
+/// content (the cache) and every later question is arithmetic.
+struct AlignedRows: Layout {
+    var columns: Int
+    var columnSpacing: CGFloat = 9
+    var rowSpacing: CGFloat = 3
+
+    struct Measured {
+        var sizes: [CGSize] = []
+        var columnWidths: [CGFloat] = []
+        var rowHeights: [CGFloat] = []
+    }
+
+    private func measure(_ subviews: Subviews) -> Measured {
+        var measured = Measured()
+        guard columns > 0 else { return measured }
+        measured.sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        measured.columnWidths = Array(repeating: 0, count: columns)
+        measured.rowHeights = Array(repeating: 0, count: (subviews.count + columns - 1) / columns)
+        for (index, size) in measured.sizes.enumerated() {
+            measured.columnWidths[index % columns] = max(measured.columnWidths[index % columns], size.width)
+            measured.rowHeights[index / columns] = max(measured.rowHeights[index / columns], size.height)
+        }
+        return measured
+    }
+
+    func makeCache(subviews: Subviews) -> Measured { measure(subviews) }
+    func updateCache(_ cache: inout Measured, subviews: Subviews) { cache = measure(subviews) }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Measured) -> CGSize {
+        CGSize(width: cache.columnWidths.reduce(0, +) + columnSpacing * CGFloat(max(columns - 1, 0)),
+               height: cache.rowHeights.reduce(0, +) + rowSpacing * CGFloat(max(cache.rowHeights.count - 1, 0)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Measured) {
+        guard columns > 0 else { return }
+        var y = bounds.minY
+        for row in cache.rowHeights.indices {
+            var x = bounds.minX
+            for column in 0..<columns {
+                let index = row * columns + column
+                if index < subviews.count {
+                    subviews[index].place(at: CGPoint(x: x, y: y + cache.rowHeights[row] / 2), anchor: .leading,
+                                          proposal: ProposedViewSize(cache.sizes[index]))
+                }
+                x += cache.columnWidths[column] + columnSpacing
+            }
+            y += cache.rowHeights[row] + rowSpacing
+        }
+    }
+}
+
 /// The IN / OUT grid itself, with no capsule around it (see PersistentCapsule).
 struct MetaLinesContent: View {
     let input: [ChipData]
@@ -1270,7 +1328,7 @@ struct MetaLinesContent: View {
         let time = withTime ? chips.first(where: { $0.metaColumn == .time }) : nil
         let video = chips.first(where: { $0.metaColumn == .video })
         let audio = chips.first(where: { $0.metaColumn == .audio })
-        return GridRow {
+        return Group {
             tag(label, out: out)
             if withTime {
                 slot(time)
@@ -1289,7 +1347,9 @@ struct MetaLinesContent: View {
         // No video column when neither row has video (an audio-only file): an empty column would
         // still cost its spacing, and push the divider away from the audio it belongs to.
         let hasVideoColumn = (input + output).contains { $0.metaColumn == .video }
-        return Grid(alignment: .leading, horizontalSpacing: 9, verticalSpacing: 3) {
+        // The row: tag, [time, its divider if there is video], [video], the divider before audio, audio.
+        let columns = 1 + (withTime ? (hasVideoColumn ? 2 : 1) : 0) + (hasVideoColumn ? 1 : 0) + 2
+        return AlignedRows(columns: columns, columnSpacing: 9, rowSpacing: 3) {
             if !input.isEmpty { gridRow(input, "IN", out: false, withTime: withTime, hasVideoColumn: hasVideoColumn) }
             if !output.isEmpty { gridRow(output, "OUT", out: true, withTime: withTime, hasVideoColumn: hasVideoColumn) }
         }
@@ -1454,38 +1514,82 @@ struct MetaDivider: View {
     }
 }
 
-/// Metadata cells with a divider between neighbours on the same line. Tries them all on one line;
-/// when they do not fit, the last one drops to its own line (length | video over audio), then
-/// every one does. It breaks at the cells rather than flowing, so a divider is never left at
-/// the start or end of a line, which a plain wrapping flow cannot promise.
+/// Lays out cells on lines, wrapping at cell boundaries when a line is full. Each cell arrives
+/// with its own leading divider (see DividedCells); a cell that starts a line is shifted left by
+/// the divider's width, so its divider lands outside the layout's bounds and is clipped away.
+/// The result: "A | B" on a line, and no divider at the start or end of any line.
+///
+/// One layout instead of nested ViewThatFits alternatives (all built, all measured): the
+/// nesting made every click in the Convert card cost ~60 ms more than it had.
+struct DividedFlow: Layout {
+    var spacing: CGFloat = 9
+    var lineSpacing: CGFloat = 3
+    /// A divider and the gap after it: what a cell's leading divider takes.
+    var dividerAdvance: CGFloat = 9.75
+
+    private func lines(_ sizes: [CGSize], width: CGFloat) -> [[Int]] {
+        var lines: [[Int]] = [[]]
+        var used: CGFloat = 0
+        for (index, size) in sizes.enumerated() {
+            // A line's first cell hides its divider, so it is that much narrower.
+            let needed = lines[lines.count - 1].isEmpty ? size.width - dividerAdvance : used + spacing + size.width
+            if !lines[lines.count - 1].isEmpty, needed > width {
+                lines.append([index])
+                used = size.width - dividerAdvance
+            } else {
+                lines[lines.count - 1].append(index)
+                used = needed
+            }
+        }
+        return lines
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let laid = lines(sizes, width: proposal.width ?? .infinity)
+        var width: CGFloat = 0, height: CGFloat = 0
+        for line in laid {
+            let lineWidth = line.enumerated().reduce(CGFloat(0)) { total, item in
+                total + sizes[item.element].width + (item.offset == 0 ? -dividerAdvance : spacing)
+            }
+            width = max(width, lineWidth)
+            height += (line.map { sizes[$0].height }.max() ?? 0) + lineSpacing
+        }
+        return CGSize(width: width, height: max(height - lineSpacing, 0))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        var y = bounds.minY
+        for line in lines(sizes, width: bounds.width) {
+            let lineHeight = line.map { sizes[$0].height }.max() ?? 0
+            var x = bounds.minX - dividerAdvance
+            for index in line {
+                subviews[index].place(at: CGPoint(x: x, y: y + lineHeight / 2), anchor: .leading,
+                                      proposal: ProposedViewSize(sizes[index]))
+                x += sizes[index].width + spacing
+            }
+            y += lineHeight + lineSpacing
+        }
+    }
+}
+
+/// Metadata cells with a divider between neighbours on the same line: all on one line when they
+/// fit, else wrapped at the cells (length | video over audio) so a divider is never left at the
+/// start or end of a line, which a plain wrapping flow cannot promise (see DividedFlow).
 struct DividedCells: View {
     let chips: [ChipData]
 
-    private func line(_ range: Range<Int>) -> some View {
-        HStack(spacing: 9) {
-            ForEach(Array(range), id: \.self) { index in
-                if index > range.lowerBound { MetaDivider() }
-                MetaCell(chip: chips[index])
-            }
-        }
-    }
-
     var body: some View {
-        let n = chips.count
-        if n <= 1 {
-            line(0..<n)
-        } else {
-            ViewThatFits(in: .horizontal) {
-                line(0..<n)
-                VStack(alignment: .leading, spacing: 3) {
-                    line(0..<(n - 1))
-                    line((n - 1)..<n)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(0..<n, id: \.self) { line($0..<($0 + 1)) }
+        DividedFlow {
+            ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
+                HStack(spacing: 9) {
+                    MetaDivider()
+                    MetaCell(chip: chip)
                 }
             }
         }
+        .clipped()
     }
 }
 
@@ -1510,6 +1614,10 @@ struct SegmentOption: Identifiable {
     var help: String = ""
     var isSelected: Bool
     var tint: Color = DesignTokens.Accent.primary
+    /// A second, smaller line under the label: the source's own value beside "Same as Source".
+    /// When any option in a row has one, every segment of that row takes the taller height, so
+    /// the row stays aligned.
+    var subtext: String? = nil
     let action: () -> Void
 }
 
@@ -1521,16 +1629,45 @@ struct SegmentedCapsule: View {
     /// their labels (mode toggles with two or three short options).
     var fill: Bool = true
 
+    /// Every segment is as tall as the tallest kind in the row (one with a subtext).
+    private var rowHeight: CGFloat { options.contains { $0.subtext != nil } ? 36 : 26 }
+
+    @Environment(\.contentColumnWidth) private var columnWidth
+
+    /// A generous estimate of the row's one-line width (11.5pt mono is ~6.9pt a character, plus
+    /// each segment's padding). Only used to decide whether the wrapped alternative is worth
+    /// BUILDING at all: a ViewThatFits builds and measures both, and with a card full of rows
+    /// that doubled what every click cost.
+    private var clearlyFitsOnOneLine: Bool {
+        guard columnWidth > 0 else { return false }
+        let estimate = options.reduce(CGFloat(6)) { total, option in
+            let characters = max(option.label.count, (option.subtext?.count ?? 0) * 9 / 11)
+            return total + CGFloat(characters) * 7.2 + 30
+        }
+        // The page column less the card's padding, the label column and a wide margin.
+        return estimate < columnWidth - 260
+    }
+
+    private var oneLine: some View {
+        HStack(spacing: 2) {
+            ForEach(options) { SegmentButton(option: $0, fill: fill, standalone: false, height: rowHeight) }
+        }
+        .padding(3)
+        .background(Color.white.opacity(0.04), in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
+    }
+
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 2) {
-                ForEach(options) { SegmentButton(option: $0, fill: fill, standalone: false) }
-            }
-            .padding(3)
-            .background(Color.white.opacity(0.04), in: Capsule())
-            .overlay(Capsule().stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
-            FlowLayout(spacing: 6) {
-                ForEach(options) { SegmentButton(option: $0, fill: false, standalone: true) }
+        Group {
+            if clearlyFitsOnOneLine {
+                oneLine
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    oneLine
+                    FlowLayout(spacing: 6) {
+                        ForEach(options) { SegmentButton(option: $0, fill: false, standalone: true, height: rowHeight) }
+                    }
+                }
             }
         }
         .frame(maxWidth: fill ? .infinity : nil, alignment: .leading)
@@ -1542,8 +1679,8 @@ private struct SegmentButton: View {
     let fill: Bool
     /// True when wrapped onto its own line: draws its own capsule border.
     let standalone: Bool
+    var height: CGFloat = 26
     @State private var hovering = false
-    @State private var glowPhase = false
 
     private static let restingStroke: Double = 0.8
     private static let restingGlow: Double = 0.4
@@ -1551,28 +1688,42 @@ private struct SegmentButton: View {
     var body: some View {
         let T = DesignTokens.Interactive.self
         let selected = option.isSelected
+        // The selected segment's glow breathes while the pointer is over it: a Core Animation
+        // ring, not a SwiftUI repeatForever, which cost ~26% of a core for as long as the
+        // pointer stayed there (see PulsingRing).
+        let pulsing = hovering && selected
         Button(action: option.action) {
-            HStack(spacing: 5) {
-                if let icon = option.icon {
-                    Image(systemName: icon)
-                        .font(.appMono(size: 11, weight: .semibold))
+            VStack(spacing: 1) {
+                HStack(spacing: 5) {
+                    if let icon = option.icon {
+                        Image(systemName: icon)
+                            .font(.appMono(size: 11, weight: .semibold))
+                    }
+                    if let native = option.nativeBadge {
+                        Circle()
+                            .fill(native ? DesignTokens.Accent.success : DesignTokens.Accent.warning)
+                            .frame(width: 5, height: 5)
+                    }
+                    Text(option.label)
+                        .font(.appMono(size: 11.5, weight: .semibold))
+                        .lineLimit(1)
+                        // A segment is never narrower than its label: the row wraps
+                        // (see SegmentedCapsule) before a label would be cut.
+                        .fixedSize(horizontal: true, vertical: false)
                 }
-                if let native = option.nativeBadge {
-                    Circle()
-                        .fill(native ? DesignTokens.Accent.success : DesignTokens.Accent.warning)
-                        .frame(width: 5, height: 5)
+                .foregroundColor(selected ? option.tint : .white.opacity(hovering ? DesignTokens.Text.primary : DesignTokens.Text.tertiary))
+                if let subtext = option.subtext {
+                    Text(subtext)
+                        .font(.appMono(size: 9))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .foregroundColor(selected ? option.tint.opacity(0.7)
+                                         : .white.opacity(hovering ? DesignTokens.Text.tertiary : DesignTokens.Text.disabled))
                 }
-                Text(option.label)
-                    .font(.appMono(size: 11.5, weight: .semibold))
-                    .lineLimit(1)
-                    // A segment is never narrower than its label: the row wraps
-                    // (see SegmentedCapsule) before a label would be cut.
-                    .fixedSize(horizontal: true, vertical: false)
             }
-            .foregroundColor(selected ? option.tint : .white.opacity(hovering ? DesignTokens.Text.primary : DesignTokens.Text.tertiary))
             .padding(.horizontal, 12)
             .frame(maxWidth: fill ? .infinity : nil)
-            .frame(height: 26)
+            .frame(height: height)
             .background(
                 Capsule().fill(
                     selected ? option.tint.opacity(0.14)
@@ -1581,7 +1732,7 @@ private struct SegmentButton: View {
             )
             .overlay(
                 Capsule().stroke(
-                    selected ? option.tint.opacity(glowPhase ? T.strokeGlow : Self.restingStroke)
+                    selected ? option.tint.opacity(pulsing ? 0 : Self.restingStroke)
                         : (standalone ? Color.white.opacity(hovering ? T.strokeHover : T.strokeRest) : Color.clear),
                     lineWidth: selected ? 1.0 : 0.5
                 )
@@ -1589,21 +1740,110 @@ private struct SegmentButton: View {
             // The selected glow is steady; it pulses only under the pointer
             // (a repeatForever animation on something sitting on screen keeps
             // the whole window redrawing every frame -- see SelectorChip).
-            .shadow(color: selected ? option.tint.opacity(glowPhase ? T.glowShadowHover : Self.restingGlow) : .clear,
+            .shadow(color: selected ? option.tint.opacity(pulsing ? 0 : Self.restingGlow) : .clear,
                     radius: selected ? 6 : 0)
-        }
-        .buttonStyle(.plain)
-        .onHover { h in
-            hovering = h
-            if h && selected {
-                withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) { glowPhase = true }
-            } else {
-                withAnimation(.easeOut(duration: 0.2)) { glowPhase = false }
+            .overlay {
+                if pulsing {
+                    PulsingRing(shape: .capsule, color: option.tint, lineWidth: 1.0,
+                                stroke: Self.restingStroke...T.strokeGlow, glow: Self.restingGlow...T.glowShadowHover,
+                                glowRadius: 6, duration: 0.65)
+                }
             }
         }
+        .buttonStyle(.plain)
+        .onHover { h in hovering = h }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .animation(.spring(response: 0.2), value: selected)
         .help(option.help)
+    }
+}
+
+// MARK: Stepped slider
+
+/// One notch of a SteppedSlider.
+struct SliderStep: Identifiable {
+    let id: String
+    let label: String
+    /// Small text under the label (the source's own value, beside "Auto").
+    var subtext: String? = nil
+}
+
+/// A slider that moves in increments: one notch per step, labelled, the thumb snapping to the
+/// nearest as you drag anywhere along it (or tap a notch or its label). Plain shapes and a
+/// single GeometryReader: no material, no repeating animation.
+struct SteppedSlider: View {
+    let steps: [SliderStep]
+    let selected: Int
+    var tint: Color = DesignTokens.Accent.primary
+    let onSelect: (Int) -> Void
+
+    private let thumb: CGFloat = 16
+    private let track: CGFloat = 4
+    private let labelHeight: CGFloat = 26
+
+    private func label(_ step: SliderStep, chosen: Bool) -> some View {
+        VStack(spacing: 1) {
+            Text(step.label)
+                .font(.appMono(size: 10.5, weight: chosen ? .semibold : .medium))
+                .foregroundColor(chosen ? tint : .white.opacity(DesignTokens.Text.tertiary))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            if let subtext = step.subtext {
+                Text(subtext)
+                    .font(.appMono(size: 9))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let count = max(steps.count, 1)
+            let column = geo.size.width / CGFloat(count)
+            let chosen = min(max(selected, 0), count - 1)
+            VStack(alignment: .leading, spacing: 5) {
+                ZStack(alignment: .leading) {
+                    // The track runs from the first notch to the last; the part the thumb has
+                    // covered is lit.
+                    Capsule().fill(Color.white.opacity(0.09))
+                        .frame(width: max(column * CGFloat(count - 1), 0), height: track)
+                        .offset(x: column / 2)
+                    Capsule().fill(tint.opacity(0.55))
+                        .frame(width: column * CGFloat(chosen), height: track)
+                        .offset(x: column / 2)
+                    ForEach(0..<count, id: \.self) { index in
+                        Circle()
+                            .fill(index <= chosen ? tint : Color.white.opacity(0.28))
+                            .frame(width: 6, height: 6)
+                            .offset(x: column * (CGFloat(index) + 0.5) - 3)
+                    }
+                    Circle()
+                        .fill(tint)
+                        .frame(width: thumb, height: thumb)
+                        .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 0.75))
+                        .shadow(color: tint.opacity(0.5), radius: 4)
+                        .offset(x: column * (CGFloat(chosen) + 0.5) - thumb / 2)
+                }
+                .frame(height: thumb)
+                HStack(spacing: 0) {
+                    ForEach(steps.indices, id: \.self) { index in
+                        label(steps[index], chosen: index == chosen).frame(width: column)
+                    }
+                }
+                .frame(height: labelHeight, alignment: .top)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0).onChanged { value in
+                    let index = min(max(Int(value.location.x / column), 0), count - 1)
+                    if index != chosen { onSelect(index) }
+                }
+            )
+        }
+        .frame(height: thumb + 5 + labelHeight)
+        .animation(.spring(response: 0.22, dampingFraction: 0.85), value: selected)
     }
 }
 

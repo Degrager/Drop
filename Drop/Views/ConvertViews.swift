@@ -2578,8 +2578,10 @@ struct ConvertPreviewCard: View {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 10) {
                             FieldCaption(icon: "doc.badge.arrow.up", text: "OUTPUT FORMAT")
-                            // The dot on formatOptions' matching option, explained -- see
-                            // formatOptions' own comment for why this is a badge, not subtext.
+                            Spacer(minLength: 10)
+                            // The dot on formatOptions' matching option, explained -- top
+                            // right of this field group (the user asked for it moved there
+                            // from beside the caption).
                             nativeLegend(positiveLabel: "Original", showReencodeHint: false)
                         }
                         SegmentedCapsule(options: formatOptions)

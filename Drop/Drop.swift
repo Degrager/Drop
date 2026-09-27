@@ -3360,7 +3360,6 @@ struct GlassInteractive<Content: View>: View {
 
     @State private var hovering = false
     @State private var pressing = false
-    @State private var glowPhase = false
 
     var body: some View {
         let T = DesignTokens.Interactive.self
@@ -3370,7 +3369,10 @@ struct GlassInteractive<Content: View>: View {
         let fPress = activeFillOverride?.press ?? T.fillPress
         let baseOpacity: Double = isActive ? fActive : 0.0
         let fillOpacity: Double = disabled ? baseOpacity : (pressing ? fPress : (hovering ? fHover : (baseOpacity == 0.0 ? fRest : baseOpacity)))
-        let strokeOpacity: Double = disabled ? T.strokeDisabled : (pressing ? T.strokePress : (hovering ? (glowPhase ? T.strokeGlow : T.strokeHover) : (restStrokeOverride ?? T.strokeRest)))
+        let strokeOpacity: Double = disabled ? T.strokeDisabled : (pressing ? T.strokePress : (hovering ? T.strokeHover : (restStrokeOverride ?? T.strokeRest)))
+        // While the pointer is over it (and it is not being pressed) the rim and glow breathe:
+        // a Core Animation ring, not a SwiftUI repeatForever (see PulsingRing).
+        let pulsing = hovering && !pressing && !disabled && (!embedded || embeddedGlowStroke)
         let glowRadius: CGFloat = (!disabled && hovering) ? (pressing ? T.glowRadiusPress : T.glowRadiusHover) : 0
         let scaleHoverAmt = scaleOverride?.hover ?? T.scaleHover
         let scalePressAmt = scaleOverride?.press ?? T.scalePress
@@ -3410,10 +3412,16 @@ struct GlassInteractive<Content: View>: View {
                         // instead of relying on the fill wash alone.
                         if !embedded || embeddedGlowStroke {
                             clipShape
-                                .stroke(tint.opacity(strokeOpacity), lineWidth: (disabled || !hovering) ? 0.75 : 1.1)
+                                .stroke(tint.opacity(pulsing ? 0 : strokeOpacity), lineWidth: (disabled || !hovering) ? 0.75 : 1.1)
                         }
                     }
-                    .shadow(color: tint.opacity(glowRadius > 0 ? (glowPhase ? T.glowShadowPeak : T.glowShadowHover) : 0), radius: glowRadius)
+                    .shadow(color: tint.opacity(pulsing ? 0 : (glowRadius > 0 ? T.glowShadowHover : 0)), radius: glowRadius)
+                    .overlay {
+                        if pulsing {
+                            PulsingRing(shape: shape, color: tint, lineWidth: 1.1, stroke: T.strokeHover...T.strokeGlow,
+                                        glow: T.glowShadowHover...T.glowShadowPeak, glowRadius: T.glowRadiusHover, duration: 0.7)
+                        }
+                    }
                 )
                 .clipShape(clipShape)
                 .scaleEffect(pressing ? scalePressAmt : (hovering ? scaleHoverAmt : 1.0))
@@ -3428,11 +3436,6 @@ struct GlassInteractive<Content: View>: View {
         .onHover { h in
             guard !disabled else { return }
             hovering = h
-            if h {
-                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { glowPhase = true }
-            } else {
-                withAnimation(.easeOut(duration: 0.2)) { glowPhase = false }
-            }
         }
         .animation(.easeOut(duration: 0.12), value: pressing)
         .animation(.easeOut(duration: 0.15), value: hovering)
@@ -3913,6 +3916,108 @@ final class WaitingPulseGlowView: NSView {
         // A capsule traced on the view's own edge, like `Capsule().stroke`.
         let radius = min(bounds.width, bounds.height) / 2
         ring.path = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        CATransaction.commit()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        ring.contentsScale = window?.backingScaleFactor ?? 2
+    }
+
+    // Purely decorative: never takes a click or a hover.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// A ring around a control whose stroke and glow breathe between two strengths for as long
+/// as it is on screen: the pulse that runs while the pointer is over a glass control
+/// (GlassInteractive), a selector chip (SelectorChip) or a segment (SegmentButton). Add it
+/// only while that is true.
+///
+/// A Core Animation layer, not a SwiftUI `repeatForever`: driven from SwiftUI, one hovered
+/// control kept the whole window laying out and re-rendering at the display rate -- measured
+/// at ~26% of a core for as long as the pointer sat on a selected segment, against 0.1% on
+/// an unselected one, which is what made the Convert card feel laggy. The render server runs
+/// this one for free.
+struct PulsingRing: NSViewRepresentable {
+    var shape: GlassInteractiveShape
+    var color: Color
+    var lineWidth: CGFloat
+    /// The stroke's opacity at the two ends of the pulse.
+    var stroke: ClosedRange<Double>
+    /// The glow's opacity at the two ends of the pulse.
+    var glow: ClosedRange<Double>
+    /// The glow's radius in SwiftUI's units (a layer's is half of that).
+    var glowRadius: CGFloat
+    /// One way across, in seconds (it reverses).
+    var duration: Double = 0.7
+
+    func makeNSView(context: Context) -> PulsingRingView { PulsingRingView() }
+    func updateNSView(_ view: PulsingRingView, context: Context) {
+        view.update(shape: shape, color: NSColor(color), lineWidth: lineWidth, stroke: stroke,
+                    glow: glow, glowRadius: glowRadius / 2, duration: duration)
+    }
+}
+
+final class PulsingRingView: NSView {
+    private let ring = CAShapeLayer()
+    private var shape: GlassInteractiveShape = .capsule
+    /// What the animations were built from, so an unchanged update leaves them running.
+    private var built = ""
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.masksToBounds = false
+        ring.fillColor = nil
+        ring.shadowOffset = .zero
+        layer?.addSublayer(ring)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func update(shape: GlassInteractiveShape, color: NSColor, lineWidth: CGFloat, stroke: ClosedRange<Double>,
+                glow: ClosedRange<Double>, glowRadius: CGFloat, duration: Double) {
+        self.shape = shape
+        needsLayout = true
+        let key = "\(color)|\(lineWidth)|\(stroke)|\(glow)|\(glowRadius)|\(duration)"
+        guard key != built else { return }
+        built = key
+        ring.lineWidth = lineWidth
+        ring.shadowColor = color.cgColor
+        ring.shadowRadius = glowRadius
+        ring.strokeColor = color.withAlphaComponent(stroke.lowerBound).cgColor
+        ring.shadowOpacity = Float(glow.lowerBound)
+        ring.removeAllAnimations()
+        func pulse(_ keyPath: String, from: Any, to: Any) {
+            let animation = CABasicAnimation(keyPath: keyPath)
+            animation.fromValue = from
+            animation.toValue = to
+            animation.duration = duration
+            animation.autoreverses = true
+            animation.repeatCount = .infinity
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            ring.add(animation, forKey: keyPath)
+        }
+        pulse("strokeColor", from: color.withAlphaComponent(stroke.lowerBound).cgColor, to: color.withAlphaComponent(stroke.upperBound).cgColor)
+        pulse("shadowOpacity", from: Float(glow.lowerBound), to: Float(glow.upperBound))
+    }
+
+    override func layout() {
+        super.layout()
+        // No implicit animation: the ring must follow the control's edge exactly.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ring.frame = bounds
+        switch shape {
+        case .capsule:
+            let radius = min(bounds.width, bounds.height) / 2
+            ring.path = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        case .circle:
+            ring.path = CGPath(ellipseIn: bounds, transform: nil)
+        case .roundedRect(let radius):
+            let r = min(radius, min(bounds.width, bounds.height) / 2)
+            ring.path = CGPath(roundedRect: bounds, cornerWidth: r, cornerHeight: r, transform: nil)
+        }
         CATransaction.commit()
     }
 
@@ -8198,7 +8303,8 @@ struct SelectorChip: View {
     var nativeBadge: Bool? = nil
     let action: () -> Void
     @State private var hovering = false
-    @State private var glowPhase = false
+    /// A selected chip's glow breathes while the pointer is over it (see PulsingRing).
+    private var pulsing: Bool { isSelected && hovering }
     @Environment(\.contentColumnWidth) private var columnWidth
     /// The sub-note ("Universal compatibility, QuickTime-ready") is dropped in
     /// a narrow column, where it forced every chip onto its own line; it stays
@@ -8280,8 +8386,8 @@ struct SelectorChip: View {
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                     .stroke(
                         isSelected
-                            ? tint.opacity(glowPhase ? DesignTokens.Interactive.strokeGlow : Self.restingStroke)
-                            : Color.white.opacity(hovering ? (glowPhase ? DesignTokens.Interactive.strokeHover + 0.05 : DesignTokens.Interactive.strokeHover) : DesignTokens.Interactive.strokeRest),
+                            ? tint.opacity(pulsing ? 0 : Self.restingStroke)
+                            : Color.white.opacity(hovering ? DesignTokens.Interactive.strokeHover + 0.025 : DesignTokens.Interactive.strokeRest),
                         lineWidth: (isSelected || hovering) ? 1.0 : 0.5
                     )
                     // Selected chips carry a steady ambient glow -- lit from
@@ -8291,20 +8397,18 @@ struct SelectorChip: View {
                     // something that sits on screen keeps SwiftUI re-running
                     // layout and redraw for the whole window every frame, which
                     // cost ~45% of a core with a single card open.
-                    .shadow(color: isSelected ? tint.opacity(glowPhase ? DesignTokens.Interactive.glowShadowHover : Self.restingGlow) : .clear, radius: isSelected ? 6 : 0)
+                    .shadow(color: isSelected ? tint.opacity(pulsing ? 0 : Self.restingGlow) : .clear, radius: isSelected ? 6 : 0)
+                    .overlay {
+                        if pulsing {
+                            PulsingRing(shape: .roundedRect(DesignTokens.Radius.small), color: tint, lineWidth: 1.0,
+                                        stroke: Self.restingStroke...DesignTokens.Interactive.strokeGlow,
+                                        glow: Self.restingGlow...DesignTokens.Interactive.glowShadowHover, glowRadius: 6, duration: 0.65)
+                        }
+                    }
             )
         }
         .buttonStyle(.plain)
-        .onHover { h in
-            hovering = h
-            if h {
-                withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) { glowPhase = true }
-            } else {
-                // A non-repeating animation to the resting value replaces the
-                // repeating one, so the pulse stops the moment the pointer leaves.
-                withAnimation(.easeOut(duration: 0.2)) { glowPhase = false }
-            }
-        }
+        .onHover { h in hovering = h }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .animation(.spring(response: 0.2), value: isSelected)
         .help(!note.isEmpty && !showNote ? note : "")

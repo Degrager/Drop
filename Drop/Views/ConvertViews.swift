@@ -178,7 +178,8 @@ extension ConvertVideoCodec {
 /// "2.5 Mbps" / "800 kbps" for a picker; `compact` drops the space, for a chip ("2.5Mbps").
 func bitrateChoiceLabel(_ kbps: Int, compact: Bool = false) -> String {
     let space = compact ? "" : " "
-    if kbps >= 1_000 { return String(format: "%g", Double(kbps) / 1_000) + space + "Mbps" }
+    // One decimal at most: a source's own 6,224 kbps reads "6.2 Mbps", the ladder's 2,500 "2.5 Mbps".
+    if kbps >= 1_000 { return String(format: "%g", (Double(kbps) / 100).rounded() / 10) + space + "Mbps" }
     return "\(kbps)" + space + "kbps"
 }
 
@@ -294,6 +295,7 @@ struct ConvertMediaInfo {
     var fileSizeBytes: Int? = nil  // raw source size, for stream-copy size estimation
     var videoFrameRateLabel: String? = nil  // e.g. "30fps", "29.97fps" -- from r_frame_rate
     var audioBitrateKbps: Int? = nil        // from the audio stream's own bit_rate
+    var videoBitrateKbps: Int? = nil        // from the video stream's own bit_rate (not every container reports it)
 }
 
 enum ConvertJobStatus { case queued, converting, done, failed, cancelled }
@@ -650,6 +652,9 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
                         let cn = s["codec_name"] as? String ?? ""
                         if ct == "video" && info.videoCodec == nil {
                             info.videoCodec = cn.uppercased()
+                            if let raw = s["bit_rate"] as? String, let bps = Int(raw), bps > 0 {
+                                info.videoBitrateKbps = bps / 1000
+                            }
                             let w = s["width"] as? Int
                             let h = s["height"] as? Int
                             if let w, let h {
@@ -920,6 +925,17 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     private static func prettyCodec<C: RawRepresentable>(_ raw: String, matching cases: [C], probeNames: (C) -> [String]) -> String where C.RawValue == String {
         cases.first(where: { probeNames($0).contains(raw) })?.rawValue ?? raw
     }
+
+    // The source's own values, shown under "Same as Source" / "Auto" so the choice can be made
+    // against what is there.
+    var sourceVideoCodecLabel: String? {
+        mediaInfo?.videoCodec.map { Self.prettyCodec($0, matching: ConvertVideoCodec.allCases, probeNames: { $0.probeNames }) }
+    }
+    var sourceAudioCodecLabel: String? {
+        mediaInfo?.audioCodec.map { Self.prettyCodec($0, matching: ConvertAudioCodec.allCases, probeNames: { $0.probeNames }) }
+    }
+    var sourceVideoBitrateSubtext: String? { mediaInfo?.videoBitrateKbps.map { bitrateChoiceLabel($0) } }
+    var sourceAudioBitrateSubtext: String? { mediaInfo?.audioBitrateKbps.map { bitrateChoiceLabel($0) } }
 
     /// "Original: " subtext for the VIDEO layer -- pretty-printed source codec
     /// plus resolution, e.g. "H.264 · 1920x1080".
@@ -2361,7 +2377,7 @@ struct ConvertPreviewCard: View {
     /// Lets you change only the audio (or only the video) on a clip without
     /// touching the other track.
     private var videoCodecOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeVideo) {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeVideo, subtext: job.sourceVideoCodecLabel) {
             withAnimation(.spring(response: 0.25)) { job.useSameAsSourceForVideo() }
         }]
         options += job.availableVideoCodecs.filter(\.isOffered).map { codec in
@@ -2381,7 +2397,7 @@ struct ConvertPreviewCard: View {
     /// Same as Source vs. that one codec, and picking the format already implies
     /// the latter).
     private var audioCodecOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeAudio) {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeAudio, subtext: job.sourceAudioCodecLabel) {
             withAnimation(.spring(response: 0.25)) { job.useSameAsSourceForAudio() }
         }]
         let codecs = job.availableAudioCodecs.filter(\.isOffered)
@@ -2402,7 +2418,7 @@ struct ConvertPreviewCard: View {
     /// "Same as Source" leaves the video alone; anything else re-encodes it (like for like, with
     /// the source's own codec, while "Same as Source" is selected on VIDEO CODEC).
     private var resolutionOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledShortSide == nil) {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledShortSide == nil, subtext: job.mediaInfo?.resolution) {
             withAnimation(.spring(response: 0.25)) { job.chooseResolution(nil) }
         }]
         options += job.availableResolutions.map { side in
@@ -2413,37 +2429,34 @@ struct ConvertPreviewCard: View {
         return options
     }
 
-    /// VIDEO BITRATE -- Auto keeps today's behaviour (the encoder's own quality target, or the
-    /// source untouched); a figure re-encodes at that bitrate. The ladder follows the output size.
-    private var videoBitrateOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "auto", label: "Auto", isSelected: !job.overridesVideoBitrate) {
-            withAnimation(.spring(response: 0.25)) { job.chosenVideoBitrateKbps = nil }
-        }]
-        options += job.videoBitrateChoices.map { kbps in
-            SegmentOption(id: "\(kbps)", label: bitrateChoiceLabel(kbps), isSelected: job.overridesVideoBitrate && job.chosenVideoBitrateKbps == kbps) {
-                withAnimation(.spring(response: 0.25)) { job.chosenVideoBitrateKbps = kbps }
-            }
-        }
-        return options
+    /// VIDEO BITRATE -- a stepped slider: Auto (today's behaviour, the encoder's own quality target or
+    /// the source untouched; the source's bitrate is its subtext) then the ladder for the output size.
+    private var videoBitrateSteps: [SliderStep] {
+        [SliderStep(id: "auto", label: "Auto", subtext: job.sourceVideoBitrateSubtext)]
+            + job.videoBitrateChoices.map { SliderStep(id: "\($0)", label: bitrateChoiceLabel($0)) }
+    }
+    private var videoBitrateSelection: Int {
+        guard job.overridesVideoBitrate, let chosen = job.chosenVideoBitrateKbps,
+              let index = job.videoBitrateChoices.firstIndex(of: chosen) else { return 0 }
+        return index + 1
     }
 
-    /// AUDIO BITRATE -- same shape, for the codecs that have one (not FLAC / PCM).
-    private var audioBitrateOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "auto", label: "Auto", isSelected: !job.overridesAudioBitrate) {
-            withAnimation(.spring(response: 0.25)) { job.chosenAudioBitrateKbps = nil }
-        }]
-        options += job.audioCodec.bitrateChoices.map { kbps in
-            SegmentOption(id: "\(kbps)", label: bitrateChoiceLabel(kbps), isSelected: job.overridesAudioBitrate && job.chosenAudioBitrateKbps == kbps) {
-                withAnimation(.spring(response: 0.25)) { job.chosenAudioBitrateKbps = kbps }
-            }
-        }
-        return options
+    /// AUDIO BITRATE -- the same, for the codecs that have one (not FLAC / PCM).
+    private var audioBitrateSteps: [SliderStep] {
+        [SliderStep(id: "auto", label: "Auto", subtext: job.sourceAudioBitrateSubtext)]
+            + job.audioCodec.bitrateChoices.map { SliderStep(id: "\($0)", label: bitrateChoiceLabel($0)) }
+    }
+    private var audioBitrateSelection: Int {
+        guard job.overridesAudioBitrate, let chosen = job.chosenAudioBitrateKbps,
+              let index = job.audioCodec.bitrateChoices.firstIndex(of: chosen) else { return 0 }
+        return index + 1
     }
 
     /// OUTPUT FORMAT -- last row, after both codec choices are settled.
     private var formatOptions: [SegmentOption] {
         job.availableFormats.map { fmt in
-            SegmentOption(id: fmt.rawValue, label: fmt.rawValue, isSelected: job.outputFormat == fmt) {
+            SegmentOption(id: fmt.rawValue, label: fmt.rawValue, isSelected: job.outputFormat == fmt,
+                          subtext: fmt.matchesSource(job.inputURL.pathExtension) ? "Original" : nil) {
                 withAnimation(.spring(response: 0.25)) {
                     job.outputFormat = fmt
                     job.ensureCodecsValidForFormat()
@@ -2490,7 +2503,9 @@ struct ConvertPreviewCard: View {
                 }
                 if job.supportsVideoBitrate {
                     FormRow(icon: "speedometer", label: "VIDEO BITRATE") {
-                        SegmentedCapsule(options: videoBitrateOptions)
+                        SteppedSlider(steps: videoBitrateSteps, selected: videoBitrateSelection) { index in
+                            job.chosenVideoBitrateKbps = index == 0 ? nil : job.videoBitrateChoices[index - 1]
+                        }
                     }
                 }
                 // Hidden entirely for video-only mode (no audio track in the
@@ -2502,7 +2517,9 @@ struct ConvertPreviewCard: View {
                 }
                 if job.supportsAudioBitrate {
                     FormRow(icon: "gauge.with.dots.needle.33percent", label: "AUDIO BITRATE") {
-                        SegmentedCapsule(options: audioBitrateOptions)
+                        SteppedSlider(steps: audioBitrateSteps, selected: audioBitrateSelection) { index in
+                            job.chosenAudioBitrateKbps = index == 0 ? nil : job.audioCodec.bitrateChoices[index - 1]
+                        }
                     }
                 }
                 FormRow(icon: "doc.badge.arrow.up", label: "OUTPUT FORMAT") {

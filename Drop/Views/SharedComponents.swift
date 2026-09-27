@@ -1482,9 +1482,21 @@ struct PersistentCapsule: View {
                 .transition(.blurInOnly)
             case .output(let chips):
                 MetaLineContent(chips: chips)
+                    // While isHolding, force this to compute its IDEAL (single-line) size
+                    // regardless of the 150pt the frame below caps it to -- otherwise
+                    // MetaLineContent's own DividedCells (built to WRAP onto more lines when
+                    // it doesn't fit a narrow width, e.g. a narrow window) took the 150pt
+                    // proposal at face value and wrapped to two lines, growing the capsule
+                    // taller for the whole hold (reported live: "the capsule expands
+                    // vertically for a split second which breaks the card"). fixedSize makes
+                    // the layout ask for its ideal width instead of the constrained one; the
+                    // overflow past 150pt is invisible anyway (opacity 0 for this entire
+                    // window) and clipped below regardless.
+                    .fixedSize(horizontal: isHolding, vertical: false)
                     .transition(incoming)
             case .note(let icon, let text):
                 NoteContent(icon: icon, text: text)
+                    .fixedSize(horizontal: isHolding, vertical: false)
                     .transition(incoming)
             }
         }
@@ -1500,6 +1512,7 @@ struct PersistentCapsule: View {
         // ceiling at 150 until the same instant the content is ready makes the resize and the
         // reveal a single motion instead of an empty capsule that fills in later.
         .frame(minWidth: isAnalyzing ? 150 : nil, maxWidth: isHolding ? 150 : nil, alignment: .leading)
+        .clipped()
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(

@@ -2518,10 +2518,19 @@ struct ConvertPreviewCard: View {
     }
 
     /// OUTPUT FORMAT -- last row, after both codec choices are settled.
+    /// A dot on the option matching the source's own extension, not a
+    /// subtext line -- OUTPUT FORMAT sits beside CONVERT AS in the top strip
+    /// now (the redesign approved 2026-09-26), and any option with subtext
+    /// makes SegmentedCapsule use its taller row height for the WHOLE
+    /// capsule (see rowHeight), which made this row visibly bigger than its
+    /// neighbor. A badge sits inline with the label instead, so the row
+    /// stays the same height either way; the legend explaining the dot goes
+    /// beside the OUTPUT FORMAT caption (see convertSettingsCard).
     private var formatOptions: [SegmentOption] {
         job.availableFormats.map { fmt in
-            SegmentOption(id: fmt.rawValue, label: fmt.rawValue, isSelected: job.outputFormat == fmt,
-                          subtext: fmt.matchesSource(job.inputURL.pathExtension) ? "Original" : nil) {
+            SegmentOption(id: fmt.rawValue, label: fmt.rawValue,
+                          nativeBadge: fmt.matchesSource(job.inputURL.pathExtension) ? true : nil,
+                          isSelected: job.outputFormat == fmt) {
                 withAnimation(.spring(response: 0.25)) {
                     job.outputFormat = fmt
                     job.ensureCodecsValidForFormat()
@@ -2567,7 +2576,12 @@ struct ConvertPreviewCard: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 6) {
-                        FieldCaption(icon: "doc.badge.arrow.up", text: "OUTPUT FORMAT")
+                        HStack(spacing: 10) {
+                            FieldCaption(icon: "doc.badge.arrow.up", text: "OUTPUT FORMAT")
+                            // The dot on formatOptions' matching option, explained -- see
+                            // formatOptions' own comment for why this is a badge, not subtext.
+                            nativeLegend(positiveLabel: "Original", showReencodeHint: false)
+                        }
                         SegmentedCapsule(options: formatOptions)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

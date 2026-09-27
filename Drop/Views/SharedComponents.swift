@@ -1435,7 +1435,19 @@ struct PersistentCapsule: View {
         return false
     }
 
-    private var incoming: AnyTransition { revealDelay > 0 ? .blurInAfter(revealDelay) : .blurIn }
+    /// Insertion-only (see AnyTransition.blurInOnly): the outgoing content
+    /// (e.g. "Analyzing…") must leave INSTANTLY, not fade out over its own
+    /// animated removal -- `blurIn`/`blurInAfter` both animate removal too,
+    /// so for that ~0.12s window the old text and the new one were both on
+    /// screen, overlapping (reported live: "the analyzing state" showing
+    /// through "the analyzed state"). Same fix as `blurInOnly` itself, just
+    /// with `blurInAfter`'s hold-until-delay insertion when `revealDelay > 0`.
+    private var incoming: AnyTransition {
+        let insertion = revealDelay > 0
+            ? AnyTransition.focus(blur: 5, scale: 0.97, opacity: 0).animation(.easeOut(duration: 0.25).delay(revealDelay))
+            : AnyTransition.focus(blur: 5, scale: 0.97, opacity: 0.4).animation(.easeOut(duration: 0.2))
+        return .asymmetric(insertion: insertion, removal: .identity)
+    }
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -1452,7 +1464,7 @@ struct PersistentCapsule: View {
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 .lineLimit(1)
                 .fixedSize()
-                .transition(.blurIn)
+                .transition(.blurInOnly)
             case .output(let chips):
                 MetaLineContent(chips: chips)
                     .transition(incoming)
@@ -2007,7 +2019,10 @@ private struct DropdownMenuChrome<Content: View>: View {
 /// lets ONE host, rendered as a sibling to PreviewCard (outside its clip;
 /// see ConvertPreviewCard.body), draw the actual popover content.
 private struct DropdownPopoverPreferenceKey: PreferenceKey {
-    struct Entry { let anchor: Anchor<CGRect>; let content: () -> AnyView }
+    /// `width` is the menu's own fixed width (each field's `menu` sets it with
+    /// `.frame(width:)`) -- carried alongside the anchor so the host can keep
+    /// the menu on screen without waiting on a second layout pass to measure it.
+    struct Entry { let anchor: Anchor<CGRect>; let width: CGFloat; let content: () -> AnyView }
     static var defaultValue: [String: Entry] = [:]
     static func reduce(value: inout [String: Entry], nextValue: () -> [String: Entry]) {
         value.merge(nextValue()) { _, new in new }
@@ -2041,15 +2056,27 @@ extension View {
             GeometryReader { proxy in
                 if let id = openID.wrappedValue, let entry = entries[id] {
                     let rect = proxy[entry.anchor]
+                    // Anchored at the field's left edge, but pulled back so the menu's
+                    // own width never runs past the card's right edge (or off its left,
+                    // for a very narrow card) -- a field near the right side of a row
+                    // (BITRATE is usually last) used to open a menu that continued
+                    // straight past the window.
+                    let x = min(max(rect.minX, 0), max(proxy.size.width - entry.width, 0))
                     ZStack(alignment: .topLeading) {
+                        // No `.transition` here: this is a full-card-sized invisible
+                        // tap catcher, not something the user ever sees. Blurring and
+                        // scaling it along with the menu (the first version transitioned
+                        // this whole ZStack together) meant animating a layer the size
+                        // of the card on every open and close -- confirmed as the
+                        // dismiss stutter. Only the small menu below needs the effect.
                         Color.black.opacity(0.001)
                             .frame(width: proxy.size.width, height: proxy.size.height)
                             .contentShape(Rectangle())
                             .onTapGesture { withAnimation(.spring(response: 0.2)) { openID.wrappedValue = nil } }
                         entry.content()
-                            .offset(x: rect.minX, y: rect.maxY + 6)
+                            .offset(x: x, y: rect.maxY + 6)
+                            .transition(.focus(blur: 10, scale: 0.9, anchor: .top))
                     }
-                    .transition(.focus(blur: 10, scale: 0.9, anchor: .top))
                 }
             }
             // Only intercepts clicks while something is actually open -- otherwise this
@@ -2125,9 +2152,16 @@ struct DropdownField: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .anchorPreference(key: DropdownPopoverPreferenceKey.self, value: .bounds) { anchor in
             guard isOpen else { return [:] }
-            return [id: .init(anchor: anchor, content: { AnyView(menu) })]
+            return [id: .init(anchor: anchor, width: Self.menuWidth, content: { AnyView(menu) })]
         }
     }
+
+    /// Fixed, not a minimum: the host needs to know the menu's real width up
+    /// front to keep it on screen (see dropdownPopoverOverlay), and every
+    /// option list here is short codec/format names plus at most one row of
+    /// subtext -- comfortably narrower than this even for "Same as Source"
+    /// beside a resolution like "1920x1080".
+    private static let menuWidth: CGFloat = 230
 
     private var menu: some View {
         DropdownMenuChrome {
@@ -2141,7 +2175,7 @@ struct DropdownField: View {
             }
             .padding(4)
         }
-        .frame(minWidth: 190)
+        .frame(width: Self.menuWidth)
     }
 }
 
@@ -2204,9 +2238,11 @@ struct DropdownBitrateField: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .anchorPreference(key: DropdownPopoverPreferenceKey.self, value: .bounds) { anchor in
             guard isOpen else { return [:] }
-            return [id: .init(anchor: anchor, content: { AnyView(menu) })]
+            return [id: .init(anchor: anchor, width: Self.menuWidth, content: { AnyView(menu) })]
         }
     }
+
+    private static let menuWidth: CGFloat = 330
 
     private var menu: some View {
         DropdownMenuChrome {
@@ -2218,7 +2254,7 @@ struct DropdownBitrateField: View {
             }
             .padding(14)
         }
-        .frame(width: 330)
+        .frame(width: Self.menuWidth)
     }
 }
 

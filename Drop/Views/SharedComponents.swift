@@ -2257,7 +2257,16 @@ struct DropdownBitrateField: View {
         }
     }
 
-    private static let menuWidth: CGFloat = 330
+    // SteppedSlider divides this width into one column per step (up to 6 for
+    // audio: Auto + 5 real bitrates) and centers each label under its own
+    // dot. 330 was carried over from an early guess; at up to 6 columns that
+    // gives each label only ~50px, and the LAST one (e.g. "12 Mbps"/"320
+    // kbps") sits with its label frame ending exactly at the content edge --
+    // reported live as looking cramped/uneven against "Auto"'s wide space.
+    // The slider was originally sized for a full-width row (600pt+), where
+    // this never showed. 380 gives 6 columns ~60px each, enough room for a
+    // two-line "320\nkbps" label to breathe on both sides.
+    private static let menuWidth: CGFloat = 380
 
     private var menu: some View {
         DropdownMenuChrome {

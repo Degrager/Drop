@@ -137,6 +137,51 @@ enum ConvertVideoCodec: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: Resolution and bitrate choices
+
+extension ConvertAudioCodec {
+    /// The bitrates (kbps) the picker offers for this codec. None for the lossless ones: there is
+    /// no bitrate to choose.
+    var bitrateChoices: [Int] {
+        switch self {
+        case .aac, .mp3:   return [96, 128, 192, 256, 320]
+        case .ac3, .eac3:  return [192, 256, 384, 448, 640]
+        case .opus:        return [64, 96, 128, 192, 256]
+        case .flac, .pcm:  return []
+        }
+    }
+
+    /// What an encode has always used when no bitrate is chosen ("Auto"). nil: the encoder decides.
+    func autoBitrateKbps(multichannel: Bool) -> Int? {
+        switch self {
+        case .aac: return multichannel ? 384 : 256   // 5.1 needs the headroom, stereo does not
+        case .mp3: return 320
+        default:   return nil
+        }
+    }
+}
+
+extension ConvertVideoCodec {
+    /// The video bitrates (kbps) the picker offers for an output of this size: a ladder that
+    /// makes sense at that resolution, not one list for every size.
+    static func bitrateChoices(forShortSide side: Int) -> [Int] {
+        switch side {
+        case ...480:  return [500, 1_000, 1_500, 2_500]
+        case ...720:  return [1_000, 2_500, 4_000, 6_000]
+        case ...1080: return [2_500, 5_000, 8_000, 12_000]
+        case ...1440: return [5_000, 8_000, 12_000, 20_000]
+        default:      return [10_000, 20_000, 35_000, 50_000]
+        }
+    }
+}
+
+/// "2.5 Mbps" / "800 kbps" for a picker; `compact` drops the space, for a chip ("2.5Mbps").
+func bitrateChoiceLabel(_ kbps: Int, compact: Bool = false) -> String {
+    let space = compact ? "" : " "
+    if kbps >= 1_000 { return String(format: "%g", Double(kbps) / 1_000) + space + "Mbps" }
+    return "\(kbps)" + space + "kbps"
+}
+
 enum ConvertMediaMode: String, CaseIterable {
     case videoAndAudio = "both"
     case videoOnly    = "video"
@@ -283,8 +328,8 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     @Published var outputSizeLabel: String? = nil
     @Published var isSelected: Bool = true
     @Published var thumbnail: NSImage? = nil
-    @Published var audioCodec: ConvertAudioCodec = .aac
-    @Published var videoCodec: ConvertVideoCodec = .h264
+    @Published var audioCodec: ConvertAudioCodec = .aac { didSet { pruneChoices() } }
+    @Published var videoCodec: ConvertVideoCodec = .h264 { didSet { pruneChoices() } }
     @Published var outputFormat: ConvertOutputFormat = .mp4
     @Published var mediaMode: ConvertMediaMode = .videoAndAudio
     /// Independent of mediaMode (which decides whether a track is IN the output
@@ -297,8 +342,16 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     /// clip without ever re-encoding its video, or vice versa.
     @Published var transcodeVideo: Bool = false
     @Published var transcodeAudio: Bool = false
+    /// The video's SHORT side to scale it to (so a portrait clip reads the same as a landscape
+    /// one: "720p" is 720 across the short edge). nil = "Same as Source", untouched.
+    @Published var chosenResolution: Int? = nil
+    /// Target video bitrate in kbps. nil = Auto: the encoder's own quality target, or the source
+    /// untouched while it is stream-copied.
+    @Published var chosenVideoBitrateKbps: Int? = nil
+    /// Target audio bitrate in kbps. nil = Auto (what an encode has always used).
+    @Published var chosenAudioBitrateKbps: Int? = nil
     @Published var mediaInfo: ConvertMediaInfo? = nil {
-        didSet { applyDefaultCodecsFromSource() }
+        didSet { applyDefaultCodecsFromSource(); pruneChoices() }
     }
     var process: Process? = nil
 
@@ -459,6 +512,86 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         guard let raw = mediaInfo?.audioCodec else { return false }
         return audioCodec.probeNames.contains(raw)
     }
+    // MARK: Resolution and bitrate
+
+    /// The source's short side, when its size is known.
+    var sourceShortSide: Int? {
+        guard let w = mediaInfo?.pixelWidth, let h = mediaInfo?.pixelHeight, w > 0, h > 0 else { return nil }
+        return min(w, h)
+    }
+
+    /// The resolutions offered: the usual ones smaller than the source's own (never upscaled).
+    var availableResolutions: [Int] {
+        guard mediaMode.isVideo, let side = sourceShortSide else { return [] }
+        return [2160, 1440, 1080, 720, 480].filter { $0 < side }
+    }
+
+    /// The short side the video is scaled to, or nil while it keeps the source's size.
+    var scaledShortSide: Int? {
+        guard mediaMode.isVideo, let chosen = chosenResolution, let side = sourceShortSide, chosen < side else { return nil }
+        return chosen
+    }
+
+    /// ProRes is a profile, not a bitrate: it has nothing to choose.
+    var supportsVideoBitrate: Bool { mediaMode.isVideo && videoCodec != .prores }
+    var videoBitrateChoices: [Int] {
+        ConvertVideoCodec.bitrateChoices(forShortSide: scaledShortSide ?? sourceShortSide ?? 1080)
+    }
+    var overridesVideoBitrate: Bool { supportsVideoBitrate && chosenVideoBitrateKbps != nil }
+
+    var supportsAudioBitrate: Bool { mediaMode != .videoOnly && !audioCodec.bitrateChoices.isEmpty }
+    var overridesAudioBitrate: Bool { supportsAudioBitrate && chosenAudioBitrateKbps != nil }
+
+    /// THE copy-or-encode rule. A track is stream-copied only when its codec already is the
+    /// source's AND nothing asked for a change to it: a smaller resolution or a bitrate cannot be
+    /// applied to a copy, so choosing one re-encodes the track (with the source's own codec while
+    /// "Same as Source" is selected). Everything that estimates, describes or runs a conversion
+    /// asks this, so they cannot disagree.
+    var encodesVideo: Bool { !videoCodecMatchesSource || scaledShortSide != nil || overridesVideoBitrate }
+    var encodesAudio: Bool { !audioCodecMatchesSource || overridesAudioBitrate }
+
+    private var isMultichannelSource: Bool {
+        mediaInfo?.audioChannelLabel.map { $0 == "5.1" || $0 == "7.1" } ?? false
+    }
+
+    /// The bitrate passed to ffmpeg for the audio (nil: none, the encoder decides).
+    var audioBitrateArgKbps: Int? {
+        if overridesAudioBitrate { return chosenAudioBitrateKbps }
+        return audioCodec.autoBitrateKbps(multichannel: isMultichannelSource)
+    }
+
+    /// The bitrate an audio encode ends up at, for the estimate and the chip.
+    var plannedAudioKbps: Int { audioBitrateArgKbps ?? audioCodec.typicalBitrateKbps }
+
+    /// "1280×720" once scaled, else the source's own size.
+    var outputResolutionLabel: String? {
+        guard let side = scaledShortSide, let w = mediaInfo?.pixelWidth, let h = mediaInfo?.pixelHeight else {
+            return mediaInfo?.resolution
+        }
+        func even(_ value: Double) -> Int { Int((value / 2).rounded()) * 2 }
+        let scale = Double(side)
+        return w >= h ? "\(even(Double(w) * scale / Double(h)))×\(side)" : "\(side)×\(even(Double(h) * scale / Double(w)))"
+    }
+
+    /// Set only when a bitrate was chosen: an Auto encode has no single figure to show.
+    var videoBitrateLabel: String? {
+        overridesVideoBitrate ? chosenVideoBitrateKbps.map { bitrateChoiceLabel($0, compact: true) } : nil
+    }
+
+    /// Drops any choice the current codec, mode or source no longer allows (a codec with no such
+    /// bitrate, a resolution the source cannot supply, a ladder that changed with the size).
+    func pruneChoices() {
+        if let bitrate = chosenAudioBitrateKbps, !audioCodec.bitrateChoices.contains(bitrate) { chosenAudioBitrateKbps = nil }
+        if let resolution = chosenResolution, let side = sourceShortSide, resolution >= side { chosenResolution = nil }
+        if let bitrate = chosenVideoBitrateKbps, videoCodec == .prores || !videoBitrateChoices.contains(bitrate) { chosenVideoBitrateKbps = nil }
+    }
+
+    /// The RESOLUTION row's choice. Changing the size changes which video bitrates make sense.
+    func chooseResolution(_ side: Int?) {
+        chosenResolution = side
+        pruneChoices()
+    }
+
     var outputFilename: String {
         let base = inputURL.deletingPathExtension().lastPathComponent
         return "\(base)_converted.\(outputFormat.fileExtension)"
@@ -621,8 +754,8 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         // would report the source's own file size for a track that's
         // actually about to be re-encoded into something much smaller
         // (or larger).
-        let videoIsCopy = mediaMode != .audio && videoCodec.matchesSource(info.videoCodec)
-        let audioIsCopy = mediaMode != .videoOnly && audioCodec.matchesSource(info.audioCodec)
+        let videoIsCopy = mediaMode.isVideo && !encodesVideo
+        let audioIsCopy = mediaMode != .videoOnly && !encodesAudio
         // If every relevant track is being stream-copied (the all-default "Original"
         // case), the output is essentially the source file — same container muxing
         // overhead aside — so just report the real source size instead of running it
@@ -650,15 +783,17 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         if mediaMode != .audio {
             if videoIsCopy, sourceBytes > 0 {
                 copiedBytes += Double(sourceBytes) * (sourceVideoKbps / sourceTotalKbps)
+            } else if overridesVideoBitrate, let chosen = chosenVideoBitrateKbps {
+                totalKbps += Double(chosen)
             } else {
-                totalKbps += videoCodec.typicalMbpsAt1080p * 1000 * sourceResolutionRatio(info)
+                totalKbps += videoCodec.typicalMbpsAt1080p * 1000 * outputResolutionRatio(info)
             }
         }
         if mediaMode != .videoOnly {
             if audioIsCopy, sourceBytes > 0 {
                 copiedBytes += Double(sourceBytes) * (sourceAudioKbps / sourceTotalKbps)
             } else {
-                totalKbps += Double(audioCodec.typicalBitrateKbps)
+                totalKbps += Double(plannedAudioKbps)
             }
         }
 
@@ -672,6 +807,15 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         let w = info.pixelWidth ?? 1920
         let h = info.pixelHeight ?? 1080
         return max(Double(w * h) / Double(1920 * 1080), 0.1)
+    }
+
+    /// The same, for what will be written: the scaled size when the video is scaled.
+    private func outputResolutionRatio(_ info: ConvertMediaInfo) -> Double {
+        guard let side = scaledShortSide, let w = info.pixelWidth, let h = info.pixelHeight, w > 0, h > 0 else {
+            return sourceResolutionRatio(info)
+        }
+        let scale = Double(side) / Double(min(w, h))
+        return max(Double(w) * scale * Double(h) * scale / Double(1920 * 1080), 0.05)
     }
 
     /// "~"-prefixed, in the same style as the exact size that replaces it once the job is done
@@ -718,7 +862,7 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         if mediaMode != .audio {
             // Frame rate and resolution are unchanged by conversion (Convert
             // never retimes or resizes), so they carry over from the source.
-            result.append(ChipData.video([outputFormat.rawValue.uppercased(), displayVideoCodec, mediaInfo?.videoFrameRateLabel, mediaInfo?.resolution])
+            result.append(ChipData.video([outputFormat.rawValue.uppercased(), displayVideoCodec, mediaInfo?.videoFrameRateLabel, outputResolutionLabel, videoBitrateLabel])
                           ?? .videoPlaceholder)
         }
         if mediaMode != .videoOnly {
@@ -815,7 +959,7 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     /// omits it) when copying a source whose own bitrate isn't knowable
     /// (e.g. FLAC/PCM don't report one) rather than showing a guess.
     var displayAudioBitrateLabel: String? {
-        if !audioCodecMatchesSource { return "\(audioCodec.typicalBitrateKbps)kbps" }
+        if encodesAudio { return "\(plannedAudioKbps)kbps" }
         return mediaInfo?.audioBitrateKbps.map { "\($0)kbps" }
     }
 
@@ -826,7 +970,7 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     /// must show something other than the source's real channel count.
     var displayAudioChannelLabel: String? {
         let isMultichannel = mediaInfo?.audioChannelLabel.map { $0 == "5.1" || $0 == "7.1" } ?? false
-        if !audioCodecMatchesSource && audioCodec == .mp3 && isMultichannel { return "2.0" }
+        if encodesAudio && audioCodec == .mp3 && isMultichannel { return "2.0" }
         return mediaInfo?.audioChannelLabel
     }
 
@@ -1684,7 +1828,9 @@ struct ConvertView: View {
             // container combination — it only skips re-encoding when the source
             // already is (or can be treated as) the selected codec.
             if job.mediaMode != .videoOnly {
-                let audioMatches = job.audioCodecMatchesSource
+                // Copy only while nothing asks for a change to the track (a chosen bitrate cannot be
+                // applied to a copy): see ConvertJob.encodesAudio.
+                let audioMatches = !job.encodesAudio
                 // Stream-copy is only ever valid when the codec ffmpeg would
                 // be asked to copy already matches the source -- NOT merely
                 // whenever transcodeAudio is false ("Same as Source"
@@ -1703,9 +1849,10 @@ struct ConvertView: View {
                 // 5.1/7.1 sources need more headroom than stereo to avoid audible
                 // compression artifacts — 384k covers 5.1 cleanly, 256k is plenty for stereo/mono.
                 let isMultichannel = (job.mediaInfo?.audioChannelLabel).map { $0 == "5.1" || $0 == "7.1" } ?? false
-                if encodeAudio && job.audioCodec == .aac { args += ["-b:a", isMultichannel ? "384k" : "256k"] }
+                // The chosen bitrate, else what an encode of this codec has always used (256k stereo /
+                // 384k 5.1 for AAC, 320k for MP3, the encoder's own for the rest).
+                if encodeAudio, let kbps = job.audioBitrateArgKbps { args += ["-b:a", "\(kbps)k"] }
                 if encodeAudio && job.audioCodec == .mp3 {
-                    args += ["-b:a", "320k"]
                     // MP3 (libmp3lame) only supports mono/stereo -- a
                     // >2-channel source (5.1, 7.1) gets silently downmixed
                     // by the encoder's own default behavior if left
@@ -1755,9 +1902,21 @@ struct ConvertView: View {
             // converted to MP4, which can't hold ProRes at all, needs to
             // encode even with "Same as Source" left selected).
             if job.mediaMode.isVideo {
-                let videoMatches = job.videoCodecMatchesSource
-                let encodeVideo = !videoMatches
+                // Copy only while nothing asks for a change to the track: a smaller resolution or a
+                // bitrate cannot be applied to a copy (see ConvertJob.encodesVideo). With "Same as
+                // Source" selected the codec IS the source's own, so it is re-encoded like for like.
+                let encodeVideo = job.encodesVideo
                 args += ["-c:v", encodeVideo ? job.videoCodec.ffmpegCodec : "copy"]
+                // Scales the SHORT side to the chosen size (720p = 720 across the short edge, so a
+                // portrait clip comes out 720 wide, not 720 tall), the other side keeping the
+                // aspect ratio and an even number of pixels, which the encoders need.
+                if let side = job.scaledShortSide {
+                    args += ["-vf", "scale=w='if(gt(iw,ih),-2,\(side))':h='if(gt(iw,ih),\(side),-2)':flags=lanczos"]
+                }
+                // The chosen video bitrate. AV1 and VP9 are otherwise held to a quality target
+                // (-crf), which a bitrate replaces.
+                let videoKbps: Int? = (encodeVideo && job.overridesVideoBitrate) ? job.chosenVideoBitrateKbps : nil
+                if let kbps = videoKbps { args += ["-b:v", "\(kbps)k"] }
                 // -preset fast: significantly faster encode with minimal quality loss
                 if encodeVideo && (job.videoCodec == .h264 || job.videoCodec == .h265) {
                     args += ["-preset", "fast"]
@@ -1786,11 +1945,11 @@ struct ConvertView: View {
                 // libsvtav1 uses its own preset scale (0-13, lower = slower/better) — 8 is a
                 // reasonable speed/quality balance, verified to encode successfully on-device.
                 if encodeVideo && job.videoCodec == .av1 {
-                    args += ["-preset", "8", "-crf", "35"]
+                    args += videoKbps == nil ? ["-preset", "8", "-crf", "35"] : ["-preset", "8"]
                 }
                 // libvpx-vp9 needs -b:v 0 to actually respect -crf (otherwise it defaults to
                 // a bitrate-controlled mode and ignores the quality target).
-                if encodeVideo && job.videoCodec == .vp9 {
+                if encodeVideo && job.videoCodec == .vp9 && videoKbps == nil {
                     args += ["-crf", "32", "-b:v", "0"]
                 }
             } else {
@@ -1911,12 +2070,13 @@ struct ConvertView: View {
                     // audio-only gets codec + bitrate. Falls back gracefully if info is unavailable.
                     let qualityDescriptor: String = {
                         if job.mediaMode.isVideo {
+                            if let side = job.scaledShortSide { return "\(job.displayVideoCodec) · \(side)p" }
                             if let w = job.mediaInfo?.pixelWidth, let h = job.mediaInfo?.pixelHeight, w > 0, h > 0 {
                                 return "\(job.displayVideoCodec) · \(h)p"
                             }
                             return job.displayVideoCodec
                         } else {
-                            return "\(job.displayAudioCodec) · \(job.audioCodec.typicalBitrateKbps)kbps"
+                            return "\(job.displayAudioCodec) · \(job.plannedAudioKbps)kbps"
                         }
                     }()
                     // Save to history. `url` stays the ORIGINAL input path for
@@ -2238,6 +2398,48 @@ struct ConvertPreviewCard: View {
         return options
     }
 
+    /// RESOLUTION -- the usual sizes smaller than the source's (never upscaled), by the short side.
+    /// "Same as Source" leaves the video alone; anything else re-encodes it (like for like, with
+    /// the source's own codec, while "Same as Source" is selected on VIDEO CODEC).
+    private var resolutionOptions: [SegmentOption] {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledShortSide == nil) {
+            withAnimation(.spring(response: 0.25)) { job.chooseResolution(nil) }
+        }]
+        options += job.availableResolutions.map { side in
+            SegmentOption(id: "\(side)", label: "\(side)p", isSelected: job.scaledShortSide == side) {
+                withAnimation(.spring(response: 0.25)) { job.chooseResolution(side) }
+            }
+        }
+        return options
+    }
+
+    /// VIDEO BITRATE -- Auto keeps today's behaviour (the encoder's own quality target, or the
+    /// source untouched); a figure re-encodes at that bitrate. The ladder follows the output size.
+    private var videoBitrateOptions: [SegmentOption] {
+        var options = [SegmentOption(id: "auto", label: "Auto", isSelected: !job.overridesVideoBitrate) {
+            withAnimation(.spring(response: 0.25)) { job.chosenVideoBitrateKbps = nil }
+        }]
+        options += job.videoBitrateChoices.map { kbps in
+            SegmentOption(id: "\(kbps)", label: bitrateChoiceLabel(kbps), isSelected: job.overridesVideoBitrate && job.chosenVideoBitrateKbps == kbps) {
+                withAnimation(.spring(response: 0.25)) { job.chosenVideoBitrateKbps = kbps }
+            }
+        }
+        return options
+    }
+
+    /// AUDIO BITRATE -- same shape, for the codecs that have one (not FLAC / PCM).
+    private var audioBitrateOptions: [SegmentOption] {
+        var options = [SegmentOption(id: "auto", label: "Auto", isSelected: !job.overridesAudioBitrate) {
+            withAnimation(.spring(response: 0.25)) { job.chosenAudioBitrateKbps = nil }
+        }]
+        options += job.audioCodec.bitrateChoices.map { kbps in
+            SegmentOption(id: "\(kbps)", label: bitrateChoiceLabel(kbps), isSelected: job.overridesAudioBitrate && job.chosenAudioBitrateKbps == kbps) {
+                withAnimation(.spring(response: 0.25)) { job.chosenAudioBitrateKbps = kbps }
+            }
+        }
+        return options
+    }
+
     /// OUTPUT FORMAT -- last row, after both codec choices are settled.
     private var formatOptions: [SegmentOption] {
         job.availableFormats.map { fmt in
@@ -2266,9 +2468,11 @@ struct ConvertPreviewCard: View {
             headerAccessory: headerAccessory,
             footer: footer
         ) {
-            // Four labelled rows, top to bottom: CONVERT AS -> VIDEO CODEC ->
-            // AUDIO CODEC -> OUTPUT FORMAT. The output folder lives in the
-            // bottom bar (shared across every job), not here.
+            // Labelled rows, top to bottom: CONVERT AS -> VIDEO CODEC -> RESOLUTION ->
+            // VIDEO BITRATE -> AUDIO CODEC -> AUDIO BITRATE -> OUTPUT FORMAT. Each is shown only
+            // where it means something (no video rows for an audio file, no bitrate for a
+            // lossless codec). The output folder lives in the bottom bar (shared across every
+            // job), not here.
             VStack(alignment: .leading, spacing: 9) {
                 FormRow(icon: "switch.2", label: "CONVERT AS") {
                     SegmentedCapsule(options: modeOptions, fill: false)
@@ -2278,11 +2482,27 @@ struct ConvertPreviewCard: View {
                         SegmentedCapsule(options: videoCodecOptions)
                     }
                 }
+                // Only offered when the source is bigger than a standard size to go down to.
+                if !job.availableResolutions.isEmpty {
+                    FormRow(icon: "aspectratio", label: "RESOLUTION") {
+                        SegmentedCapsule(options: resolutionOptions)
+                    }
+                }
+                if job.supportsVideoBitrate {
+                    FormRow(icon: "speedometer", label: "VIDEO BITRATE") {
+                        SegmentedCapsule(options: videoBitrateOptions)
+                    }
+                }
                 // Hidden entirely for video-only mode (no audio track in the
                 // output at all).
                 if job.mediaMode != .videoOnly {
                     FormRow(icon: "waveform", label: "AUDIO CODEC") {
                         SegmentedCapsule(options: audioCodecOptions)
+                    }
+                }
+                if job.supportsAudioBitrate {
+                    FormRow(icon: "gauge.with.dots.needle.33percent", label: "AUDIO BITRATE") {
+                        SegmentedCapsule(options: audioBitrateOptions)
                     }
                 }
                 FormRow(icon: "doc.badge.arrow.up", label: "OUTPUT FORMAT") {

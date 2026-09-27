@@ -1906,6 +1906,342 @@ struct FormRow<Content: View>: View {
     }
 }
 
+// MARK: Dropdown field
+
+/// A small icon-and-caps caption above a field or a track's row of fields
+/// ("CODEC", "VIDEO") -- the same visual language as FormRow's own label, in
+/// a form compact enough to sit above a single field instead of beside a
+/// full-width row.
+struct FieldCaption: View {
+    let icon: String?
+    let text: String
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.appMono(size: 10, weight: .semibold))
+                    .frame(width: 14, alignment: .center)
+            }
+            Text(text)
+                .font(.appMono(size: icon == nil ? 9 : 10, weight: .semibold))
+                .tracking(icon == nil ? 0.3 : 0)
+                .lineLimit(1)
+        }
+        // A field's own caption (no icon: CODEC, RESOLUTION, BITRATE) sits a
+        // notch dimmer than a row caption (with icon: CONVERT AS, VIDEO) --
+        // the row caption is naming what the whole line is about, the field
+        // caption is a quieter label on a control that already speaks for
+        // itself once it has a value.
+        .foregroundColor(.white.opacity(icon == nil ? DesignTokens.Text.tertiary : DesignTokens.Text.secondary))
+    }
+}
+
+/// One row inside a DropdownField's open menu: its own hover state, since a
+/// ForEach can't hold an array of @State for its children.
+private struct DropdownMenuRow: View {
+    let option: SegmentOption
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Text(option.label)
+                Spacer(minLength: 10)
+                if let subtext = option.subtext {
+                    Text(subtext)
+                        .font(.appMono(size: 10))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                } else if option.isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.appMono(size: 10, weight: .bold))
+                }
+            }
+            .font(.appMono(size: 12, weight: .medium))
+            .foregroundColor(option.isSelected ? DesignTokens.Accent.primaryLight : .white.opacity(DesignTokens.Text.secondary))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover * 0.4 : 0))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(option.help)
+    }
+}
+
+/// The glass surface every DropdownField/DropdownBitrateField menu opens
+/// into -- same recipe as ConvertView's fileSwitcherPopup (blur + black tint,
+/// a hairline rim, two stacked shadows for real depth against the black card
+/// behind it).
+private struct DropdownMenuChrome<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        content()
+            .background(
+                ZStack {
+                    VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                    Color.black.opacity(DesignTokens.Glass.blackTint)
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
+                .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
+            .shadow(color: .black.opacity(0.5), radius: 6, y: 3)
+            .shadow(color: .black.opacity(0.6), radius: 24, y: 12)
+    }
+}
+
+/// A field's open popover, published up through `.anchorPreference` to
+/// DropdownPopoverHost instead of drawn where the field itself sits.
+///
+/// Every analyze-card field lives inside PreviewCard's body, and PreviewCard
+/// ends in `.liveGlassCard(...)`, which clipShapes its ENTIRE content to the
+/// card's rounded rect -- popover included, no matter how high its zIndex,
+/// because clipping and z-ordering are different things: clipping bounds
+/// what a subtree can draw at all, z-ordering only decides who's on top
+/// within whatever isn't clipped. Confirmed live: a field near the bottom of
+/// the card (AUDIO's row) opened a popover that was cut off after its first
+/// row, right at the card's own bottom edge. Publishing the anchor instead
+/// lets ONE host, rendered as a sibling to PreviewCard (outside its clip;
+/// see ConvertPreviewCard.body), draw the actual popover content.
+private struct DropdownPopoverPreferenceKey: PreferenceKey {
+    struct Entry { let anchor: Anchor<CGRect>; let content: () -> AnyView }
+    static var defaultValue: [String: Entry] = [:]
+    static func reduce(value: inout [String: Entry], nextValue: () -> [String: Entry]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// Sits as a sibling to the analyze card's own content (not inside it -- see
+/// DropdownPopoverPreferenceKey), and draws whichever field's popover is
+/// currently open at that field's real on-screen position. One host per
+/// card; every DropdownField/DropdownBitrateField on it shares its `openID`
+/// binding, so opening one field's popover closes any other's automatically.
+extension View {
+    /// Draws whichever DropdownField/DropdownBitrateField on this view has
+    /// named itself via `openID` -- as `.overlay(...)` added to THIS view
+    /// from outside, not a sibling with its own GeometryReader.
+    ///
+    /// A preference set by a DropdownField only reaches an `.overlayPreferenceValue`
+    /// called on one of ITS OWN ANCESTORS -- preferences climb a single branch of
+    /// the tree, they don't cross to a sibling branch. A first version of this put
+    /// the reader in a sibling view next to convertSettingsCard (both inside one
+    /// ZStack); nothing a field published ever reached it, so no popover ever drew
+    /// (confirmed live: every dropdown field opened and closed by its state alone,
+    /// with no menu appearing at all, not even the earlier clipped-off one).
+    /// Calling this directly on `convertSettingsCard` makes it the ancestor whose
+    /// `.overlay` this becomes, and -- because `.liveGlassCard()`'s clipShape was
+    /// already applied INSIDE PreviewCard's own body, one layer further in -- the
+    /// overlay this adds sits outside that clip, exactly the way a `.overlay` added
+    /// after a `.clipShape` in any modifier chain always does.
+    func dropdownPopoverOverlay(openID: Binding<String?>) -> some View {
+        overlayPreferenceValue(DropdownPopoverPreferenceKey.self) { entries in
+            GeometryReader { proxy in
+                if let id = openID.wrappedValue, let entry = entries[id] {
+                    let rect = proxy[entry.anchor]
+                    ZStack(alignment: .topLeading) {
+                        Color.black.opacity(0.001)
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .contentShape(Rectangle())
+                            .onTapGesture { withAnimation(.spring(response: 0.2)) { openID.wrappedValue = nil } }
+                        entry.content()
+                            .offset(x: rect.minX, y: rect.maxY + 6)
+                    }
+                    .transition(.focus(blur: 10, scale: 0.9, anchor: .top))
+                }
+            }
+            // Only intercepts clicks while something is actually open -- otherwise this
+            // full-card-sized layer would sit over every other control on the card.
+            .allowsHitTesting(openID.wrappedValue != nil)
+        }
+    }
+}
+
+/// One labelled field that shows either the source's own value (dim, with a
+/// trailing "source" mark) or the chosen override (accent-tinted), and opens
+/// a short menu of the same options a SegmentedCapsule would show -- for a
+/// track row where several controls have to sit on one line that never wraps
+/// (see VIDEO CODEC / RESOLUTION in ConvertView's analyze card). The caller
+/// still owns every option's `isSelected`/`action`, exactly as with
+/// SegmentedCapsule; this is only a more compact way to present the same
+/// list, not a different data model.
+///
+/// `id` and `openID` are the field's half of DropdownPopoverHost: every field
+/// on one card shares the same `openID` binding, so it names itself when
+/// tapped and only draws its own menu content when it's the one named.
+struct DropdownField: View {
+    let id: String
+    let caption: String
+    let options: [SegmentOption]
+    @Binding var openID: String?
+
+    private var isOpen: Bool { openID == id }
+    /// Only the "Same as Source" option carries a subtext (the source's own
+    /// value) -- see videoCodecOptions/resolutionOptions/audioCodecOptions --
+    /// so the selected option having one IS it being unchanged.
+    private var selected: SegmentOption? { options.first(where: \.isSelected) }
+    private var isChanged: Bool { selected != nil && selected?.subtext == nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            FieldCaption(icon: nil, text: caption)
+            Button {
+                withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(selected?.label ?? "—")
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                    if let subtext = selected?.subtext {
+                        Text(subtext)
+                            .font(.appMono(size: 9))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.down")
+                        .font(.appMono(size: 9, weight: .bold))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                }
+                .font(.appMono(size: 12, weight: .medium))
+                .foregroundColor(isChanged ? DesignTokens.Accent.primaryLight : .white.opacity(DesignTokens.Text.primary))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                        .fill(isChanged ? DesignTokens.Accent.primary.opacity(0.14) : Color.white.opacity(DesignTokens.Field.fillRest))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                        .stroke(isChanged ? DesignTokens.Accent.primary.opacity(0.6) : Color.white.opacity(DesignTokens.Field.borderRest),
+                                lineWidth: DesignTokens.Field.borderWidth)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .anchorPreference(key: DropdownPopoverPreferenceKey.self, value: .bounds) { anchor in
+            guard isOpen else { return [:] }
+            return [id: .init(anchor: anchor, content: { AnyView(menu) })]
+        }
+    }
+
+    private var menu: some View {
+        DropdownMenuChrome {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(options) { option in
+                    DropdownMenuRow(option: option) {
+                        option.action()
+                        withAnimation(.spring(response: 0.2)) { openID = nil }
+                    }
+                }
+            }
+            .padding(4)
+        }
+        .frame(minWidth: 190)
+    }
+}
+
+/// Same shell as DropdownField, but its menu is a SteppedSlider instead of a
+/// list -- for VIDEO BITRATE / AUDIO BITRATE, where "a handful of discrete
+/// options" is better shown as a slider than a scrolling list of numbers.
+/// Stays open across a drag (unlike DropdownField, which closes the instant
+/// something is picked): a slider is something you settle into, not a single
+/// tap.
+struct DropdownBitrateField: View {
+    let id: String
+    let caption: String
+    let steps: [SliderStep]
+    let selected: Int
+    let isChanged: Bool
+    @Binding var openID: String?
+    let onSelect: (Int) -> Void
+
+    private var isOpen: Bool { openID == id }
+    private var chosen: SliderStep { steps[min(max(selected, 0), steps.count - 1)] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            FieldCaption(icon: nil, text: caption)
+            Button {
+                withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(chosen.label)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                    if let subtext = chosen.subtext {
+                        Text(subtext)
+                            .font(.appMono(size: 9))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.down")
+                        .font(.appMono(size: 9, weight: .bold))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                }
+                .font(.appMono(size: 12, weight: .medium))
+                .foregroundColor(isChanged ? DesignTokens.Accent.primaryLight : .white.opacity(DesignTokens.Text.primary))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                        .fill(isChanged ? DesignTokens.Accent.primary.opacity(0.14) : Color.white.opacity(DesignTokens.Field.fillRest))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                        .stroke(isChanged ? DesignTokens.Accent.primary.opacity(0.6) : Color.white.opacity(DesignTokens.Field.borderRest),
+                                lineWidth: DesignTokens.Field.borderWidth)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .anchorPreference(key: DropdownPopoverPreferenceKey.self, value: .bounds) { anchor in
+            guard isOpen else { return [:] }
+            return [id: .init(anchor: anchor, content: { AnyView(menu) })]
+        }
+    }
+
+    private var menu: some View {
+        DropdownMenuChrome {
+            VStack(alignment: .leading, spacing: 10) {
+                SteppedSlider(steps: steps, selected: selected, onSelect: onSelect)
+                Text("Auto keeps the source's own quality target.")
+                    .font(.appMono(size: 9.5))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+            }
+            .padding(14)
+        }
+        .frame(width: 330)
+    }
+}
+
+/// A track's row of fields ("VIDEO" / "AUDIO" beside CODEC, RESOLUTION,
+/// BITRATE) -- a plain HStack, so it never wraps: SwiftUI's HStack doesn't
+/// reflow to a second line the way a CSS flex row can, it just negotiates
+/// each field's width, which is exactly the point (see the analyze-card
+/// redesign: every field keeps to one row at every real window width).
+struct FieldsTrackRow<Content: View>: View {
+    let icon: String
+    let label: String
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            FieldCaption(icon: icon, text: label)
+                .frame(width: 60, alignment: .leading)
+                .padding(.bottom, 7)
+            content()
+        }
+    }
+}
+
 // MARK: Field capsule + inner card
 
 /// A folder path or text field drawn as a capsule.

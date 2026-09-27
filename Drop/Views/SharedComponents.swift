@@ -286,8 +286,10 @@ struct CardFacadeMetrics: Equatable {
     var analyzing = false
     /// Buttons on the header's trailing edge (the last one is the card's main control).
     var buttonCount = 0
-    /// The progress / status column between the text and the buttons (downloading, finished).
+    /// The progress column between the text and the buttons (a download under way).
     var hasStatus = false
+    /// The outcome label there instead (a download that has finished).
+    var hasStatusLabel = false
     /// The link line under the header, shown while a card is expanded.
     var hasLink = false
     /// True once the card itself (not just a piece of it) has reported.
@@ -453,7 +455,7 @@ struct CardFacade: View {
         .fixedSize()
     }
 
-    /// The progress column of a downloading / finished card: a status line over a slim bar.
+    /// The progress column of a downloading card: a status line over a slim bar.
     private var statusColumn: some View {
         VStack(alignment: .trailing, spacing: 5) {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -461,9 +463,17 @@ struct CardFacade: View {
                 .frame(width: 70, height: 8)
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Color.white.opacity(0.06))
-                .frame(width: 128, height: 4)
+                .frame(width: CardMetrics.statusWidth, height: 4)
         }
-        .frame(width: 128, alignment: .trailing)
+        .frame(width: CardMetrics.statusWidth, alignment: .trailing)
+    }
+
+    /// The outcome label of a finished download, in the room the Reveal button leaves it.
+    private var statusLabel: some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(Color.white.opacity(0.07))
+            .frame(width: 52, height: 8)
+            .frame(width: CardMetrics.statusWidth - (metrics.buttonCount >= 3 ? CardMetrics.buttonSlot : 0), alignment: .trailing)
     }
 
     /// The only pieces that stretch with the card.
@@ -500,8 +510,8 @@ struct CardFacade: View {
                 .clipped()
             }
             .overlay(alignment: .topTrailing) {
-                HStack(spacing: 10) {
-                    if metrics.hasStatus { statusColumn }
+                HStack(spacing: 12) {
+                    if metrics.hasStatus { statusColumn } else if metrics.hasStatusLabel { statusLabel }
                     HStack(spacing: 12) {
                         // Every header button is the same 28pt capsule.
                         ForEach(0..<max(metrics.buttonCount, 1), id: \.self) { _ in
@@ -590,6 +600,7 @@ struct FrozenDuringResize: ViewModifier {
             memory.metrics.analyzing = state.analyzing
             memory.metrics.buttonCount = state.buttonCount
             memory.metrics.hasStatus = state.hasStatus
+            memory.metrics.hasStatusLabel = state.hasStatusLabel
             memory.metrics.hasLink = state.hasLink
             memory.metrics.reported = true
         }
@@ -1033,6 +1044,26 @@ struct MetaCell: View {
         return Text(tokens[0] + " ") + Text(tokens.dropFirst().joined(separator: " ")).foregroundColor(dim)
     }
 
+    /// A size: "~111.2 MB" while it is an estimate, "111.4 MB" once it is exact. When the chip
+    /// reserves the mark's room, the "~" is its own Text whose slot stays once it is invisible, so
+    /// the capsule does not change width when the real size replaces the estimate.
+    @ViewBuilder
+    private func sizeText(_ raw: String) -> some View {
+        if chip.reservesEstimateMark {
+            let estimated = raw.hasPrefix("~")
+            HStack(spacing: 0) {
+                Text("~").opacity(estimated ? 1 : 0)
+                Text(estimated ? String(raw.dropFirst()) : raw)
+            }
+            .font(.appMono(size: 10.5, weight: .medium))
+            .foregroundColor(primary)
+        } else {
+            Text(raw)
+                .font(.appMono(size: 10.5, weight: .medium))
+                .foregroundColor(primary)
+        }
+    }
+
     var body: some View {
         HStack(spacing: 5) {
             if let icon = chip.icon {
@@ -1045,17 +1076,20 @@ struct MetaCell: View {
                     .font(.appMono(size: 10, weight: .bold))
                     .foregroundColor(chip.metaIconColor)
             }
-            text(chip.value, dimTail: chip.metaColumn == .audio)
-                .font(.appMono(size: 10.5, weight: .medium))
-                .foregroundColor(primary)
+            if chip.icon == "internaldrive", chip.icon2 == nil {
+                // A size with no length before it.
+                sizeText(chip.value)
+            } else {
+                text(chip.value, dimTail: chip.metaColumn == .audio)
+                    .font(.appMono(size: 10.5, weight: .medium))
+                    .foregroundColor(primary)
+            }
             if let icon2 = chip.icon2, let value2 = chip.value2 {
                 Image(systemName: icon2)
                     .font(.appMono(size: 10, weight: .bold))
                     .foregroundColor(chip.metaIconColor)
                     .padding(.leading, 3)
-                Text(value2)
-                    .font(.appMono(size: 10.5, weight: .medium))
-                    .foregroundColor(primary)
+                sizeText(value2)
             }
         }
         .lineLimit(1)

@@ -298,16 +298,64 @@ func effectiveVideoResolutionLabel(_ quality: VideoQuality, sourceMaxHeight: Int
     return quality.label
 }
 
-/// Shared GB/MB/KB/B formatter -- previously duplicated between LinkPreview's
+/// Shared size formatter for every estimate -- previously duplicated between LinkPreview's
 /// own formatBytes and ContentView's totalEstimatedSizeLabel with a visible
 /// inconsistency (one used "%.1f MB", the other "%.0f MB"), so the same byte
 /// count could read as two different sizes depending on which chip showed it.
+///
+/// Decimal units (1 MB = 1,000,000 bytes), exactly as Finder and a finished download's own
+/// size are written: it used to divide by 1024 while still saying "MB", so even a perfect
+/// estimate read about 5% under the size that replaced it (106.2 MB, then 111.4 MB).
 func formatByteSize(_ bytes: Int) -> String {
-    let d = Double(bytes)
-    if d >= 1_073_741_824 { return String(format: "%.1f GB", d / 1_073_741_824) }
-    if d >= 1_048_576     { return String(format: "%.1f MB", d / 1_048_576) }
-    if d >= 1_024         { return String(format: "%.0f KB", d / 1_024) }
-    return "\(bytes) B"
+    ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+}
+
+/// Best guess at one stream's size in bytes, from yt-dlp's format list.
+///
+/// yt-dlp reports a size for direct (DASH) streams but never for manifest (HLS) ones, and on
+/// YouTube the HLS ones are what its format sort prefers, because their bitrate reads higher.
+/// With no size, the estimate for a 111 MB download collapsed to its audio track alone
+/// (2.6 MB). So, in order:
+///  1. the size yt-dlp reports;
+///  2. the size of the direct stream with the same height and codec family: an HLS variant is
+///     normally the very same encode (measured: 77,187,219 bytes against 77,151,406). Not for
+///     a "Premium" stream, whose encode is a genuinely bigger one;
+///  3. bitrate x duration, halved for a manifest stream: its bitrate is a peak (measured HLS
+///     streams came in at 0.25-0.65 of it, a Premium one at 0.50).
+func estimatedStreamBytes(_ stream: [String: Any], among formats: [[String: Any]], durationSeconds: Int) -> Int {
+    func number(_ value: Any?) -> Double { (value as? NSNumber)?.doubleValue ?? 0 }
+    func reported(_ format: [String: Any]) -> Int {
+        let exact = number(format["filesize"])
+        return Int(exact > 0 ? exact : number(format["filesize_approx"]))
+    }
+    /// avc1.640028 / vp09.00.40.08 / vp9 / av01.0.08M.08, told apart by family.
+    func family(_ format: [String: Any]) -> String {
+        let codec = (format["vcodec"] as? String ?? "").lowercased()
+        if codec.hasPrefix("avc") { return "avc" }
+        if codec.hasPrefix("vp09") || codec.hasPrefix("vp9") { return "vp9" }
+        if codec.hasPrefix("av01") { return "av1" }
+        if codec.hasPrefix("hev") || codec.hasPrefix("hvc") { return "hevc" }
+        return codec
+    }
+
+    let known = reported(stream)
+    if known > 0 { return known }
+
+    let height = Int(number(stream["height"]))
+    let isPremium = (stream["format_note"] as? String ?? "").localizedCaseInsensitiveContains("premium")
+    if height > 0, !isPremium {
+        let twin = formats
+            .filter { reported($0) > 0 && Int(number($0["height"])) == height && family($0) == family(stream) }
+            .max { number($0["tbr"]) < number($1["tbr"]) }
+        if let twin { return reported(twin) }
+    }
+
+    let tbr = number(stream["tbr"])
+    let kbps = tbr > 0 ? tbr : max(number(stream["vbr"]), number(stream["abr"]))
+    guard kbps > 0, durationSeconds > 0 else { return 0 }
+    let transport = (stream["protocol"] as? String ?? "").lowercased()
+    let isManifest = transport.contains("m3u8") || transport.contains("dash")
+    return Int(kbps * 125 * Double(durationSeconds) * (isManifest ? 0.5 : 1))
 }
 
 enum VideoQuality: String, CaseIterable, Identifiable {
@@ -867,6 +915,9 @@ struct DownloadSnapshot {
     var sourceChannelLabel: String? = nil
     var qualityByFormat: [String: AudioQuality] = ["mp3": .q320, "m4a": .q320, "wav": .q320, "flac": .q320]
     var fileSizeByQuality: [Int: Int] = [:]
+    /// The size the analyzed card estimated for what was chosen, so the download's card keeps
+    /// showing that same figure until the real file replaces it.
+    var estimatedBytes: Int? = nil
 }
 
 struct Download: Identifiable {
@@ -948,29 +999,26 @@ struct Download: Identifiable {
     }
 
     /// Output row — length (unchanged, same as input) + final size, then the
-    /// target format/quality. Size prefers the real post-download file size
-    /// (exact, read from disk once done) over the pre-download snapshot
-    /// estimate, which can be inaccurate since it's probed before the actual
-    /// format/quality is finalized. While actively downloading, size shows
-    /// yt-dlp's own reported estimate (set once, not a live disk re-read).
+    /// target format/quality. Until the file exists the size is the same "~" estimate the
+    /// analyzed card showed (a snapshot of it, so it does not shift when the download starts);
+    /// once it is done, the real size read from disk replaces it.
     var outputChips: [ChipData] {
         var result: [ChipData] = []
         let sizeValue: String? = {
             if let sz = fileSize { return sz }
+            if let estimate = snapshot.estimatedBytes { return "~" + formatByteSize(estimate) }
             switch mediaMode {
             case .audioOnly:
-                if let sz = snapshot.fileSizeBytes {
-                    return ByteCountFormatter.string(fromByteCount: Int64(sz), countStyle: .file)
-                }
+                if let sz = snapshot.fileSizeBytes { return "~" + formatByteSize(sz) }
             case .videoAndAudio:
                 let heightKey = videoQuality.maxHeight
                 if let sz = snapshot.fileSizeByQuality[heightKey] ?? snapshot.fileSizeByQuality.first?.value {
-                    return ByteCountFormatter.string(fromByteCount: Int64(sz), countStyle: .file)
+                    return "~" + formatByteSize(sz)
                 }
             }
             return nil
         }()
-        if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: snapshot.durationSeconds, raw: snapshot.duration), size: sizeValue) {
+        if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: snapshot.durationSeconds, raw: snapshot.duration), size: sizeValue, reservesEstimateMark: true) {
             result.append(length)
         }
         switch mediaMode {
@@ -1001,19 +1049,24 @@ struct ChipData: Hashable {
     var icon: String? = nil
     var icon2: String? = nil
     var value2: String? = nil
+    /// The size (`value2`) starts with "~" while it is an estimate. With this on, that mark has
+    /// a slot of its own that stays (invisible) once the size is exact, so the capsule keeps
+    /// its width when the real size replaces the estimate.
+    var reservesEstimateMark = false
 }
 
 extension ChipData {
     /// The white "length (+ size)" chip every chip row leads with. Nil when
     /// neither is known. Shared by Download, LinkPreview and Convert so the
     /// three tabs' rows can't drift apart.
-    static func lengthAndSize(length: String?, size: String?) -> ChipData? {
+    static func lengthAndSize(length: String?, size: String?, reservesEstimateMark: Bool = false) -> ChipData? {
         if let length, let size {
-            return ChipData(label: "", value: length, color: .white, icon: "clock", icon2: "internaldrive", value2: size)
+            return ChipData(label: "", value: length, color: .white, icon: "clock", icon2: "internaldrive", value2: size,
+                            reservesEstimateMark: reservesEstimateMark)
         } else if let length {
             return ChipData(label: "", value: length, color: .white, icon: "clock")
         } else if let size {
-            return ChipData(label: "", value: size, color: .white, icon: "internaldrive")
+            return ChipData(label: "", value: size, color: .white, icon: "internaldrive", reservesEstimateMark: reservesEstimateMark)
         }
         return nil
     }
@@ -2329,23 +2382,10 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                                     DispatchQueue.main.async {
                                         self.withDownload(downloadID) { $0.progress = clamped }
                                         // Parse: "[download]  47.3% of  8.23MiB at  1.20MiB/s ETA 00:04"
+                                        // (yt-dlp's "of X" is only the stream it is on -- the video, then
+                                        // the audio -- so it is not used as the file's size: the card
+                                        // keeps the analyzed estimate until the real file replaces it.)
                                         let afterPct = parts.dropFirst().joined(separator: "%")
-                                        // Extract total size estimate from "of X"
-                                        let fileSizeIsNil = self.readDownload(downloadID) { $0.fileSize == nil } ?? false
-                                        if fileSizeIsNil,
-                                           afterPct.contains(" of ") {
-                                            let ofParts = afterPct.components(separatedBy: " of ")
-                                            if ofParts.count > 1 {
-                                                // "  8.23MiB at ..." — grab first token
-                                                let sizeToken = ofParts[1]
-                                                    .trimmingCharacters(in: .whitespaces)
-                                                    .components(separatedBy: " ").first ?? ""
-                                                // Only set if it looks like a size (ends with B)
-                                                if sizeToken.hasSuffix("B") && !sizeToken.hasPrefix("~") {
-                                                    self.withDownload(downloadID) { $0.fileSize = "~\(sizeToken)" }
-                                                }
-                                            }
-                                        }
                                         // Speed + ETA activity text
                                         if afterPct.contains(" at ") {
                                             let atParts = afterPct.components(separatedBy: " at ")
@@ -6651,7 +6691,8 @@ struct ContentView: View {
             },
             capsule: capsule,
             titleKnown: titleKnown,
-            inlineStatus: dl.map { downloadStatusColumn($0) },
+            inlineStatus: dl.flatMap { downloadProgressColumn($0) },
+            statusLabel: dl.flatMap { downloadOutcomeLabel($0) },
             primaryControl: controls?.primary,
             secondaryControl: controls?.secondary,
             showsSettings: dl == nil && !failedAnalyze
@@ -6813,50 +6854,51 @@ struct ContentView: View {
 
     // MARK: Download — what the one card shows once a download exists
 
-    /// The progress column on the right of a downloading / finished card, like a Convert queue
-    /// row's: the status (percentage and time left while it runs), and a slim bar beneath it
-    /// while it is in flight.
-    private func downloadStatusColumn(_ dl: Download) -> AnyView {
+    /// The progress column on the right of a downloading card, like a Convert queue row's: the
+    /// status (percentage and time left while it runs) over a slim bar. Only while the download
+    /// is in flight; what it ends as is its own label (downloadOutcomeLabel), not this column
+    /// changing shape.
+    private func downloadProgressColumn(_ dl: Download) -> AnyView? {
+        guard dl.status == .pending || dl.status == .downloading else { return nil }
         let label: String = {
-            switch dl.status {
-            case .pending:     return "Waiting"
-            case .downloading:
-                if !dl.etaText.isEmpty { return dl.etaText }
-                return dl.activityText.isEmpty ? "Downloading" : dl.activityText
-            case .done:        return "Done"
-            case .error:       return "Failed"
-            case .cancelled:   return "Cancelled"
-            }
-        }()
-        let color: Color = {
-            switch dl.status {
-            case .pending:     return .white.opacity(DesignTokens.Text.tertiary)
-            case .downloading: return .white
-            case .done:        return .green
-            case .error:       return .red
-            case .cancelled:   return .orange
-            }
+            if dl.status == .pending { return "Waiting" }
+            if !dl.etaText.isEmpty { return dl.etaText }
+            return dl.activityText.isEmpty ? "Downloading" : dl.activityText
         }()
         return AnyView(
             VStack(alignment: .trailing, spacing: 5) {
                 HStack(spacing: 5) {
-                    switch dl.status {
-                    case .done:        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                    case .error:       Image(systemName: "xmark.circle.fill").foregroundColor(.red)
-                    case .cancelled:   Image(systemName: "slash.circle.fill").foregroundColor(.orange)
-                    case .pending:     Image(systemName: "clock").foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    case .downloading: Image(systemName: "arrow.down.circle").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                    if dl.status == .pending {
+                        Image(systemName: "clock").foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                    } else {
+                        Image(systemName: "arrow.down.circle").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
                     }
                     Text(label)
-                        .foregroundColor(color)
+                        .foregroundColor(dl.status == .pending ? .white.opacity(DesignTokens.Text.tertiary) : .white)
                         .lineLimit(1)
                 }
                 .font(.appMono(size: 10, weight: .semibold))
-                if dl.status == .pending || dl.status == .downloading {
-                    downloadProgressBar(dl)
-                }
+                downloadProgressBar(dl)
             }
-            .frame(width: 128, alignment: .trailing)
+            .frame(width: CardMetrics.statusWidth, alignment: .trailing)
+        )
+    }
+
+    /// How a download ended (Done, Failed, Cancelled), a plain label to the left of the buttons.
+    private func downloadOutcomeLabel(_ dl: Download) -> AnyView? {
+        let icon: String, label: String, color: Color
+        switch dl.status {
+        case .done:      (icon, label, color) = ("checkmark.circle.fill", "Done", .green)
+        case .error:     (icon, label, color) = ("xmark.circle.fill", "Failed", .red)
+        case .cancelled: (icon, label, color) = ("slash.circle.fill", "Cancelled", .orange)
+        case .pending, .downloading: return nil
+        }
+        return AnyView(
+            HStack(spacing: 5) {
+                Image(systemName: icon).foregroundColor(color)
+                Text(label).foregroundColor(color).lineLimit(1)
+            }
+            .font(.appMono(size: 10, weight: .semibold))
         )
     }
 
@@ -7081,7 +7123,7 @@ struct ContentView: View {
         // download card and the active/completed card read identically.
         var outputChips: [ChipData] {
             var result: [ChipData] = []
-            if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: durationSeconds, raw: duration), size: estimatedSizeString()) {
+            if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: durationSeconds, raw: duration), size: estimatedSizeString(), reservesEstimateMark: true) {
                 result.append(length)
             }
             switch mediaMode {
@@ -7343,7 +7385,7 @@ struct ContentView: View {
                     // Line 2: metadata
                     "--print", "%(title)s|||%(vcodec)s|||%(width)s|||%(thumbnail)s|||%(duration_string)s|||%(duration)s|||%(filesize_approx)s|||%(height)s|||%(asr)s|||%(abr)s|||%(acodec)s|||%(audio_channels)s|||%(ext)s",
                     // Line 3: formats JSON for per-resolution file size
-                    "--print", "%(formats.:.{height,filesize,filesize_approx,tbr,vbr,abr,acodec,vcodec,audio_channels})j",
+                    "--print", "%(formats.:.{height,filesize,filesize_approx,tbr,vbr,abr,acodec,vcodec,audio_channels,format_note,protocol})j",
                     "--playlist-items", "1",  // only process first item — gets count + metadata fast
                     "--impersonate", "chrome",
                     "--write-info-json",
@@ -7609,7 +7651,7 @@ struct ContentView: View {
                             return a < b
                         }
                         let audioBytes = bestAudio.map {
-                            Int($0["filesize"] as? Double ?? $0["filesize_approx"] as? Double ?? 0)
+                            estimatedStreamBytes($0, among: allFormats, durationSeconds: durationSecs)
                         } ?? 0
                         // Real audio codec/channel info lives on the best audio-only stream
                         // (the top-level %(acodec)s reflects the video-only selected format).
@@ -7631,7 +7673,7 @@ struct ContentView: View {
                                 let scoreB = (($1["height"] as? Int ?? 0) * 100000) + Int($1["tbr"] as? Double ?? $1["vbr"] as? Double ?? 0)
                                 return scoreA < scoreB
                             }) {
-                                let vidBytes = Int(bestVid["filesize"] as? Double ?? bestVid["filesize_approx"] as? Double ?? 0)
+                                let vidBytes = estimatedStreamBytes(bestVid, among: allFormats, durationSeconds: durationSecs)
                                 if vidBytes > 0 || audioBytes > 0 {
                                     lp.fileSizeByQuality[cap] = vidBytes + audioBytes
                                 }
@@ -7867,7 +7909,8 @@ struct ContentView: View {
                     sourceAudioCodec: preview.sourceAudioCodec,
                     sourceChannelLabel: preview.sourceChannelLabel,
                     qualityByFormat:  preview.qualityByFormat,
-                    fileSizeByQuality: preview.fileSizeByQuality
+                    fileSizeByQuality: preview.fileSizeByQuality,
+                    estimatedBytes:   preview.estimatedBytes()
                 )
                 if let newID = manager.add(urls: [preview.url], config: itemConfig, thumbnailURL: preview.thumbnailURL, isPlaylist: preview.isPlaylist, snapshot: snap) {
                     linkPreviews[i].downloadID = newID

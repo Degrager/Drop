@@ -1330,9 +1330,14 @@ struct ConvertView: View {
                     }
                 },
                 showClearAll: false,
-                // The drawer's only content with an empty queue is "No items in
-                // queue", which the disabled primary button already says.
-                showExtraControls: !queue.isEmpty,
+                // Always shown now, even with an empty queue (user request,
+                // 2026-09-27): the drawer used to disappear entirely until the
+                // first item landed, which meant the bottom bar's whole layout
+                // shifted the moment that happened. With nothing queued,
+                // queueDrawer's own `hasQueue` gates hide the chevron, the row
+                // list and Clear Queue -- only queueCountLabel's "No items in
+                // queue" shows, so it reads as collapsed rather than empty.
+                showExtraControls: true,
                 hasBatchDirectoryControl: true,
                 leftControls: { EmptyView() },
                 extraControls: { queueDrawer },
@@ -2624,8 +2629,17 @@ struct ConvertPreviewCard: View {
                         } else {
                             // Keeps the audio row's one field the same width as
                             // when a bitrate field sits beside it, so the row
-                            // doesn't visibly resize between codecs.
-                            Color.clear.frame(maxWidth: .infinity)
+                            // doesn't visibly resize between codecs. `Spacer()`,
+                            // not `Color.clear.frame(maxWidth: .infinity)`: Color
+                            // has no intrinsic size at all, so with only a width
+                            // constraint it took whatever height the surrounding
+                            // VStack left available -- reported live as importing
+                            // a lossless format (FLAC, no bitrate control) leaving
+                            // a large blank gap before the row and pushing Add to
+                            // Queue far down. A Spacer only ever grows along the
+                            // HStack's own axis (width here); its cross-axis size
+                            // is zero.
+                            Spacer(minLength: 0)
                         }
                     }
                 }

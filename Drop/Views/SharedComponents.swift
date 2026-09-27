@@ -2127,7 +2127,11 @@ struct DropdownField: View {
             Button {
                 withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
             } label: {
-                HStack(spacing: 6) {
+                // .firstTextBaseline, not the default .center: the label (12pt) and
+                // subtext (9pt) are different sizes, and centering by bounding box
+                // instead of by baseline reads as the subtext floating above the
+                // text line instead of sitting on it (reported live).
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(selected?.label ?? "—")
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
@@ -2213,7 +2217,8 @@ struct DropdownBitrateField: View {
             Button {
                 withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
             } label: {
-                HStack(spacing: 6) {
+                // .firstTextBaseline -- see DropdownField's identical fix.
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(chosen.label)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)

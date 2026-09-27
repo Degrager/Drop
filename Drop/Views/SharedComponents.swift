@@ -1519,8 +1519,20 @@ struct PersistentCapsule: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05))
                 // Breathes only while it waits: a Core Animation pulse, gone with the view.
+                // Removal MUST be instant (.identity), not the default .opacity fade: the
+                // pulse is a CABasicAnimation running directly on the NSView's layer
+                // (PulsingSkeletonView), independent of SwiftUI's view lifecycle -- once this
+                // view starts being removed, SwiftUI stops calling updateNSView on it, so
+                // the animation is never told to stop and keeps oscillating for the whole
+                // 0.3s fade-out. The result: a second, still-pulsing (sometimes brighter)
+                // rounded rect visibly fading out on top of the settling base capsule --
+                // reported live as "a light grey [capsule] because of two overlapping
+                // capsules" at rest, and "a leftover second capsule that's there for a
+                // second then disappears" right as analyzing ends. Same fix as the
+                // "Analyzing..." text's own .blurInOnly, just missed here originally.
                 if isAnalyzing {
-                    PulsingSkeleton(cornerRadius: 17).transition(.opacity)
+                    PulsingSkeleton(cornerRadius: 17)
+                        .transition(.asymmetric(insertion: .opacity, removal: .identity))
                 }
             }
         )

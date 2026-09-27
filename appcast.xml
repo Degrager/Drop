@@ -3,6 +3,32 @@
     <channel>
         <title>Drop</title>
         <item>
+            <title>1.3</title>
+            <pubDate>Sat, 26 Sep 2026 18:28:11 -0700</pubDate>
+            <sparkle:version>1.3</sparkle:version>
+            <sparkle:shortVersionString>1.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[Updated Menu Bar, CPU Usage Fix, UI Clean Up, and other bug fixes...
+
+## What's New
+- Redesigned menu bar panel: it shows the link on your clipboard before you paste, and Check for Updates and Quit are one click away.
+
+## Changed
+- Removed the moving light beam from the Check for Updates button.
+- A job's outcome (Done, Failed, Cancelled) is its own label beside the buttons on Download and Convert, and the title no longer moves when it finishes.
+- Convert shows sizes in the same units as Finder, and a finished row shows its real size instead of the estimate.
+
+## Fixes
+- Fixed Check for Updates in the menu bar, which never actually checked.
+- Fixed high CPU usage during idle with a link on screen.
+- Estimated download sizes are accurate]]></description>
+            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.3.dmg" length="3698240" type="application/octet-stream" sparkle:edSignature="5h+Cyb2ExsNlpEyhx8f+tRzcbAzh7yy0EO3ujl15BOYIdy7OuFrIOUJOecg0ST/NB49Ydf9zHuXY0BJm3I6/DA=="/>
+            <sparkle:deltas>
+                <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop1.3-1.2.delta" sparkle:deltaFrom="1.2" length="484242" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="xf84M/n7iuJ1ugr3SQ5dDwLvC2O+0DsPy5euT32DRWSHmwC2LI9NNNhniW6/ARMI6OiDRBNIOYnvDE1fwkY8AA=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.2</title>
             <pubDate>Fri, 25 Sep 2026 22:45:13 -0700</pubDate>
             <sparkle:version>1.2</sparkle:version>

@@ -6815,9 +6815,13 @@ struct ContentView: View {
             onCancel: cancelDownload,
             showsSettings: dl == nil && !failedAnalyze
         ) {
-            // Expanded settings, as labelled rows shared with Convert's card:
-            // DOWNLOAD AS (the Video+Audio / Audio Only toggle), then FORMAT
-            // and QUALITY for whichever media mode is active.
+            // Same field layout as Convert's own analyze card (the 2026-09-26
+            // redesign, see [[convert-analyze-lag]]): DOWNLOAD AS and FORMAT
+            // share a top strip as full segmented capsules -- they decide
+            // what's being produced at all -- and the many-option picker
+            // (RESOLUTION for video, BITRATE for audio) becomes one compact
+            // dropdown field in its own VIDEO/AUDIO track row below, instead
+            // of a full row of chips.
             //
             // The Video-vs-Audio rows are structurally different content, so a
             // mode change swaps them via `.pageSwap` (outgoing blurs away
@@ -6826,35 +6830,48 @@ struct ContentView: View {
             // overlaid during the swap instead of stacking their heights, so
             // the card doesn't bounce. Picks within a mode aren't gated on
             // mediaMode and keep their own feedback.
-            VStack(alignment: .leading, spacing: 9) {
-                FormRow(icon: "switch.2", label: "DOWNLOAD AS") {
-                    SegmentedCapsule(options: downloadModeOptions(preview: preview), fill: false)
-                }
-                ZStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 9) {
-                        if p.hasVideo && p.mediaMode != .audioOnly {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        FieldCaption(icon: "switch.2", text: "DOWNLOAD AS")
+                            .frame(height: 15, alignment: .leading)
+                        SegmentedCapsule(options: downloadModeOptions(preview: preview), fill: false)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 10) {
+                            FieldCaption(icon: p.mediaMode == .audioOnly ? "waveform" : "video", text: "FORMAT")
+                            Spacer(minLength: 10)
                             // Every video container here is a plain remux, so there is no
-                            // Native / Re-encodes marker to show (the audio row below still
-                            // has one: only M4A is native there).
-                            FormRow(icon: "video", label: "FORMAT") {
-                                SegmentedCapsule(options: downloadVideoFormatOptions(preview: preview))
-                            }
-                            FormRow(icon: "slider.horizontal.3", label: "QUALITY") {
-                                SegmentedCapsule(options: downloadVideoQualityOptions(preview: preview))
+                            // Native / Re-encodes marker to show (only the audio format
+                            // has one: M4A alone is native there).
+                            if p.mediaMode == .audioOnly {
+                                nativeLegend(showReencodeHint: false)
                             }
                         }
-                        if p.mediaMode == .audioOnly {
-                            FormRow(icon: "waveform", label: "FORMAT", showsNativeLegend: true) {
-                                SegmentedCapsule(options: downloadAudioFormatOptions(preview: preview))
+                        .frame(height: 15, alignment: .leading)
+                        SegmentedCapsule(options: p.mediaMode == .audioOnly
+                            ? downloadAudioFormatOptions(preview: preview)
+                            : downloadVideoFormatOptions(preview: preview))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                ZStack(alignment: .top) {
+                    Group {
+                        if p.mediaMode != .audioOnly {
+                            FieldsTrackRow(icon: "video", label: "VIDEO") {
+                                DropdownField(id: "download.video.resolution", caption: "RESOLUTION",
+                                              options: downloadVideoQualityOptions(preview: preview),
+                                              openID: preview.openDropdownID)
                             }
-                            // M4A has no selectable quality/bitrate -- it's a
-                            // fixed passthrough format, so there's no real
-                            // choice to present (mirrors Convert's handling of
-                            // MP3/FLAC hiding the audio codec row).
-                            if p.audioFormat != .m4a {
-                                FormRow(icon: "slider.horizontal.3", label: "QUALITY") {
-                                    SegmentedCapsule(options: downloadAudioQualityOptions(preview: preview))
-                                }
+                        } else if p.audioFormat != .m4a {
+                            // M4A has no selectable quality/bitrate -- it's a fixed passthrough
+                            // format, so there's no real choice to present, and the row is
+                            // hidden entirely (mirrors Convert's handling of a lossless codec
+                            // hiding its own bitrate field).
+                            FieldsTrackRow(icon: "waveform", label: "AUDIO") {
+                                DropdownField(id: "download.audio.bitrate", caption: "BITRATE",
+                                              options: downloadAudioQualityOptions(preview: preview),
+                                              openID: preview.openDropdownID)
                             }
                         }
                     }
@@ -6864,6 +6881,7 @@ struct ContentView: View {
                 .animation(.easeOut(duration: 0.2), value: p.mediaMode)
             }
         }
+        .dropdownPopoverOverlay(openID: preview.openDropdownID)
     }
 
     // MARK: Download — segmented option builders
@@ -7188,6 +7206,10 @@ struct ContentView: View {
         // quality picker rows (VIDEO FORMAT/RESOLUTION or AUDIO FORMAT/
         // QUALITY), the "advanced" layer on top of the "simple" default.
         var isExpanded: Bool = false
+        // Which settings dropdown field (RESOLUTION / BITRATE) has its popover open, if any --
+        // shared by every DropdownField on this card via a binding, same as Convert's own
+        // per-card openDropdownID. Transient UI state, never persisted.
+        var openDropdownID: String? = nil
         // Tracks the active Download.id once dispatched
         var downloadID: UUID? = nil
         // True when re-queued from history (bypasses duplicate check)

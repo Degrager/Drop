@@ -1430,6 +1430,17 @@ enum CardCapsule: Equatable {
     }
 }
 
+/// Measures a hidden view's own natural (unconstrained) width -- the same purpose
+/// PreviewCard.swift's own WidthPreferenceKey serves for the title bar, duplicated here
+/// (private to each file) because that one isn't visible outside PreviewCard.swift.
+private struct CapsuleWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
+    }
+}
+
 /// The metadata capsule of a card that keeps its state changes in place: ONE capsule that
 /// stays mounted while its contents change (analyzing -> output/note), so it grows or shrinks
 /// to fit what is inside it instead of one capsule being swapped for another.
@@ -1472,16 +1483,17 @@ struct PersistentCapsule: View {
     /// the reveal-delay bugs in the first place.
     @State private var lastChips: [ChipData]?
     @State private var lastNote: (icon: String, text: String)?
+    /// The incoming content's own natural (single-line) width, kept current by a hidden probe
+    /// in `body` -- see `CapsuleWidthPreferenceKey`. This, not a guessed constant, is what
+    /// `.growing`/`.shown` animate the capsule's width TO: a fixed placeholder (560, an earlier
+    /// version of this fix) was wider than most real content, so the capsule visibly overshot
+    /// past the metadata's own length once it filled in -- reported live: "the capsule expands
+    /// beyond the length of the metadata after it fills in, and it actually gets taller for a
+    /// split second." Measuring the real target means .growing and .shown can share ONE width
+    /// (no separate "now relax to nil" step needed at all, which is what caused the late jump).
+    @State private var measuredWidth: CGFloat?
 
     private static let pillWidth: CGFloat = 150
-    /// The width the capsule animates OUT TO while growing -- a real number, not nil, because
-    /// SwiftUI cannot interpolate a frame constraint to/from nil (going straight to
-    /// "unconstrained" is what made earlier attempts either snap instantly or wrap onto a
-    /// second line). Comfortably wider than any real metadata line this capsule ever holds
-    /// (measured live: the busiest real line -- duration + size + a video chip + an audio
-    /// chip -- sits well under 500pt), so once `phase` reaches `.shown` and the constraint
-    /// relaxes to nil, nothing actually changes size: the content already fit inside it.
-    private static let grownWidth: CGFloat = 560
     private static let growDuration: Double = 0.3
     private static let revealDuration: Double = 0.25
     /// Same-kind swaps and non-analyzing kind changes don't go through the grow dance, but
@@ -1526,48 +1538,58 @@ struct PersistentCapsule: View {
                     .opacity(phase == .shown ? 1 : 0)
                     .blur(radius: phase == .shown ? 0 : 5)
             }
+
+            // Hidden probe: measures the CURRENT content's own natural single-line width,
+            // independent of whatever width the frame below currently imposes -- the same
+            // technique PreviewCard.swift's title bar already uses for the same reason. Kept
+            // continuously up to date (not just measured once at the start of a grow) so a
+            // same-kind content swap (Video/Audio toggle) also has a correct target ready.
+            Group {
+                if let chips = lastChips { MetaLineContent(chips: chips) }
+                else if let note = lastNote { NoteContent(icon: note.icon, text: note.text) }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .hidden()
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(key: CapsuleWidthPreferenceKey.self, value: geo.size.width)
+                }
+            )
         }
-        // Three fixed, concrete widths -- pillWidth while analyzing, grownWidth while growing
-        // (the one animated leg, always between two real numbers so it genuinely animates),
-        // and nil once shown (a silent snap: content already fits inside grownWidth, so
-        // relaxing the constraint doesn't actually change the rendered size).
-        .frame(width: phase == .analyzing ? Self.pillWidth : (phase == .growing ? Self.grownWidth : nil),
-               alignment: .leading)
+        // pillWidth while analyzing; the MEASURED content width for both .growing and .shown
+        // (one target, shared -- no separate "now relax to nil" step, which is what caused the
+        // capsule to visibly jump again right as the metadata finished fading in).
+        .frame(width: phase == .analyzing ? Self.pillWidth : targetWidth, alignment: .leading)
         .clipped()
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(
-            // ONE shape at a time, never two stacked -- while analyzing, PulsingSkeletonView
-            // (an NSViewRepresentable whose CALayer pulses its own backgroundColor, so the
-            // shimmer costs nothing per frame -- see its own doc comment) IS the entire
-            // background; otherwise a plain static fill. Previously both were layered in a
-            // ZStack (a constant 0.05-opacity fill UNDER the pulse), which had two real
-            // problems reported live: the compounded opacity read as "a light grey [capsule]
-            // because of two overlapping capsules" (two translucent white fills stacking is
-            // visibly brighter than either alone), and mixing an AppKit-hosted layer with a
-            // native SwiftUI shape at the exact same bounds risks a sub-pixel corner mismatch
-            // between the two independently-rendered rounded-rect paths -- reported live as
-            // the corner radius "looking off" specifically in the analyzing state. Neither
-            // problem can occur when there is only ever one shape on screen.
-            // Both branches transition .identity (instant, neither insertion nor removal
-            // animated): the analyzing->growing switch happens inside growThenReveal's
-            // `withAnimation`, and SwiftUI's DEFAULT transition (.opacity) would otherwise
-            // fade the outgoing PulsingSkeleton over that same span -- the exact bug already
-            // fixed once (d0b502f) reappearing here if left to the default.
-            Group {
-                if phase == .analyzing {
-                    PulsingSkeleton(cornerRadius: 17)
-                        .transition(.identity)
-                } else {
-                    RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05))
-                        .transition(.identity)
-                }
-            }
-        )
+        // A plain, constant fill -- no pulse. A pulsing overlay (PulsingSkeletonView, an
+        // NSViewRepresentable whose CALayer independently animates its own backgroundColor)
+        // used to stand in here while analyzing; removed entirely per the user's own call:
+        // "the pulse glow corner radius doesn't match the capsule, let's remove the pulsing
+        // glow entirely for the cards, all we need is the light rim which works great." Two
+        // real problems went away with it, not just the one asked for: the compounded opacity
+        // of the pulse layered OVER this same fill read as "a light grey [capsule] because of
+        // two overlapping capsules," and mixing an AppKit-hosted layer with a native SwiftUI
+        // shape at the same bounds risked the sub-pixel corner mismatch that prompted this
+        // request in the first place. The border below (the "rim") is unrelated and unchanged.
+        .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
         .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
         .reportsFacadeMeta()
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onPreferenceChange(CapsuleWidthPreferenceKey.self) { newValue in
+            // A brief animation here too: this can legitimately fire a frame after `advance`
+            // already started an unrelated transition (the probe re-measures asynchronously),
+            // so if the target nudges afterward, it eases into place instead of snapping.
+            withAnimation(.easeOut(duration: 0.15)) {
+                measuredWidth = newValue
+            }
+        }
         .onChange(of: content) { _, newContent in advance(to: newContent) }
+    }
+
+    private var targetWidth: CGFloat {
+        max(measuredWidth ?? Self.pillWidth, Self.pillWidth)
     }
 
     /// The whole timeline lives here, as explicit `withAnimation` calls (or explicit NON-

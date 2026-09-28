@@ -1420,7 +1420,7 @@ enum CardCapsule: Equatable {
 
     /// Which kind of contents this is. Moving between kinds animates; a change WITHIN a kind
     /// (the output line following the Video / Audio toggle) does not, as before.
-    enum Kind { case analyzing, output, note }
+    enum Kind: Equatable { case analyzing, output, note }
     var kind: Kind {
         switch self {
         case .analyzing: return .analyzing
@@ -1431,126 +1431,205 @@ enum CardCapsule: Equatable {
 }
 
 /// The metadata capsule of a card that keeps its state changes in place: ONE capsule that
-/// stays mounted while its contents change (analyzing -> IN / OUT -> the output line), so
-/// it grows or shrinks to fit what is inside it and only the text within is replaced,
-/// instead of one capsule being swapped for another.
+/// stays mounted while its contents change (analyzing -> output/note), so it grows or shrinks
+/// to fit what is inside it instead of one capsule being swapped for another.
+///
+/// Rebuilt from scratch (2026-09-27) as one explicit state machine, after three incremental
+/// patches each fixed one reported symptom and exposed another. All three traced back to the
+/// SAME root cause: leaning on SwiftUI's *implicit* animation system (`.animation(value:)`,
+/// default `.transition`s, a frame constraint animated to/from `nil`) to coordinate a timeline
+/// that involves things implicit animation cannot see or control -- a Core Animation pulse
+/// running on a raw NSView layer (invisible to SwiftUI's transition system), a state variable
+/// that changes later on its own timer (not covered by an `.animation(value:)` scoped to a
+/// different value), and `nil` itself (which SwiftUI cannot interpolate at all, so a
+/// constraint that relaxes to `nil` always SNAPS instead of animating). Every step below is
+/// driven by exactly one explicit `withAnimation` at the moment it happens, or is left
+/// unanimated on purpose -- nothing is left for an ambient modifier to interpret.
 struct PersistentCapsule: View {
     let content: CardCapsule
-    /// How long incoming contents hold back before appearing, so the capsule can finish
-    /// growing first (and the title above it can appear before the metadata does).
+    /// How long to hold after analyzing ends before the incoming content appears -- lets the
+    /// title above finish first. 0 = show immediately (e.g. toggling Video/Audio on an
+    /// already-analyzed card, which never goes through `.analyzing` here at all).
     var revealDelay: Double = 0
 
-    /// True from the instant "Analyzing…" leaves until `revealDelay` elapses. Caps the
-    /// capsule at the analyzing pill's own width for that whole window -- see the `.frame`
-    /// below for why this exists.
-    @State private var isHolding = false
+    /// The capsule's own timeline. `analyzing` and `shown` are steady states; `growing` exists
+    /// only for the ~0.3s it takes the capsule to expand from the analyzing pill's width to
+    /// room enough for real content, with that content still invisible.
+    private enum Phase: Equatable { case analyzing, growing, shown }
 
-    private var isAnalyzing: Bool {
-        if case .analyzing = content { return true }
-        return false
-    }
+    @State private var phase: Phase
+    /// What kind we last actually showed -- tracked separately from `phase` because the same
+    /// "already shown" phase covers two different cases that must NOT animate the same way:
+    /// a same-kind content swap (Video/Audio toggle -- no animation, matches the previous
+    /// design's own rule) versus a kind change that didn't come from analyzing (output <-> note
+    /// directly -- a plain cross-fade).
+    @State private var lastKind: CardCapsule.Kind
+    /// The last real chips/note shown, kept around independently of `content` so the capsule
+    /// NEVER structurally unmounts `MetaLineContent`/`NoteContent` on its own -- only their
+    /// opacity/blur change with `phase`. (Analyzing's row is separate and always mounted too;
+    /// see `body`.) This is what lets every transition be a plain property animation instead
+    /// of a transition-based mount/unmount, which is what caused the Core Animation pulse and
+    /// the reveal-delay bugs in the first place.
+    @State private var lastChips: [ChipData]?
+    @State private var lastNote: (icon: String, text: String)?
 
-    /// Insertion-only (see AnyTransition.blurInOnly): the outgoing content
-    /// (e.g. "Analyzing…") must leave INSTANTLY, not fade out over its own
-    /// animated removal -- `blurIn`/`blurInAfter` both animate removal too,
-    /// so for that ~0.12s window the old text and the new one were both on
-    /// screen, overlapping (reported live: "the analyzing state" showing
-    /// through "the analyzed state"). Same fix as `blurInOnly` itself, just
-    /// with `blurInAfter`'s hold-until-delay insertion when `revealDelay > 0`.
-    private var incoming: AnyTransition {
-        let insertion = revealDelay > 0
-            ? AnyTransition.focus(blur: 5, scale: 0.97, opacity: 0).animation(.easeOut(duration: 0.25).delay(revealDelay))
-            : AnyTransition.focus(blur: 5, scale: 0.97, opacity: 0.4).animation(.easeOut(duration: 0.2))
-        return .asymmetric(insertion: insertion, removal: .identity)
+    private static let pillWidth: CGFloat = 150
+    /// The width the capsule animates OUT TO while growing -- a real number, not nil, because
+    /// SwiftUI cannot interpolate a frame constraint to/from nil (going straight to
+    /// "unconstrained" is what made earlier attempts either snap instantly or wrap onto a
+    /// second line). Comfortably wider than any real metadata line this capsule ever holds
+    /// (measured live: the busiest real line -- duration + size + a video chip + an audio
+    /// chip -- sits well under 500pt), so once `phase` reaches `.shown` and the constraint
+    /// relaxes to nil, nothing actually changes size: the content already fit inside it.
+    private static let grownWidth: CGFloat = 560
+    private static let growDuration: Double = 0.3
+    private static let revealDuration: Double = 0.25
+    /// Same-kind swaps and non-analyzing kind changes don't go through the grow dance, but
+    /// still deserve a quick cross-fade rather than an instant pop.
+    private static let swapDuration: Double = 0.2
+
+    init(content: CardCapsule, revealDelay: Double = 0) {
+        self.content = content
+        self.revealDelay = revealDelay
+        _phase = State(initialValue: content.kind == .analyzing ? .analyzing : .shown)
+        _lastKind = State(initialValue: content.kind)
+        switch content {
+        case .analyzing: _lastChips = State(initialValue: nil); _lastNote = State(initialValue: nil)
+        case .output(let chips): _lastChips = State(initialValue: chips); _lastNote = State(initialValue: nil)
+        case .note(let icon, let text): _lastChips = State(initialValue: nil); _lastNote = State(initialValue: (icon, text))
+        }
     }
 
     var body: some View {
         ZStack(alignment: .leading) {
-            switch content {
-            case .analyzing:
-                // The same icon-and-text row as a metadata cell (MetaCell), so the capsule is
-                // exactly as tall while it waits as it is once the metadata is in it.
-                HStack(spacing: 5) {
-                    Image(systemName: "hourglass")
-                        .font(.appMono(size: 10, weight: .bold))
-                    Text("Analyzing\u{2026}")
-                        .font(.appMono(size: 10.5, weight: .medium))
-                }
-                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                .lineLimit(1)
-                .fixedSize()
-                .transition(.blurInOnly)
-            case .output(let chips):
+            // The same icon-and-text row as a metadata cell (MetaCell), so the capsule is
+            // exactly as tall while it waits as it is once the metadata is in it. Always
+            // mounted (never conditionally switched) so its disappearance is a plain opacity
+            // fade, not a transition -- see the type's own doc comment for why that matters.
+            HStack(spacing: 5) {
+                Image(systemName: "hourglass")
+                    .font(.appMono(size: 10, weight: .bold))
+                Text("Analyzing\u{2026}")
+                    .font(.appMono(size: 10.5, weight: .medium))
+            }
+            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+            .lineLimit(1)
+            .fixedSize()
+            .opacity(phase == .analyzing ? 1 : 0)
+
+            if let chips = lastChips {
                 MetaLineContent(chips: chips)
-                    // While isHolding, force this to compute its IDEAL (single-line) size
-                    // regardless of the 150pt the frame below caps it to -- otherwise
-                    // MetaLineContent's own DividedCells (built to WRAP onto more lines when
-                    // it doesn't fit a narrow width, e.g. a narrow window) took the 150pt
-                    // proposal at face value and wrapped to two lines, growing the capsule
-                    // taller for the whole hold (reported live: "the capsule expands
-                    // vertically for a split second which breaks the card"). fixedSize makes
-                    // the layout ask for its ideal width instead of the constrained one; the
-                    // overflow past 150pt is invisible anyway (opacity 0 for this entire
-                    // window) and clipped below regardless.
-                    .fixedSize(horizontal: isHolding, vertical: false)
-                    .transition(incoming)
-            case .note(let icon, let text):
-                NoteContent(icon: icon, text: text)
-                    .fixedSize(horizontal: isHolding, vertical: false)
-                    .transition(incoming)
+                    .opacity(phase == .shown ? 1 : 0)
+                    .blur(radius: phase == .shown ? 0 : 5)
+            } else if let note = lastNote {
+                NoteContent(icon: note.icon, text: note.text)
+                    .opacity(phase == .shown ? 1 : 0)
+                    .blur(radius: phase == .shown ? 0 : 5)
             }
         }
-        // A little wider than its label while it waits, so the capsule has somewhere to grow
-        // from -- and while isHolding, capped at that SAME width, not just floored there.
-        // Without the cap, the moment analyzing ends this ZStack immediately measures the
-        // real incoming content (MetaLineContent/NoteContent) at its full natural size --
-        // `revealDelay` only holds that content's OPACITY at 0, transitions don't hold back
-        // the LAYOUT SPACE it occupies -- so the capsule jumped straight to its final width
-        // and then just sat there, blank and blurred, for the whole delay: reported live as
-        // "two metadata capsules overlapping" (the title's own placeholder bar above it, and
-        // this now-wide-but-empty one, both blurred pills on screen at once). Holding the
-        // ceiling at 150 until the same instant the content is ready makes the resize and the
-        // reveal a single motion instead of an empty capsule that fills in later.
-        .frame(minWidth: isAnalyzing ? 150 : nil, maxWidth: isHolding ? 150 : nil, alignment: .leading)
+        // Three fixed, concrete widths -- pillWidth while analyzing, grownWidth while growing
+        // (the one animated leg, always between two real numbers so it genuinely animates),
+        // and nil once shown (a silent snap: content already fits inside grownWidth, so
+        // relaxing the constraint doesn't actually change the rendered size).
+        .frame(width: phase == .analyzing ? Self.pillWidth : (phase == .growing ? Self.grownWidth : nil),
+               alignment: .leading)
         .clipped()
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05))
-                // Breathes only while it waits: a Core Animation pulse, gone with the view.
-                // Removal MUST be instant (.identity), not the default .opacity fade: the
-                // pulse is a CABasicAnimation running directly on the NSView's layer
-                // (PulsingSkeletonView), independent of SwiftUI's view lifecycle -- once this
-                // view starts being removed, SwiftUI stops calling updateNSView on it, so
-                // the animation is never told to stop and keeps oscillating for the whole
-                // 0.3s fade-out. The result: a second, still-pulsing (sometimes brighter)
-                // rounded rect visibly fading out on top of the settling base capsule --
-                // reported live as "a light grey [capsule] because of two overlapping
-                // capsules" at rest, and "a leftover second capsule that's there for a
-                // second then disappears" right as analyzing ends. Same fix as the
-                // "Analyzing..." text's own .blurInOnly, just missed here originally.
-                if isAnalyzing {
+            // ONE shape at a time, never two stacked -- while analyzing, PulsingSkeletonView
+            // (an NSViewRepresentable whose CALayer pulses its own backgroundColor, so the
+            // shimmer costs nothing per frame -- see its own doc comment) IS the entire
+            // background; otherwise a plain static fill. Previously both were layered in a
+            // ZStack (a constant 0.05-opacity fill UNDER the pulse), which had two real
+            // problems reported live: the compounded opacity read as "a light grey [capsule]
+            // because of two overlapping capsules" (two translucent white fills stacking is
+            // visibly brighter than either alone), and mixing an AppKit-hosted layer with a
+            // native SwiftUI shape at the exact same bounds risks a sub-pixel corner mismatch
+            // between the two independently-rendered rounded-rect paths -- reported live as
+            // the corner radius "looking off" specifically in the analyzing state. Neither
+            // problem can occur when there is only ever one shape on screen.
+            // Both branches transition .identity (instant, neither insertion nor removal
+            // animated): the analyzing->growing switch happens inside growThenReveal's
+            // `withAnimation`, and SwiftUI's DEFAULT transition (.opacity) would otherwise
+            // fade the outgoing PulsingSkeleton over that same span -- the exact bug already
+            // fixed once (d0b502f) reappearing here if left to the default.
+            Group {
+                if phase == .analyzing {
                     PulsingSkeleton(cornerRadius: 17)
-                        .transition(.asymmetric(insertion: .opacity, removal: .identity))
+                        .transition(.identity)
+                } else {
+                    RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05))
+                        .transition(.identity)
                 }
             }
         )
         .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
         .reportsFacadeMeta()
-        // Inner: a change of kind animates. Outer: any other change of contents does not (the
-        // outer one is applied first, the inner one after it, so a change of kind still wins).
-        .animation(.easeInOut(duration: 0.3), value: content.kind)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(nil, value: content)
-        .task(id: content.kind) {
-            guard revealDelay > 0, content.kind != .analyzing else {
-                isHolding = false
-                return
+        .onChange(of: content) { _, newContent in advance(to: newContent) }
+    }
+
+    /// The whole timeline lives here, as explicit `withAnimation` calls (or explicit NON-
+    /// animation, e.g. leaving `.analyzing` itself unanimated so the pulse's removal has
+    /// nothing ambient to inherit) -- see the type's doc comment for why.
+    private func advance(to newContent: CardCapsule) {
+        let previousKind = lastKind
+        lastKind = newContent.kind
+
+        switch newContent {
+        case .analyzing:
+            lastChips = nil
+            lastNote = nil
+            phase = .analyzing
+
+        case .output(let chips):
+            if previousKind == .analyzing {
+                lastChips = chips
+                growThenReveal()
+            } else if previousKind == .output {
+                // Same kind (the Video/Audio toggle's own output line changing): swap in
+                // place, unanimated -- matches the design this replaces, which deliberately
+                // never animated a change WITHIN a kind.
+                lastChips = chips
+            } else {
+                // note -> output without a trip through analyzing: a plain cross-fade.
+                withAnimation(.easeInOut(duration: Self.swapDuration)) {
+                    lastChips = chips
+                    lastNote = nil
+                }
             }
-            isHolding = true
-            try? await Task.sleep(nanoseconds: UInt64(revealDelay * 1_000_000_000))
-            if !Task.isCancelled { isHolding = false }
+
+        case .note(let icon, let text):
+            if previousKind == .analyzing {
+                lastNote = (icon, text)
+                growThenReveal()
+            } else if previousKind == .note {
+                lastNote = (icon, text)
+            } else {
+                withAnimation(.easeInOut(duration: Self.swapDuration)) {
+                    lastNote = (icon, text)
+                    lastChips = nil
+                }
+            }
+        }
+    }
+
+    /// Analyzing -> real content: grow the capsule first (visibly, from the analyzing pill's
+    /// own width), then reveal the content once it's had room to land in -- never both at
+    /// once, which is what read as an empty capsule (growing too early) or as two capsules
+    /// (the old pulse lingering while a new width snapped in) in the versions before this one.
+    private func growThenReveal() {
+        withAnimation(.easeOut(duration: Self.growDuration)) {
+            phase = .growing
+        }
+        let holdBeforeReveal = max(revealDelay, Self.growDuration)
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(holdBeforeReveal * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: Self.revealDuration)) {
+                phase = .shown
+            }
         }
     }
 }

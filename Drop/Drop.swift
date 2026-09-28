@@ -6922,7 +6922,13 @@ struct ContentView: View {
         return AudioFormat.allCases.map { f in
             SegmentOption(
                 id: f.rawValue, label: f.label, nativeBadge: f.isNative, help: f.note,
-                isSelected: p.audioFormat == f, tint: DesignTokens.Accent.success
+                isSelected: p.audioFormat == f, tint: DesignTokens.Accent.success,
+                // Each chip now says which it is directly, rather than relying only on the
+                // small colored dot (easy to miss) plus a separate legend below the row --
+                // reported live as reading like "it says native and re-encode" with no clear
+                // per-chip distinction. Every case gets a subtext now, so the row's height
+                // (SegmentedCapsule.rowHeight) doesn't shift when a different format is picked.
+                subtext: f.isNative ? "Native" : "Re-encodes"
             ) {
                 preview.qualityByFormat.wrappedValue[p.audioFormat.rawValue] = p.audioQuality
                 preview.audioFormat.wrappedValue = f

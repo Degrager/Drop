@@ -336,7 +336,12 @@ struct PreviewCard<Settings: View>: View {
                 Text(secondaryTitle)
                     .font(.appMono(size: 10))
                     .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    .lineLimit(1).truncationMode(.middle)
+                    // A URL's most identifying part (domain + path) comes first; tracking
+                    // params/session tokens pile up at the end, so tail truncation drops the
+                    // least useful part instead of the middle -- Download is the only caller
+                    // that ever sets this to a real link (Convert's own secondaryTitle below,
+                    // a local file path, keeps .middle: there the FILENAME at the end matters).
+                    .lineLimit(1).truncationMode(.tail)
                     .transition(.blurInTop)
             }
         }

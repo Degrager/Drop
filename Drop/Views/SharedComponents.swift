@@ -792,9 +792,9 @@ struct LogView: View {
                 .toggleStyle(.checkbox)
                 .font(.appMono(size: 11))
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-            HoverIconButton(icon: "doc.on.doc", size: 12, help: "Copy log", action: copyLog)
-            HoverIconButton(icon: "square.and.arrow.up", size: 12, help: "Export log", action: exportLog)
-            HoverIconButton(icon: "folder", size: 12, help: "Reveal in Finder", action: { DropLogger.shared.revealInFinder() })
+            HoverIconButton(icon: "doc.on.doc", size: 12, help: "Copy log", expandable: true, action: copyLog)
+            HoverIconButton(icon: "square.and.arrow.up", size: 12, help: "Export log", expandable: true, action: exportLog)
+            HoverIconButton(icon: "folder", size: 12, help: "Reveal in Finder", expandable: true, action: { DropLogger.shared.revealInFinder() })
         }
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity)

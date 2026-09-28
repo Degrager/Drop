@@ -379,7 +379,7 @@ struct PreviewCard<Settings: View>: View {
                 if !isAnalyzing {
                     HoverIconButton(
                         icon: isSelected ? "checkmark.circle.fill" : "circle",
-                        size: 18, isActive: isSelected
+                        size: 18, isActive: isSelected, help: isSelected ? "Deselect" : "Select", expandable: true
                     ) { onToggleSelect() }
                 }
             }
@@ -526,7 +526,7 @@ struct PreviewCard<Settings: View>: View {
     }
 
     private func controlButton(_ control: CardControl) -> some View {
-        HoverIconButton(icon: control.icon, size: 16, color: control.color, help: control.help) { control.action() }
+        HoverIconButton(icon: control.icon, size: 16, color: control.color, help: control.help, expandable: true) { control.action() }
     }
 
     /// The header's buttons, each in its own place: [secondary] [primary] [remove], remove
@@ -867,7 +867,7 @@ struct CompletedCard<Status: View>: View {
             if showCheckbox {
                 HoverIconButton(
                     icon: isSelected ? "checkmark.circle.fill" : "circle",
-                    size: compact ? 16 : 18, isActive: isSelected
+                    size: compact ? 16 : 18, isActive: isSelected, help: isSelected ? "Deselect" : "Select", expandable: true
                 ) { onToggleSelect() }
             }
             if let leadingAccessory { leadingAccessory }

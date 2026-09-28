@@ -5921,7 +5921,7 @@ struct ContentView: View {
             } else {
                 HoverIconButton(
                     icon: "sidebar.left", size: 13,
-                    help: isCompactSidebar ? "Expand sidebar" : "Collapse sidebar"
+                    help: isCompactSidebar ? "Expand sidebar" : "Collapse sidebar", expandable: true
                 ) {
                     sidebarCollapsedByUser.toggle()
                 }

@@ -6850,7 +6850,7 @@ struct ContentView: View {
             },
             capsule: capsule,
             titleKnown: titleKnown,
-            inlineStatus: dl.flatMap { downloadProgressColumn($0) },
+            inlineStatus: analyzing ? analyzeProgressColumn() : dl.flatMap { downloadProgressColumn($0) },
             statusLabel: dl.flatMap { downloadOutcomeLabel($0) },
             primaryControl: controls?.primary,
             secondaryControl: controls?.secondary,
@@ -7051,6 +7051,34 @@ struct ContentView: View {
     }
 
     // MARK: Download — what the one card shows once a download exists
+
+    /// The header's progress-indicator slot while a card is still being analyzed -- same shape
+    /// and position as downloadProgressColumn's own "Waiting" state (label + a slim bar), so
+    /// Analyzing reads as the first step of the same continuous progression a card moves
+    /// through (Analyzing -> Waiting -> Downloading -> Done) instead of a message that lived
+    /// somewhere else entirely (the IN/OUT metadata capsule, which now stays blank until real
+    /// metadata exists -- see PersistentCapsule). There is no real percentage to report during
+    /// analyze, so the bar is an indeterminate shimmer, matching Waiting's own bar for the same
+    /// reason (a download not yet started has nothing to measure progress against either).
+    private func analyzeProgressColumn() -> AnyView {
+        AnyView(
+            VStack(alignment: .trailing, spacing: 5) {
+                HStack(spacing: 5) {
+                    Image(systemName: "hourglass").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                    Text("Analyzing").foregroundColor(.white).lineLimit(1)
+                }
+                .font(.appMono(size: 10, weight: .semibold))
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(DesignTokens.Interactive.fillRest)).frame(height: 4)
+                        ShimmerBar(width: geo.size.width, color: .white, glow: false, duration: 1.8)
+                    }
+                }
+                .frame(height: 4)
+            }
+            .frame(width: CardMetrics.statusWidth, alignment: .trailing)
+        )
+    }
 
     /// The progress column on the right of a downloading card, like a Convert queue row's: the
     /// status (percentage and time left while it runs) over a slim bar. Only while the download

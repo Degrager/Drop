@@ -6914,12 +6914,10 @@ struct ContentView: View {
                         HStack(spacing: 10) {
                             FieldCaption(icon: p.mediaMode == .audioOnly ? "waveform" : "video", text: "OUTPUT FORMAT")
                             Spacer(minLength: 10)
-                            // Every video container here is a plain remux, so there is no
-                            // Native / Re-encodes marker to show (only the audio format
-                            // has one: M4A alone is native there).
-                            if p.mediaMode == .audioOnly {
-                                nativeLegend(showReencodeHint: false)
-                            }
+                            // Every video container is a plain remux -- every option is
+                            // "Original," so there's no Re-encodes counterpart to explain,
+                            // unlike audio where only M4A qualifies.
+                            nativeLegend(positiveLabel: "Original", showReencodeHint: p.mediaMode == .audioOnly)
                         }
                         .frame(height: 15, alignment: .leading)
                         SegmentedCapsule(options: p.mediaMode == .audioOnly
@@ -6986,7 +6984,11 @@ struct ContentView: View {
         let p = preview.wrappedValue
         return VideoFormat.allCases.map { f in
             SegmentOption(
-                id: f.rawValue, label: f.label, help: f.note,
+                // Every container here is a plain remux (VideoFormat.isNative is
+                // unconditionally true), so every chip gets the same dot -- unlike audio,
+                // where only M4A qualifies, but shown for the same reason: the dot means
+                // "no quality loss," and that's true of every video option too.
+                id: f.rawValue, label: f.label, nativeBadge: f.isNative, help: f.note,
                 isSelected: p.videoFormat == f, tint: DesignTokens.Accent.primary
             ) {
                 preview.videoFormat.wrappedValue = f

@@ -2051,72 +2051,11 @@ struct SteppedSlider: View {
     }
 }
 
-// MARK: Form row
-
-/// A settings row: the label (and a small hint) on the left, one control on the
-/// right. In a narrow column the label sits above the control instead.
-struct FormRow<Content: View>: View {
-    let icon: String
-    let label: String
-    /// Small text under the label ("Original: ProRes").
-    var hint: String? = nil
-    /// Shows the Native / Re-encodes legend under the label instead.
-    var showsNativeLegend: Bool = false
-    @ViewBuilder let content: () -> Content
-    @Environment(\.contentColumnWidth) private var columnWidth
-    private var stacked: Bool { columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint }
-
-    private var labelBlock: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            // .firstTextBaseline -- see MetaCell's identical fix.
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: icon)
-                    .font(.appMono(size: 10, weight: .semibold))
-                    .frame(width: 14, alignment: .center)
-                Text(label)
-                    .font(.appMono(size: 10, weight: .semibold))
-                    .lineLimit(1)
-            }
-            .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-            if showsNativeLegend {
-                nativeLegend()
-                    .padding(.leading, 20)
-            } else if let hint, !hint.isEmpty {
-                Text(hint)
-                    .font(.appMono(size: 9))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    .lineLimit(1)
-                    .padding(.leading, 20)
-            }
-        }
-    }
-
-    var body: some View {
-        if stacked {
-            VStack(alignment: .leading, spacing: 6) {
-                labelBlock
-                content()
-            }
-        } else {
-            // The label column is only as wide as the longest label ("OUTPUT FORMAT",
-            // icon included) plus a little air -- it used to be 150pt, which left a
-            // ~70pt hole between the label and its selector.
-            HStack(alignment: .center, spacing: 10) {
-                labelBlock
-                    .frame(width: 112, alignment: .leading)
-                content()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-}
-
 // MARK: Dropdown field
 
 /// A small icon-and-caps caption above a field or a track's row of fields
-/// ("CODEC", "VIDEO") -- the same visual language as FormRow's own label, in
-/// a form compact enough to sit above a single field instead of beside a
-/// full-width row.
+/// ("CODEC", "VIDEO") -- a compact form of the same icon+label language used
+/// throughout the app's settings rows.
 struct FieldCaption: View {
     let icon: String?
     let text: String

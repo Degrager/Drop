@@ -1382,6 +1382,13 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// then re-runs checkDeps() (see its own comment for why that's
     /// necessary, not just silentUpdateCheck()) once both finish.
     func ensureLatestTools() {
+        // Set here, not left to silentUpdateCheck's own line below: that one
+        // only runs after updateYtdlp/updateFFmpeg have ALREADY finished
+        // their own network round-trip (inside group.notify), so the button
+        // sat on "Check for Updates" doing nothing for that whole stretch
+        // and only flipped to "Checking…" right at the tail end -- reported
+        // live as the button not switching to Checking instantly on click.
+        checkingUpdates = true
         justCheckedUpToDate = false
         appendLog("Updating yt-dlp and ffmpeg to latest nightly builds…")
         let group = DispatchGroup()
@@ -4836,7 +4843,13 @@ struct CheckForUpdatesButton: View {
     private var tint: Color {
         disabledUntilSetup ? Color.white.opacity(DesignTokens.Text.secondary) : accentColor
     }
-    private var isDisabled: Bool { isChecking || disabledUntilSetup }
+    // Also disabled while "Up to Date" is showing: clicking through it used to
+    // flash the label back to "Check for Updates" for a frame before jumping
+    // to "Checking…" (reported live), since a fresh check clears upToDateShown
+    // asynchronously, one step behind isChecking turning true. Simplest fix is
+    // to not allow that click at all -- wait for the timed hold in
+    // upToDateShown's own `.task` to clear it, then allow clicking again.
+    private var isDisabled: Bool { isChecking || disabledUntilSetup || upToDateShown }
     private var labelText: String {
         isChecking ? "Checking…" : (disabledUntilSetup ? "Tools Missing" : (hasUpdate ? "Update Available" : (upToDateShown ? "Up to Date" : "Check for Updates")))
     }

@@ -350,7 +350,7 @@ struct HistoryRow: View {
             )
 
             // Remove is an icon button, so it keeps its capsule.
-            HoverIconButton(icon: "xmark", size: 10, help: "Remove from History", action: onRemove)
+            HoverIconButton(icon: "xmark", size: 10, help: "Remove from History", expandable: true, action: onRemove)
                 .accessibilityLabel("Remove from History")
         }
     }

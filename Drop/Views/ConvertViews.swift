@@ -2312,10 +2312,10 @@ private struct QueueRowView: View {
                 // Real circular HoverIconButtons (not a bare glyph) so
                 // they're actually visible at a glance, not just barely
                 // legible.
-                HoverIconButton(icon: "chevron.up", size: 9, disabled: index == 0, help: "Move up", shape: .circle) {
+                HoverIconButton(icon: "chevron.up", size: 9, disabled: index == 0, help: "Move up", expandable: true, shape: .circle) {
                     moveQueueItem(by: -1)
                 }
-                HoverIconButton(icon: "chevron.down", size: 9, disabled: index == queue.count - 1, help: "Move down", shape: .circle) {
+                HoverIconButton(icon: "chevron.down", size: 9, disabled: index == queue.count - 1, help: "Move down", expandable: true, shape: .circle) {
                     moveQueueItem(by: 1)
                 }
             }

@@ -1171,7 +1171,11 @@ struct MetaCell: View {
     }
 
     var body: some View {
-        HStack(spacing: 5) {
+        // .firstTextBaseline, not the default .center -- an SF Symbol's own glyph bounds don't
+        // always land in the exact vertical center of an adjacent Text's bounding box, and
+        // centering the two by frame instead of by baseline read as the icon sitting a little
+        // high or low against the label (same fix as DropdownField's value+subtext row).
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
             if let icon = chip.icon {
                 Image(systemName: icon)
                     .font(.appMono(size: 10, weight: .bold))
@@ -1893,7 +1897,8 @@ private struct SegmentButton: View {
         let pulsing = hovering && selected
         Button(action: option.action) {
             VStack(spacing: 1) {
-                HStack(spacing: 5) {
+                // .firstTextBaseline -- see MetaCell's identical fix.
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
                     if let icon = option.icon {
                         Image(systemName: icon)
                             .font(.appMono(size: 11, weight: .semibold))
@@ -2063,7 +2068,8 @@ struct FormRow<Content: View>: View {
 
     private var labelBlock: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
+            // .firstTextBaseline -- see MetaCell's identical fix.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: icon)
                     .font(.appMono(size: 10, weight: .semibold))
                     .frame(width: 14, alignment: .center)
@@ -2115,7 +2121,8 @@ struct FieldCaption: View {
     let icon: String?
     let text: String
     var body: some View {
-        HStack(spacing: 6) {
+        // .firstTextBaseline -- see MetaCell's identical fix.
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             if let icon {
                 Image(systemName: icon)
                     .font(.appMono(size: 10, weight: .semibold))

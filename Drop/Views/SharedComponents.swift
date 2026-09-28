@@ -1531,10 +1531,25 @@ struct PersistentCapsule: View {
 
             if let chips = lastChips {
                 MetaLineContent(chips: chips)
+                    // Not .shown yet: force this to lay out at its own IDEAL (single-line)
+                    // width regardless of whatever width the frame below is CURRENTLY
+                    // proposing -- which can briefly still be the old, smaller one, since
+                    // `targetWidth` depends on `measuredWidth`, and that only updates a
+                    // render or two after `lastChips` does (see the hidden probe below).
+                    // Without this, MetaLineContent's own DividedCells (built to WRAP onto
+                    // more lines when it doesn't fit a narrow width) took that stale,
+                    // too-narrow proposal at face value and wrapped to two lines for that
+                    // one render -- invisible (opacity 0) but still taller, so the CAPSULE
+                    // itself briefly grew taller too. Reported live: "the capsule goes from
+                    // small width normal height, to tall height for a split second, back to
+                    // normal height but correct width." Only .shown lets this wrap normally
+                    // again, so a genuinely narrow window still wraps as before.
+                    .fixedSize(horizontal: phase != .shown, vertical: false)
                     .opacity(phase == .shown ? 1 : 0)
                     .blur(radius: phase == .shown ? 0 : 5)
             } else if let note = lastNote {
                 NoteContent(icon: note.icon, text: note.text)
+                    .fixedSize(horizontal: phase != .shown, vertical: false)
                     .opacity(phase == .shown ? 1 : 0)
                     .blur(radius: phase == .shown ? 0 : 5)
             }

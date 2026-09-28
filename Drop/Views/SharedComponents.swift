@@ -1515,9 +1515,14 @@ struct PersistentCapsule: View {
     var body: some View {
         ZStack(alignment: .leading) {
             // The same icon-and-text row as a metadata cell (MetaCell), so the capsule is
-            // exactly as tall while it waits as it is once the metadata is in it. Always
-            // mounted (never conditionally switched) so its disappearance is a plain opacity
-            // fade, not a transition -- see the type's own doc comment for why that matters.
+            // exactly as tall while it waits as it is once the metadata is in it -- kept
+            // structurally identical (same glyphs, same font) purely to hold that height/
+            // width footprint; it is permanently invisible now that "Analyzing" itself is
+            // shown in the header's progress-indicator slot instead (see analyzeProgressColumn
+            // in Drop.swift), matching the Downloading/Done states, which never put their own
+            // status in this capsule either. Always mounted (never conditionally switched) so
+            // its disappearance is a plain opacity fade, not a transition -- see the type's own
+            // doc comment for why that matters.
             HStack(spacing: 5) {
                 Image(systemName: "hourglass")
                     .font(.appMono(size: 10, weight: .bold))
@@ -1527,7 +1532,7 @@ struct PersistentCapsule: View {
             .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
             .lineLimit(1)
             .fixedSize()
-            .opacity(phase == .analyzing ? 1 : 0)
+            .opacity(0)
 
             if let chips = lastChips {
                 MetaLineContent(chips: chips)

@@ -7647,7 +7647,14 @@ struct ContentView: View {
                     let width        = parts.count > 2 ? parts[2].trimmingCharacters(in: .whitespacesAndNewlines) : "0"
                     let thumbnail    = parts.count > 3 ? parts[3].trimmingCharacters(in: .whitespacesAndNewlines) : ""
                     let duration     = parts.count > 4 ? parts[4].trimmingCharacters(in: .whitespacesAndNewlines) : ""
-                    let durationSecs = parts.count > 5 ? (Int(parts[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) : 0
+                    // %(duration)s is a whole-number string for YouTube ("19") but a
+                    // fractional one for SoundCloud ("213.886") -- Int(_:) on a string
+                    // containing a decimal point returns nil, so this silently fell back
+                    // to 0 for every SoundCloud link, which made estimatedBytes() (guarded
+                    // on `secs > 0`) return nil and hide the size estimate entirely for
+                    // audio-only SoundCloud sources. Parsing as Double first (then
+                    // truncating) handles both shapes.
+                    let durationSecs = parts.count > 5 ? Int(Double(parts[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) : 0
                     let fileSizeRaw  = parts.count > 6 ? parts[6].trimmingCharacters(in: .whitespacesAndNewlines) : ""
                     let heightRaw    = parts.count > 7 ? parts[7].trimmingCharacters(in: .whitespacesAndNewlines) : "0"
                     let asrRaw       = parts.count > 8 ? parts[8].trimmingCharacters(in: .whitespacesAndNewlines) : "0"

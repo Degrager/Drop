@@ -160,10 +160,16 @@ enum AudioFormat: String, CaseIterable, Identifiable {
 }
 
 enum AudioQuality: String, CaseIterable, Identifiable {
-    case q320 = "320K", q256 = "5", q128 = "9"
+    // auto: matches the source's own real bitrate exactly, whatever that is -- added
+    // because the fixed presets below have no slot for a common real-world bitrate like
+    // SoundCloud's 160kbps AAC, which used to silently round down to 128kbps and hide the
+    // 32kbps of real headroom between them (reported live, confirmed against yt-dlp's own
+    // --list-formats). Mirrors Convert's own "Auto" bitrate step (see DropdownBitrateField).
+    case auto = "auto", q320 = "320K", q256 = "5", q128 = "9"
     var id: String { rawValue }
     var label: String {
         switch self {
+        case .auto: return "Auto"  // real call sites replace this with the detected kbps
         case .q320: return "320kbps"
         case .q256: return "256kbps"
         case .q128: return "128kbps"
@@ -171,6 +177,9 @@ enum AudioQuality: String, CaseIterable, Identifiable {
     }
     var flacLabel: String {
         switch self {
+        // Unreachable in practice -- FLAC's own ladder never offers .auto (sample rate,
+        // not bitrate, is the meaningful axis there; see downloadAudioQualityOptions).
+        case .auto: return "Lossless"
         case .q320: return "Lossless"
         case .q256: return "96kHz"  // hi-res
         case .q128: return "48kHz"   // standard (YouTube/SoundCloud native)
@@ -179,22 +188,26 @@ enum AudioQuality: String, CaseIterable, Identifiable {
     // Format selector override for FLAC (sample rate filter)
     var flacFormatSelector: String {
         switch self {
+        case .auto: return "bestaudio"  // unreachable -- see flacLabel
         case .q320: return "bestaudio"
         case .q256: return "bestaudio[asr>=96000]/bestaudio"
         case .q128: return "bestaudio[asr>=48000]/bestaudio"
         }
     }
-    /// kbps for file size estimation
+    /// kbps for file size estimation. .auto has no fixed number of its own -- callers with
+    /// a known sourceABR should use that directly instead of this fallback.
     var kbps: Int {
-        switch self { case .q320: return 320; case .q256: return 256; case .q128: return 128 }
+        switch self { case .auto: return 128; case .q320: return 320; case .q256: return 256; case .q128: return 128 }
     }
     /// yt-dlp --audio-quality argument.
     /// MP3 VBR scale: 0 = best (~245kbps), 5 = ~130kbps, 9 = worst.
     /// For CBR: pass "320K", "256K", "128K" — ffmpeg interprets these as fixed bitrates.
     /// Only has effect when -x / --extract-audio is used (i.e. mp3, wav, flac — NOT m4a passthrough).
+    /// .auto's real value is computed at the call site (startDownload) from the source's
+    /// actual detected bitrate -- this fallback only applies if that's somehow unknown.
     var ytdlpAudioQuality: String {
         // CBR bitrates passed directly to ffmpeg — "0" is VBR ~245kbps, not 320
-        switch self { case .q320: return "320K"; case .q256: return "256K"; case .q128: return "128K" }
+        switch self { case .auto: return "128K"; case .q320: return "320K"; case .q256: return "256K"; case .q128: return "128K" }
     }
 }
 
@@ -681,13 +694,16 @@ struct HistoryEntry: Codable, Identifiable {
         }
     }
 
-    /// Audio-quality raw codes ("0"/"5"/"9") to their kbps label — same mapping
+    /// Audio-quality raw codes ("0"/"5"/"9"/"auto") to their kbps label — same mapping
     /// used for the live download quality chip, applied here to final output data.
     private var resolvedQualityLabel: String {
         switch quality {
         case "320K": return "320kbps"
         case "5": return "256 kbps"
         case "9": return "128 kbps"
+        // Auto means "matched the source's own real bitrate" -- show that real number
+        // (captured in the analyze snapshot) rather than the literal word "auto".
+        case "auto": return snapshotSourceABR > 0 ? "\(snapshotSourceABR)kbps" : "Auto"
         default:  return quality.isEmpty ? "Best" : quality
         }
     }
@@ -1032,10 +1048,11 @@ struct Download: Identifiable {
         }
         switch mediaMode {
         case .audioOnly:
-            // M4A is native passthrough (no re-encode), so its real bitrate
-            // is the source's own rather than one of the quality presets,
-            // which only apply when actually re-encoding to MP3/WAV/FLAC.
-            let bitrate = format == .m4a ? bitrateLabel(kbps: snapshot.sourceABR) : audioQuality.label
+            // M4A is native passthrough (no re-encode), so its real bitrate is the source's
+            // own rather than one of the quality presets. Auto is the same idea for a
+            // re-encoded format: it means "match the source exactly," so it shows that real
+            // number too instead of the generic "Auto" label.
+            let bitrate = (format == .m4a || audioQuality == .auto) ? bitrateLabel(kbps: snapshot.sourceABR) : audioQuality.label
             result.append(.audio([format.rawValue.uppercased(), snapshot.sourceChannelLabel, bitrate]) ?? .audioPlaceholder)
         case .videoAndAudio:
             // Video is never re-encoded when merging video+audio, so the
@@ -2075,6 +2092,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         // which used to make every queued item after the first download at
         // whatever quality the most recently added item happened to use.
         let audioQuality = downloads[idx].audioQuality
+        let sourceABR    = downloads[idx].snapshot.sourceABR
         let isPlaylist   = downloads[idx].isPlaylist
         // Real analyzed title when available (set from the Analyze
         // snapshot in add()); falls back to being literally equal to the
@@ -2201,9 +2219,13 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                     // M4A passthrough: no -x, no re-encode, --audio-quality has no effect
                     ytArgs += format.ytdlpArgs  // -f bestaudio[ext=m4a]/bestaudio/best
                 } else {
-                    // MP3 / WAV: -x re-encodes via ffmpeg, --audio-quality controls bitrate
+                    // MP3 / WAV: -x re-encodes via ffmpeg, --audio-quality controls bitrate.
+                    // Auto means "match the source's own real bitrate exactly" -- pass that
+                    // number directly as a CBR target instead of ytdlpAudioQuality's generic
+                    // fallback, which would otherwise silently re-round it to a fixed preset.
                     ytArgs += format.ytdlpArgs  // -f bestaudio/best -x --audio-format mp3/wav
-                    ytArgs += ["--audio-quality", audioQuality.ytdlpAudioQuality]
+                    let quality = (audioQuality == .auto && sourceABR > 0) ? "\(sourceABR)K" : audioQuality.ytdlpAudioQuality
+                    ytArgs += ["--audio-quality", quality]
                 }
             case .videoAndAudio:
                 // Best video + best audio merged. bestaudio always picks highest bitrate available.
@@ -6976,9 +6998,25 @@ struct ContentView: View {
 
     private func downloadAudioQualityOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
         let p = preview.wrappedValue
+        // Auto only makes sense for the kbps ladder (MP3/WAV re-encodes) when the source's real
+        // bitrate is actually known -- FLAC uses its own sample-rate ladder instead (a bitrate
+        // number doesn't mean anything for a lossless target), and with no detected sourceABR
+        // there's nothing for Auto to represent, so the plain fixed presets are shown as before.
+        let showsAuto = p.audioFormat != .flac && p.sourceABR > 0
         return AudioQuality.allCases.compactMap { q -> SegmentOption? in
+            if q == .auto {
+                guard showsAuto else { return nil }
+                return SegmentOption(
+                    id: "auto", label: "\(p.sourceABR)kbps",
+                    isSelected: p.audioQuality == .auto, tint: DesignTokens.Accent.success,
+                    isSourceDefault: true
+                ) {
+                    preview.audioQuality.wrappedValue = .auto
+                }
+            }
             let kbps: Int = {
                 switch q {
+                case .auto: return 0  // unreachable -- handled above
                 case .q320: return 320
                 case .q256: return 256
                 case .q128: return 128
@@ -6986,11 +7024,15 @@ struct ContentView: View {
             }()
             let asrHz: Int = {
                 switch q {
+                case .auto: return 0  // unreachable -- handled above
                 case .q320: return 0
                 case .q256: return 96000
                 case .q128: return 44100
                 }
             }()
+            // Above the source's own bitrate/sample rate, a preset would just be padding a
+            // lossy source up to a bigger number with no real detail gained -- Auto (above)
+            // already covers "give me everything the source has," so these stay hidden.
             let hideKbps = p.audioFormat != .flac && p.sourceABR > 0 && kbps > p.sourceABR
             let effectiveASR: Int = {
                 if p.sourceASR > 0 { return p.sourceASR }
@@ -7286,11 +7328,11 @@ struct ContentView: View {
             }
             switch mediaMode {
             case .audioOnly:
-                // M4A is native passthrough (no re-encode -- see audioFormat's
-                // own doc comment), so its real bitrate is the source's own
-                // rather than one of the quality presets, which only apply
-                // when actually re-encoding to MP3/WAV/FLAC.
-                let bitrate = audioFormat == .m4a ? bitrateLabel(kbps: sourceABR) : audioQuality.label
+                // M4A is native passthrough (no re-encode -- see audioFormat's own doc
+                // comment), so its real bitrate is the source's own rather than one of the
+                // quality presets. Auto means the same thing for a re-encoded format --
+                // "match the source exactly" -- so it shows that real number too.
+                let bitrate = (audioFormat == .m4a || audioQuality == .auto) ? bitrateLabel(kbps: sourceABR) : audioQuality.label
                 result.append(.audio([audioFormat.rawValue.uppercased(), sourceChannelLabel, bitrate]) ?? .audioPlaceholder)
             case .videoAndAudio:
                 // Video and audio are both stream-copied when merging, so the
@@ -7318,7 +7360,10 @@ struct ContentView: View {
             guard downloadID == nil else { return nil }
             let secs = durationSeconds
             if mediaMode == .audioOnly && secs > 0 {
-                return (audioQuality.kbps * 1000 / 8) * secs
+                // Auto has no fixed kbps of its own -- use the real detected source bitrate
+                // it represents instead of the generic (and usually wrong) fallback.
+                let kbps = audioQuality == .auto && sourceABR > 0 ? sourceABR : audioQuality.kbps
+                return (kbps * 1000 / 8) * secs
             } else if mediaMode == .videoAndAudio {
                 let cap = videoQuality.maxHeight
                 if let exact = fileSizeByQuality[cap], exact > 0 {
@@ -7782,13 +7827,11 @@ struct ContentView: View {
                     // sourceAudioCodec / sourceChannelLabel assigned after formats JSON parsing
                     // below, since the real values come from the best audio-only stream there.
                     // Set per-format quality based on source capabilities
-                    // kbps formats: cap at sourceABR
-                    let kbpsQuality: AudioQuality = {
-                        guard sourceABR > 0 else { return .q320 }
-                        if sourceABR >= 320 { return .q320 }
-                        if sourceABR >= 256 { return .q256 }
-                        return .q128
-                    }()
+                    // kbps formats: match the source's real bitrate exactly (Auto) whenever it's
+                    // known, rather than rounding down to the nearest of the three fixed presets
+                    // -- a 160kbps source used to silently default to "128kbps" with no way to
+                    // see or select the real number.
+                    let kbpsQuality: AudioQuality = sourceABR > 0 ? .auto : .q320
                     // FLAC: always Lossless (q320) — takes best available source
                     lp.audioQuality = kbpsQuality
                     lp.qualityByFormat = [

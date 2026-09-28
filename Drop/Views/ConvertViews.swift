@@ -1897,6 +1897,9 @@ struct ConvertView: View {
         // not anything has finished converting yet.
         HStack(spacing: DropGrid.rowSpacing) {
             FieldCapsule {
+                Image(systemName: "folder")
+                    .font(.appMono(size: DropGrid.fieldFontSize - 1))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 Text(config.convertOutputDir)
                     .font(.appMono(size: DropGrid.fieldFontSize))
                     .foregroundColor(.white.opacity(DesignTokens.Text.secondary))

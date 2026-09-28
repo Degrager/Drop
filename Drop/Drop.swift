@@ -4369,7 +4369,17 @@ struct HoverIconButton: View {
                 // A button that changes what it is (collapse -> cancel -> redownload) swaps its
                 // symbol in place instead of being replaced.
                 .contentTransition(.symbolEffect(.replace))
-                .padding(6)
+                // A fixed square frame, not just .padding(6) around whatever the glyph's own
+                // natural bounding box happens to be -- different SF Symbols render at
+                // different aspect ratios at the same point size (a wide "chevron.down" vs a
+                // symmetric "xmark.circle.fill"), so padding alone gave each icon a DIFFERENT
+                // overall button footprint. On a non-square footprint, the shared corner
+                // radius reads as much rounder on the short axis than the long one -- reported
+                // live as the collapse chevron looking fully circular next to the perfectly
+                // square remove button, though both use the identical .roundedRect shape and
+                // radius. Every icon now centers in the same size box regardless of its own
+                // proportions.
+                .frame(width: size + 12, height: size + 12)
         }
         // Only the hover caption needs the width, and only `expandable` buttons
         // have one -- every other button skipped a GeometryReader + @State
@@ -6400,6 +6410,9 @@ struct ContentView: View {
                 // No SAVE TO label -- the folder itself says what it is.
                 HStack(spacing: DropGrid.rowSpacing) {
                     FieldCapsule {
+                        Image(systemName: "folder")
+                            .font(.appMono(size: DropGrid.fieldFontSize - 1))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                         TextField("", text: $config.outputDir)
                             .textFieldStyle(.plain)
                             .font(.appMono(size: DropGrid.fieldFontSize))
@@ -6547,6 +6560,13 @@ struct ContentView: View {
         // continuous bar. The pill's own fill/edge provides the visual
         // separation; whitespace here would reintroduce the seam.
         return HStack(spacing: 0) {
+            // Leading icon, same convention as Convert's dropZoneView (folder.badge.plus) and
+            // History's search bar (magnifyingglass) -- this was the one top bar missing it.
+            Image(systemName: "link")
+                .font(.appMono(size: 13, weight: .thin))
+                .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                .padding(.leading, 14)
+
             ZStack(alignment: .leading) {
                 // Left-aligned instead of centered -- centering put the
                 // typing cursor directly on top of the "Paste a link…"
@@ -6560,7 +6580,7 @@ struct ContentView: View {
                         .foregroundColor(.white.opacity(0.18))
                         .allowsHitTesting(false)
                         .frame(height: fieldHeight, alignment: .center)
-                        .padding(.leading, 14)
+                        .padding(.leading, 10)
                 }
                 TextField("", text: $urlText)
                     .textFieldStyle(.plain)
@@ -6591,7 +6611,7 @@ struct ContentView: View {
                     .textContentType(.URL)
                     .focused($urlFieldFocused)
                     .frame(height: fieldHeight, alignment: .center)
-                    .padding(.leading, 14)
+                    .padding(.leading, 10)
                     // Leave room on the trailing edge for the clear button so
                     // typed/pasted text never sits underneath it.
                     .padding(.trailing, urlText.isEmpty ? 14 : 36)

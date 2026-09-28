@@ -1511,7 +1511,13 @@ struct ConvertView: View {
                 ZStack(alignment: .topTrailing) {
                     // Oversized, effectively-invisible tap catcher so clicking
                     // anywhere else dismisses the popup -- sits behind it in this
-                    // same overlay group, never affecting layout.
+                    // same overlay group, never affecting layout. No `.transition`
+                    // here: blurring/scaling a 3000x3000 layer along with the
+                    // popup (an earlier version transitioned this whole ZStack
+                    // together) is what made the popup look like it was melting
+                    // transparent and stuttering shut on dismiss -- the same
+                    // dismiss-stutter class of bug already fixed once for the
+                    // Download page's dropdown popover (see dropdownPopoverOverlay).
                     Color.black.opacity(0.001)
                         .frame(width: 3000, height: 3000)
                         .offset(x: 1200, y: -1200)
@@ -1520,12 +1526,13 @@ struct ConvertView: View {
                         }
                     fileSwitcherPopup
                         .offset(y: 34)
+                        // Unfolds out of the capsule (top-trailing corner) with blur +
+                        // scale only -- the popup is a glass surface, so no opacity
+                        // (see FocusEffect). Only the popup itself gets this effect,
+                        // not the tap catcher above.
+                        .transition(.focus(blur: 10, scale: 0.9, anchor: .topTrailing))
                 }
                 .zIndex(20)
-                // Unfolds out of the capsule (top-trailing corner) with blur +
-                // scale only -- the popup is a glass surface, so no opacity
-                // (see FocusEffect).
-                .transition(.focus(blur: 10, scale: 0.9, anchor: .topTrailing))
             }
         }
     }

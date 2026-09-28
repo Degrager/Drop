@@ -1318,6 +1318,14 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         return path.path
     }
 
+    /// Deletes this URL's cached analyze info-json, if any -- used when a download's
+    /// retry-on-403 path needs the NEXT startDownload call to skip --load-info-json
+    /// entirely and resolve a genuinely fresh stream URL, rather than silently
+    /// reusing the exact cached data whose URL just got rejected.
+    func invalidateAnalyzeCache(for url: String) {
+        try? FileManager.default.removeItem(at: analyzeCacheInfoJSONPath(for: url))
+    }
+
     /// Best-effort prune of stale cache files -- called once on launch so
     /// the directory doesn't grow unbounded across many sessions. Not
     /// load-bearing for correctness (the TTL check above already refuses to
@@ -2692,6 +2700,18 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                         let isHTTP403  = stderr.contains("403") && (stderr.contains("forbidden") || stderr.contains("http error 403"))
                         let retryCount = self.readDownload(downloadID) { $0.autoRetryCount } ?? 0
                         if isHTTP403 && retryCount < 4 {
+                            // "From scratch" above only actually happens if the retried
+                            // startDownload call skips the cached analyze info-json --
+                            // otherwise --load-info-json feeds back the EXACT same
+                            // resolved stream URL that just got rejected, and yt-dlp
+                            // doesn't always detect that as expired and re-extract on
+                            // its own (confirmed live: a SoundCloud HLS stream hit the
+                            // identical 403 on all 4 attempts, "URLs are ignored due to
+                            // --load-info-json" logged every time, no re-extraction ever
+                            // attempted). Deleting the cache here forces every retry to
+                            // resolve a genuinely new URL from the real page instead of
+                            // repeating the same doomed request.
+                            self.invalidateAnalyzeCache(for: url)
                             self.withDownload(downloadID) {
                                 $0.autoRetryCount += 1
                                 $0.status = .downloading

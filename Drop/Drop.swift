@@ -4984,6 +4984,11 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // Drop has exactly one window and never will have more than one --
+        // native window tabbing has nothing to do here, so its menu items
+        // ("Show Tab Bar", "Show All Tabs") are just clutter in the View
+        // menu. This is the standard AppKit-wide switch to remove them.
+        NSWindow.allowsAutomaticWindowTabbing = false
         // Disables AppKit's spelling/completion/substitution machinery
         // globally rather than per-field -- every SwiftUI TextField on
         // macOS is actually edited through one shared "field editor"
@@ -5118,6 +5123,10 @@ enum SidebarAnimationStyle: String {
 struct DropApp: App {
     @NSApplicationDelegateAdaptor(DropAppDelegate.self) var appDelegate
     @AppStorage(SidebarAnimationStyle.storageKey) private var sidebarAnimationStyle = SidebarAnimationStyle.resize.rawValue
+    // Same UserDefaults key ContentView's own sidebarCollapsedByUser reads/writes --
+    // an @AppStorage binding at this scope stays in sync with it automatically,
+    // there's no need to reach into ContentView's own state to toggle it from here.
+    @AppStorage("sidebarCollapsed") private var sidebarCollapsedByUser = false
 
     var body: some Scene {
         WindowGroup {
@@ -5125,9 +5134,11 @@ struct DropApp: App {
         }
         .commands {
             CommandGroup(after: .sidebar) {
+                Button("Toggle Sidebar") { sidebarCollapsedByUser.toggle() }
+                Divider()
                 Picker("Sidebar Animation", selection: $sidebarAnimationStyle) {
-                    Text("Pop In").tag(SidebarAnimationStyle.pop.rawValue)
                     Text("Resize").tag(SidebarAnimationStyle.resize.rawValue)
+                    Text("Pop In").tag(SidebarAnimationStyle.pop.rawValue)
                 }
             }
         }

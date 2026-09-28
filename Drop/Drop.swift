@@ -6328,6 +6328,20 @@ struct ContentView: View {
                     .pinnedToSidebar()
                     .padding(.top, 10)
                     .padding(.bottom, 6)
+                    // ONE reader for the whole queue, not one per card: a modifier
+                    // applied to a ForEach (as this used to be, inside downloadCard)
+                    // is distributed to EACH row individually rather than wrapping
+                    // them as a group, so every card painted its own popover as part
+                    // of its own layout slot -- and a later card, painted after an
+                    // earlier one in this LazyVStack, still covered that earlier
+                    // card's popover wherever the two overlapped (a .zIndex on the
+                    // row itself didn't help either: it only reorders siblings of a
+                    // ZStack, not of a VStack/LazyVStack, confirmed live -- the first
+                    // card's own popover still clipped under the second card's
+                    // opaque background). This LazyVStack is a genuine single view by
+                    // the time its own modifier chain reaches this point, so one
+                    // overlay here paints once, above every row, unconditionally.
+                    .dropdownPopoverOverlay(openID: $openDropdownID)
     }
 
     @ViewBuilder
@@ -6930,9 +6944,14 @@ struct ContentView: View {
                     Group {
                         if p.mediaMode != .audioOnly {
                             FieldsTrackRow(icon: "video", label: "VIDEO") {
-                                DropdownField(id: "download.video.resolution", caption: "RESOLUTION",
+                                // Suffixed with the card's own id: openDropdownID is one
+                                // value shared by every download card (see its declaration),
+                                // so two cards' otherwise-identical field ids would each
+                                // register as "open" together the instant either one opened,
+                                // since both would match the same shared string.
+                                DropdownField(id: "download.video.resolution.\(p.id)", caption: "RESOLUTION",
                                               options: downloadVideoQualityOptions(preview: preview),
-                                              openID: preview.openDropdownID)
+                                              openID: $openDropdownID)
                             }
                         } else if p.audioFormat != .m4a {
                             // M4A has no selectable quality/bitrate -- it's a fixed passthrough
@@ -6940,9 +6959,9 @@ struct ContentView: View {
                             // hidden entirely (mirrors Convert's handling of a lossless codec
                             // hiding its own bitrate field).
                             FieldsTrackRow(icon: "waveform", label: "AUDIO") {
-                                DropdownField(id: "download.audio.bitrate", caption: "BITRATE",
+                                DropdownField(id: "download.audio.bitrate.\(p.id)", caption: "BITRATE",
                                               options: downloadAudioQualityOptions(preview: preview),
-                                              openID: preview.openDropdownID)
+                                              openID: $openDropdownID)
                             }
                         }
                     }
@@ -6952,7 +6971,6 @@ struct ContentView: View {
                 .animation(.easeOut(duration: 0.2), value: p.mediaMode)
             }
         }
-        .dropdownPopoverOverlay(openID: preview.openDropdownID)
     }
 
     // MARK: Download — segmented option builders
@@ -7323,10 +7341,6 @@ struct ContentView: View {
         // quality picker rows (VIDEO FORMAT/RESOLUTION or AUDIO FORMAT/
         // QUALITY), the "advanced" layer on top of the "simple" default.
         var isExpanded: Bool = false
-        // Which settings dropdown field (RESOLUTION / BITRATE) has its popover open, if any --
-        // shared by every DropdownField on this card via a binding, same as Convert's own
-        // per-card openDropdownID. Transient UI state, never persisted.
-        var openDropdownID: String? = nil
         // Tracks the active Download.id once dispatched
         var downloadID: UUID? = nil
         // True when re-queued from history (bypasses duplicate check)
@@ -7451,6 +7465,12 @@ struct ContentView: View {
 
     @State private var analyzeResult: AnalyzeResult? = nil
     @State private var linkPreviews: [LinkPreview] = []
+    // Which settings dropdown field (RESOLUTION / BITRATE) has its popover open, if any --
+    // ONE value shared by every download card on the page (not per-card), so opening a
+    // dropdown on one card closes whatever was open on another. Lives here rather than on
+    // LinkPreview itself specifically so every downloadCard() call -- one per row, but all
+    // methods on this same ContentView -- reads and writes the identical piece of state.
+    @State private var openDropdownID: String? = nil
 
     // Sum of estimated sizes across all selected, not-yet-downloaded previews —
     // shown as a chip next to SAVE TO, mirroring Convert's estimated-size chip.

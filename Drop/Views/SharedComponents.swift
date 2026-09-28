@@ -2152,10 +2152,12 @@ private struct DropdownMenuChrome<Content: View>: View {
 /// lets ONE host, rendered as a sibling to PreviewCard (outside its clip;
 /// see ConvertPreviewCard.body), draw the actual popover content.
 private struct DropdownPopoverPreferenceKey: PreferenceKey {
-    /// `width` is the menu's own fixed width (each field's `menu` sets it with
-    /// `.frame(width:)`) -- carried alongside the anchor so the host can keep
-    /// the menu on screen without waiting on a second layout pass to measure it.
-    struct Entry { let anchor: Anchor<CGRect>; let width: CGFloat; let content: () -> AnyView }
+    /// `width`/`height` are the menu's own fixed (width) or estimated (height) size --
+    /// carried alongside the anchor so the host can keep the menu on screen (and pick
+    /// which side of the field to open on) without waiting on a second layout pass to
+    /// measure it. `height` is an estimate, not exact -- close enough to decide whether
+    /// the menu would run past the bottom of the window, not a pixel-perfect fit.
+    struct Entry { let anchor: Anchor<CGRect>; let width: CGFloat; let height: CGFloat; let content: () -> AnyView }
     static var defaultValue: [String: Entry] = [:]
     static func reduce(value: inout [String: Entry], nextValue: () -> [String: Entry]) {
         value.merge(nextValue()) { _, new in new }
@@ -2195,6 +2197,21 @@ extension View {
                     // (BITRATE is usually last) used to open a menu that continued
                     // straight past the window.
                     let x = min(max(rect.minX, 0), max(proxy.size.width - entry.width, 0))
+                    // Opens below the field normally, but flips above it when there
+                    // isn't room left in the window -- reported live with two cards
+                    // both expanded: the second card's own field sits low enough that
+                    // opening downward ran the menu straight under the bottom bar.
+                    // proxy is scoped to just this card, so window-relative position
+                    // needs its own global frame; windowHeight falls back to the
+                    // card's own height (never flipping) if no window is found, which
+                    // only means the old below-only behavior for that edge case.
+                    let cardGlobalTop = proxy.frame(in: .global).minY
+                    let windowHeight = NSApplication.shared.windows.first(where: { !($0 is NSPanel) })?.frame.height ?? (cardGlobalTop + proxy.size.height)
+                    // Reserves room for the bottom bar/window chrome below the content
+                    // area -- approximate on purpose (see the Entry.height doc comment).
+                    let bottomMargin: CGFloat = 90
+                    let opensUpward = cardGlobalTop + rect.maxY + 6 + entry.height > windowHeight - bottomMargin
+                    let y = opensUpward ? rect.minY - 6 - entry.height : rect.maxY + 6
                     ZStack(alignment: .topLeading) {
                         // No `.transition` here: this is a full-card-sized invisible
                         // tap catcher, not something the user ever sees. Blurring and
@@ -2207,8 +2224,8 @@ extension View {
                             .contentShape(Rectangle())
                             .onTapGesture { withAnimation(.spring(response: 0.2)) { openID.wrappedValue = nil } }
                         entry.content()
-                            .offset(x: x, y: rect.maxY + 6)
-                            .transition(.focus(blur: 10, scale: 0.9, anchor: .top))
+                            .offset(x: x, y: y)
+                            .transition(.focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top))
                     }
                 }
             }
@@ -2288,7 +2305,7 @@ struct DropdownField: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .anchorPreference(key: DropdownPopoverPreferenceKey.self, value: .bounds) { anchor in
             guard isOpen else { return [:] }
-            return [id: .init(anchor: anchor, width: Self.menuWidth, content: { AnyView(menu) })]
+            return [id: .init(anchor: anchor, width: Self.menuWidth, height: menuHeight, content: { AnyView(menu) })]
         }
     }
 
@@ -2298,6 +2315,9 @@ struct DropdownField: View {
     /// subtext -- comfortably narrower than this even for "Same as Source"
     /// beside a resolution like "1920x1080".
     private static let menuWidth: CGFloat = 230
+    /// Estimated, not measured -- one DropdownMenuRow is ~30pt (12pt text, 7pt vertical
+    /// padding each side, 1pt row spacing), plus the menu's own 4pt padding on each side.
+    private var menuHeight: CGFloat { CGFloat(options.count) * 30 + 8 }
 
     private var menu: some View {
         DropdownMenuChrome {
@@ -2375,9 +2395,13 @@ struct DropdownBitrateField: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .anchorPreference(key: DropdownPopoverPreferenceKey.self, value: .bounds) { anchor in
             guard isOpen else { return [:] }
-            return [id: .init(anchor: anchor, width: Self.menuWidth, content: { AnyView(menu) })]
+            return [id: .init(anchor: anchor, width: Self.menuWidth, height: Self.menuHeight, content: { AnyView(menu) })]
         }
     }
+
+    /// Estimated, not measured -- fixed content (one slider + one line of caption text)
+    /// regardless of how many steps it has, unlike DropdownField's per-row list.
+    private static let menuHeight: CGFloat = 120
 
     // SteppedSlider divides this width into one column per step (up to 6 for
     // audio: Auto + 5 real bitrates) and centers each label under its own

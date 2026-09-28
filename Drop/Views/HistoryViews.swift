@@ -296,7 +296,10 @@ struct HistoryRow: View {
             if !narrow {
                 Text(secondaryLine)
                     .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    .lineLimit(1).truncationMode(.middle)
+                    // secondaryLine is a real URL for a download entry (tail: keep the
+                    // domain/path, drop trailing tracking params) but a local file path for a
+                    // conversion (middle: keep both the folder context and the filename).
+                    .lineLimit(1).truncationMode(entry.entryType == "conversion" ? .middle : .tail)
             } else {
                 Spacer(minLength: 0)
             }

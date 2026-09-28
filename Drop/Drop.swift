@@ -6755,6 +6755,13 @@ struct ContentView: View {
         let titleKnown = !analyzing || (!p.title.isEmpty && p.title != p.url)
         let controls = dl.map { downloadControls($0, preview: p) }
         let cardLocked = isBatchMode || failedAnalyze || dl != nil
+        // Only while a job is actually in flight -- once it's set, the card's remove button
+        // becomes Cancel instead (see PreviewCard.onCancel), so onRemove below is never called
+        // for a running download and doesn't need to cancel it first.
+        let cancelDownload: (() -> Void)? = {
+            guard let dl, dl.status == .pending || dl.status == .downloading else { return nil }
+            return { manager.cancel(download: dl) }
+        }()
 
         return PreviewCard(
             isSelected: p.isSelected,
@@ -6762,10 +6769,6 @@ struct ContentView: View {
                 withAnimation(.spring(response: 0.2)) { preview.isSelected.wrappedValue.toggle() }
             },
             onRemove: {
-                // Cancel first if this download is still in flight -- removing the card alone
-                // left yt-dlp/ffmpeg running headless with nothing on screen to show for it,
-                // and no partial-file cleanup (see manager.cancel(download:)) ever ran.
-                if let dl, dl.status == .downloading { manager.cancel(download: dl) }
                 withAnimation(.spring(response: 0.3)) { linkPreviews.removeAll { $0.id == p.id } }
             },
             showCheckbox: isBatchMode && !failedAnalyze,
@@ -6809,6 +6812,7 @@ struct ContentView: View {
             statusLabel: dl.flatMap { downloadOutcomeLabel($0) },
             primaryControl: controls?.primary,
             secondaryControl: controls?.secondary,
+            onCancel: cancelDownload,
             showsSettings: dl == nil && !failedAnalyze
         ) {
             // Expanded settings, as labelled rows shared with Convert's card:
@@ -7046,16 +7050,14 @@ struct ContentView: View {
     }
 
     /// A download's controls, in the slots of the header's button row: the PRIMARY one takes the
-    /// collapse button's place and only changes what it is (Cancel while it runs, then
-    /// Redownload / Retry), and Reveal in Finder appears to its left once the file is there.
-    /// Remove is the card's own, always last (removing an in-flight download cancels it first;
-    /// see downloadCard's onRemove).
-    private func downloadControls(_ dl: Download, preview p: LinkPreview) -> (primary: CardControl, secondary: CardControl?) {
+    /// collapse button's place once the job has ended (Redownload / Retry), and Reveal in
+    /// Finder appears to its left once the file is there. While a job is still in flight,
+    /// neither slot is used -- Cancel lives in the card's own remove/cancel button instead (see
+    /// downloadCard's onCancel).
+    private func downloadControls(_ dl: Download, preview p: LinkPreview) -> (primary: CardControl?, secondary: CardControl?) {
         switch dl.status {
         case .pending, .downloading:
-            return (CardControl(icon: "stop.circle.fill", color: .orange, help: "Cancel") {
-                manager.cancel(download: dl)
-            }, nil)
+            return (nil, nil)
         case .done:
             return (CardControl(icon: "arrow.uturn.down", color: DesignTokens.Accent.warning, help: "Redownload") {
                 restorePreviewCard(from: dl, replacing: p.id)

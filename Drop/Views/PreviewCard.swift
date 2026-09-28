@@ -139,10 +139,14 @@ struct PreviewCard<Settings: View>: View {
     /// progress column has gone. Not part of the progress column: it is its own label, so
     /// nothing that was in the column moves.
     var statusLabel: AnyView? = nil
-    /// Takes the collapse button's slot (a download's cancel, then redownload / retry).
+    /// Takes the collapse button's slot (a download's redownload / retry, once it has ended).
     var primaryControl: CardControl? = nil
     /// A control to the left of the primary one (Reveal in Finder, once a download is done).
     var secondaryControl: CardControl? = nil
+    /// When set, the red Remove button becomes an orange Cancel running this (a download that
+    /// is still in flight) -- same one-button swap as CompletedCard.removeOrCancelButton, so a
+    /// running job never shows two buttons (Cancel and Remove) at once for the same action.
+    var onCancel: (() -> Void)? = nil
     /// False hides everything below the header (belowHeader, settings, footer): a download
     /// under way or finished.
     var showsSettings: Bool = true
@@ -537,9 +541,13 @@ struct PreviewCard<Settings: View>: View {
                 // Spinner -> X on hover, in the remove button's own slot.
                 SkeletonCancelButton(action: onCancelAnalyze).transition(.blurIn)
             } else {
-                // Destructive action -- red tint so its intent is unambiguous at a glance.
-                HoverIconButton(icon: "xmark.circle.fill", size: 16, color: .red, help: "Remove", expandable: primaryTrailingControl == nil && secondaryControl == nil) {
-                    onRemove()
+                // Remove, or Cancel while the card's work is in flight -- one button either
+                // way, its icon swapping in place (see CompletedCard.removeOrCancelButton).
+                let cancelling = onCancel != nil
+                HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 16,
+                               color: cancelling ? .orange : .red, help: cancelling ? "Cancel" : "Remove",
+                               expandable: primaryTrailingControl == nil && secondaryControl == nil) {
+                    if let onCancel { onCancel() } else { onRemove() }
                 }
                 .transition(.blurIn)
             }

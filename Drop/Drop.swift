@@ -5280,7 +5280,12 @@ struct ContentView: View {
     @State private var isDragging     = false
 
     @State private var activeTab: AppTab = .download
-    @FocusState private var urlFieldFocused: Bool
+    // What's on the clipboard right now, shown in the field in place of typing/
+    // pasting into it (see urlCard) -- same describe(_:) the menu bar panel already
+    // uses for its own clipboard well, so "no link copied" / "N links" read
+    // identically in both places. Refreshed on appear and whenever Drop becomes the
+    // active app (the moment a link copied elsewhere would first be visible here).
+    @State private var clipboardPreview: MenuBarClipboard = .empty
     @State private var isUrlCardHovering = false
     @State private var isAnalyzing       = false
     @State private var hasInvalidURLs    = false
@@ -6166,7 +6171,7 @@ struct ContentView: View {
                             if linkPreviews.isEmpty {
                                 EmptyStateView(
                                     icon: "arrow.down.to.line",
-                                    title: "Paste a link to get started",
+                                    title: "Copy a link to get started",
                                     subtitle: "Supports YouTube, SoundCloud, Vimeo and more"
                                 )
                                 .padding(.vertical, 16)
@@ -6422,7 +6427,7 @@ struct ContentView: View {
                     if linkPreviews.isEmpty {
                         EmptyStateView(
                             icon: "arrow.down.to.line",
-                            title: "Paste a link to get started",
+                            title: "Copy a link to get started",
                             subtitle: "Supports YouTube, SoundCloud, Vimeo and more"
                         )
                         .followsSidebar()
@@ -6603,6 +6608,32 @@ struct ContentView: View {
         .help(readyToDownload ? "" : "Install yt-dlp and ffmpeg from the Tools menu first")
     }
 
+    /// Re-reads the clipboard into `clipboardPreview` -- called on appear and
+    /// whenever Drop becomes active, the two moments a link copied elsewhere first
+    /// becomes visible to this window (mirrors MenuBarModel.refreshClipboard, called
+    /// there when its panel opens instead).
+    private func refreshClipboardPreview() {
+        guard let raw = NSPasteboard.general.string(forType: .string) else {
+            clipboardPreview = .empty
+            return
+        }
+        clipboardPreview = MenuBarModel.describe(raw)
+    }
+
+    /// urlCard's field has nothing of its own to type or paste into: it just shows
+    /// whatever's already on the clipboard (see clipboardPreview) or, if a link was
+    /// dropped onto it instead, that. `isLink` picks the bright/dim text color the
+    /// same way MenuBarQuickView's well does.
+    private var clipboardFieldContent: (text: String, isLink: Bool) {
+        if !urlText.isEmpty { return (urlText, true) }
+        switch clipboardPreview {
+        case .empty, .notLinks:
+            return ("Copy a link to see it here", false)
+        case .links(_, let title, let detail):
+            return (detail.isEmpty ? title : "\(title)  \(detail)", true)
+        }
+    }
+
     var urlCard: some View {
         // Taller bar so the field reads more substantial, and the Analyze
         // control is now an accent-filled pill INSET inside this same
@@ -6632,52 +6663,23 @@ struct ContentView: View {
                 .padding(.leading, 14)
 
             ZStack(alignment: .leading) {
-                // Left-aligned instead of centered -- centering put the
-                // typing cursor directly on top of the "Paste a link…"
-                // placeholder when the field was empty and focused, and
-                // made the text baseline harder to line up cleanly with
-                // the clear button's vertical center. Leading alignment is
-                // also the standard convention for URL/paste fields.
-                if urlText.isEmpty {
-                    Text("Paste a link…")
-                        .font(.appMono(size: 13))
-                        .foregroundColor(.white.opacity(0.18))
-                        .allowsHitTesting(false)
-                        .frame(height: fieldHeight, alignment: .center)
-                        .padding(.leading, 10)
-                }
-                TextField("", text: $urlText)
-                    .textFieldStyle(.plain)
+                // No longer a TextField: this bar has nothing of its own to type or
+                // paste into (see clipboardFieldContent) -- it just shows whatever's
+                // already on the clipboard, exactly like the menu bar panel's own
+                // well, or a link just dropped onto it. Left-aligned to match the
+                // convention every other URL/paste field in the app uses.
+                let content = clipboardFieldContent
+                Text(content.text)
                     .font(.appMono(size: 13))
-                    .multilineTextAlignment(.leading)
-                    .foregroundColor(.white)
-                    .tint(.white)
-                    // A URL-paste field has no legitimate use for spell-
-                    // check/autocorrect/predictive-text.
-                    .autocorrectionDisabled()
-                    // The actual fix for a real, confirmed bug (root-caused
-                    // via a runtime diagnostic that logged every NSWindow
-                    // AppKit created/showed during launch): this field
-                    // becoming first responder made macOS briefly show its
-                    // system Password AutoFill suggestion window -- an
-                    // empty, undecorated, cross-process (NSRemoteView)
-                    // popover anchored right under the field -- because
-                    // nothing told AppKit this ISN'T a username/password
-                    // field. It appeared for a single frame (~30ms) then
-                    // self-dismissed once AutoFill found no matching saved
-                    // credentials. Two earlier theories (a system text-
-                    // completion candidate popover; a window-restoration
-                    // snapshot) were tried and shipped before this was
-                    // root-caused -- both harmless to also keep, but
-                    // neither was the actual cause. Explicitly hinting
-                    // .URL content type stops AppKit from ever attempting
-                    // the AutoFill suggestion for this field at all.
-                    .textContentType(.URL)
-                    .focused($urlFieldFocused)
+                    .foregroundColor(.white.opacity(content.isLink ? 1 : 0.18))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .allowsHitTesting(false)
                     .frame(height: fieldHeight, alignment: .center)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 10)
-                    // Leave room on the trailing edge for the clear button so
-                    // typed/pasted text never sits underneath it.
+                    // Leave room on the trailing edge for the clear button so the
+                    // text never sits underneath it.
                     .padding(.trailing, urlText.isEmpty ? 14 : 36)
                     .onDrop(of: ["public.url", "public.plain-text"], isTargeted: $isDragging) { providers in
                         self.handleDrop(providers: providers)
@@ -6731,7 +6733,7 @@ struct ContentView: View {
             // wait on the last one to finish. isAnalyzing still exists for
             // the underlying pipeline's own per-batch bookkeeping, it's
             // just no longer surfaced on this control.
-            let _pasteLabel: String = !readyToDownload ? "Setup Needed" : (_isRetry ? "Invalid" : (_isDuplicate ? "Already Analyzed" : "Paste & Analyze"))
+            let _pasteLabel: String = !readyToDownload ? "Setup Needed" : (_isRetry ? "Invalid" : (_isDuplicate ? "Already Analyzed" : "Analyze Link"))
             let _pasteIcon: String  = !readyToDownload ? "lock.fill" : (_isRetry ? "exclamationmark.triangle" : (_isDuplicate ? "checkmark.circle" : "doc.on.clipboard"))
             // Back to black/white per request -- keep red only for the
             // actual invalid/retry error state. Duplicate uses the same
@@ -6767,27 +6769,34 @@ struct ContentView: View {
                     .stroke(isDragging ? Color.white.opacity(DesignTokens.Text.secondary) : Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: isDragging ? 1.5 : DropGrid.fieldBorderWidth)
             )
         )
-        // Waiting-for-paste cue lives on the OUTER bar capsule (field +
+        // Waiting-for-a-click cue lives on the OUTER bar capsule (field +
         // embedded button together) so the pulse ring traces the entire
         // pill's true perimeter instead of stopping short at the inner
-        // text-field ZStack's bounds -- that mismatch used to read as a
-        // second nested capsule outline ending right before the button.
+        // text ZStack's bounds. Used to gate on the field being focused
+        // (the "now paste" moment) -- there's no more focus to have now
+        // that the field only ever displays, never accepts typing, so this
+        // pulses instead exactly when there's a real link sitting on the
+        // clipboard ready to go and nothing already queued from a drop.
         .overlay {
-            if urlFieldFocused && urlText.isEmpty {
+            if urlText.isEmpty, case .links = clipboardPreview {
                 WaitingPulseGlow()
             }
         }
-        // Rim glow on hover or focus (cursor in the field) -- same cue as
-        // every other interactive control's hover state, just applied to
-        // this bar's own outer rim instead of a button's.
+        // Rim glow on hover -- same cue as every other interactive control's
+        // hover state, just applied to this bar's own outer rim instead of a
+        // button's. No more focus state to also gate on (see above).
         .overlay {
-            HoverGlowRim(isActive: isUrlCardHovering || urlFieldFocused)
+            HoverGlowRim(isActive: isUrlCardHovering)
         }
         .onHover { isUrlCardHovering = $0 }
         // Same content column as everything beneath it (it used to be a
         // separate fixed 864pt cap, which left it narrower than the cards on
         // big windows and wider than them on small ones).
         .contentColumn()
+        .onAppear { refreshClipboardPreview() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshClipboardPreview()
+        }
         .onChange(of: urlText) {
             analyzeResult = nil
             duplicateURLDetected = false

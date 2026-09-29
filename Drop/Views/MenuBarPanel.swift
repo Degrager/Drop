@@ -164,9 +164,9 @@ struct MenuBarQuickView: View {
     private var wellContent: (icon: String, title: String, detail: String, isLink: Bool) {
         switch model.clipboard {
         case .empty:
-            return ("doc.on.clipboard", "Clipboard is empty", "Copy a link, then paste it here", false)
+            return ("doc.on.clipboard", "Clipboard is empty", "Copy a link to see it here", false)
         case .notLinks:
-            return ("doc.on.clipboard", "No link on the clipboard", "Copy a link, then paste it here", false)
+            return ("doc.on.clipboard", "No link on the clipboard", "Copy a link to see it here", false)
         case .links(_, let title, let detail):
             return ("link", title, detail, true)
         }
@@ -219,7 +219,7 @@ struct MenuBarQuickView: View {
         // into a green "Queued" for a couple of seconds.
         let inactive = !model.canPaste && !model.queued
         return GlassButton(
-            label: model.queued ? "Queued" : "Paste & Analyze",
+            label: model.queued ? "Queued" : "Analyze Link",
             icon: model.queued ? "checkmark" : "doc.on.clipboard",
             tint: model.queued ? DesignTokens.Accent.success : (inactive ? .white.opacity(0.4) : .white),
             verticalPadding: 9,

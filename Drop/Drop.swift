@@ -5121,13 +5121,18 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Collapsing only ever lowers the floor, so the window never needs to move; expanding can
     /// raise it above the window's current width, so this grows the window to fit if needed --
     /// the strict-minimum guarantee has to hold immediately, not just for the NEXT drag.
+    /// Instant, not `animate: true` -- AppKit's own animationResizeTime scales with how far the
+    /// frame moves, which for this jump (up to 200pt) stretched close to a full second, reported
+    /// live as "a second delay after clicking before anything happens" (the sidebar's OWN
+    /// animation starts immediately, but the window visually lagged behind it so badly the two
+    /// read as one long stall). The sidebar's own SwiftUI animation still gives the motion.
     func sidebarCollapsedDidChange(collapsed: Bool) {
         guard let window = NSApplication.shared.windows.first(where: { !($0 is NSPanel) }) else { return }
         applyMinimumSize(to: window)
         guard !collapsed, window.frame.width < WindowLayout.minimumSizeExpanded.width else { return }
         var frame = window.frame
         frame.size.width = WindowLayout.minimumSizeExpanded.width
-        window.setFrame(window.constrainFrameRect(frame, to: window.screen), display: true, animate: true)
+        window.setFrame(window.constrainFrameRect(frame, to: window.screen), display: true)
     }
 
     // Fires once when the user releases a window-edge drag (not on every

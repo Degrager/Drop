@@ -150,19 +150,6 @@ struct PreviewCard<Settings: View>: View {
     /// False hides everything below the header (belowHeader, settings, footer): a download
     /// under way or finished.
     var showsSettings: Bool = true
-    /// How many compact dropdown fields sit in each FieldsTrackRow of `settings`, in order
-    /// (e.g. Download's audio row with just BITRATE is `[1]`; Convert's video row with
-    /// CODEC+RESOLUTION+BITRATE is `[3]`; a hidden row -- Download's M4A, Convert's lossless
-    /// audio codec -- is simply left out of the array). PreviewCard can't count `settings`'
-    /// own content (it's an opaque @ViewBuilder closure), so each call site reports its own
-    /// real shape here -- purely for CardFacade's resize placeholder to draw the right number
-    /// of rows/fields instead of a guessed shape (reported live as not matching otherwise).
-    var settingsFieldCounts: [Int] = []
-    /// How many SegmentedCapsule pills sit in each of the top strip's field groups (DOWNLOAD
-    /// AS/CONVERT AS, then OUTPUT FORMAT), in the same order they're drawn -- one entry when
-    /// the first group is hidden entirely (Convert's showsModeRow == false). Same rationale
-    /// as settingsFieldCounts: CardFacade can't count real SegmentedCapsule options itself.
-    var topStripSegmentCounts: [Int] = []
 
     // Settings content
     @ViewBuilder var settings: () -> Settings
@@ -286,8 +273,6 @@ struct PreviewCard<Settings: View>: View {
             hasStatus: inlineStatus != nil,
             hasStatusLabel: statusLabel != nil,
             hasLink: expanded && showsSettings && !isAnalyzing && !secondaryTitle.isEmpty,
-            settingsFieldCounts: settingsFieldCounts,
-            topStripSegmentCounts: topStripSegmentCounts,
             reported: true
         ))
         // The analyzing card has exactly the finished card's shape (radius, padding, header

@@ -231,16 +231,22 @@ enum MediaMode: String, CaseIterable, Identifiable {
 }
 
 enum VideoFormat: String, CaseIterable, Identifiable {
-    // MOV removed: yt-dlp/ffmpeg can't merge AV1/VP9 into a real .mov container, so it silently
-    // saved as .mp4 anyway while showing "MOV" — a misleading option. QuickTime plays MP4 natively,
-    // so MP4 already covers that use case. (Convert tab's MOV is unaffected — that path re-encodes
-    // to a genuine .mov file and is a separate enum.)
-    case mp4, mkv, webm
+    // MOV was removed once, then re-added conditionally: yt-dlp/ffmpeg can't merge AV1/VP9
+    // into a real .mov container, so offering it unconditionally silently saved as .mp4
+    // anyway while still showing "MOV" — a misleading option. Rather than drop it
+    // entirely (QuickTime plays MP4 natively, so MP4 covers that case too), it's offered
+    // only for sources it can actually satisfy as a genuine remux — see
+    // isAvailable(forSourceVideoCodec:), used to filter the option list itself, so the
+    // option simply isn't there to pick for an incompatible source rather than silently
+    // lying about the container once picked. (Convert tab's MOV is unaffected — that path
+    // re-encodes to a genuine .mov file and is a separate enum.)
+    case mp4, mov, mkv, webm
     var id: String { rawValue }
     var label: String { rawValue.uppercased() }
     var note: String {
         switch self {
         case .mp4:  return "Universal compatibility, QuickTime-ready"
+        case .mov:  return "QuickTime, Final Cut Pro native"
         case .mkv:  return "Best quality container"
         case .webm: return "Web optimized"
         }
@@ -255,9 +261,18 @@ enum VideoFormat: String, CaseIterable, Identifiable {
         // WebM: merge directly; yt-dlp/ffmpeg handle AV1+opus in WebM fine.
         // --merge-output-format sets the container at merge time — --remux-video is redundant
         case .mp4:  return ["--merge-output-format", "mp4"]
+        case .mov:  return ["--merge-output-format", "mov"]
         case .mkv:  return ["--merge-output-format", "mkv"]
         case .webm: return ["--merge-output-format", "webm"]
         }
+    }
+    /// MOV can't actually hold AV1/VP9 (ffmpeg falls back to producing .mp4 despite the
+    /// requested container) — hidden for those sources rather than offered and silently
+    /// wrong. `codec` is the normalized family label from analysis (e.g. "AV1", "H264"),
+    /// nil when unknown; nil is treated as available rather than hiding it on a guess.
+    func isAvailable(forSourceVideoCodec codec: String?) -> Bool {
+        guard self == .mov, let codec else { return true }
+        return codec != "AV1" && codec != "VP9"
     }
 }
 
@@ -7034,7 +7049,7 @@ struct ContentView: View {
 
     private func downloadVideoFormatOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
         let p = preview.wrappedValue
-        return VideoFormat.allCases.map { f in
+        return VideoFormat.allCases.filter { $0.isAvailable(forSourceVideoCodec: p.sourceVideoCodec) }.map { f in
             SegmentOption(
                 // Every container here is a plain remux (VideoFormat.isNative is
                 // unconditionally true), so every chip gets the same dot -- unlike audio,

@@ -3237,14 +3237,15 @@ enum DesignTokens {
     // true black frosted glass at rest, not dark grey -- the tint depth is
     // what visually separates "alive glass" from a flat translucent panel.
     enum Glass {
-        // Resting black-frosted tint. Raised again from 0.82 -- against the
-        // window-wide base tint of 0.74, an 0.08 gap read as barely any
-        // separation at all, so cards blended into the background instead
-        // of standing out as a distinct layer. 0.93 gives real contrast
-        // while the glass material underneath still keeps it from ever
-        // looking like a flat, opaque black rectangle.
-        static let blackTint: Double = 0.93
-        static let blackTintDisabled: Double = 0.4
+        // 0.93 was tuned for the old hand-rolled VisualEffectBlur stack,
+        // where a heavy tint was needed to read as "black glass" at all.
+        // Under real Liquid Glass that same heavy tint just masks the
+        // material's own refraction/specular behavior -- reported live as
+        // "still black" on every surface except cards (which had already
+        // been lightened to 0.35 for a separate, earlier ask). Matching
+        // that same value here instead of re-tuning a second number.
+        static let blackTint: Double = 0.35
+        static let blackTintDisabled: Double = 0.15
     }
 
     // Interactive state opacities -- fill/stroke/glow at rest, hover, press.
@@ -3703,19 +3704,6 @@ struct GlassFieldCapsule: View {
     }
 }
 
-/// Cards specifically use a lighter tint than every other glass surface --
-/// the whole reason for this redesign was cards reading "too black" for
-/// good contrast, an ask that never applied to the sidebar/buttons/fields.
-/// Otherwise identical to GlassFill: same GlassBase primitive, same real
-/// Liquid Glass material, just a different tint constant.
-private struct CardGlassFill: View {
-    var cornerRadius: CGFloat
-
-    var body: some View {
-        GlassBase(tint: 0.35, shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    }
-}
-
 /// A card whose OUTLINE (glass, rim, glow) can stick out to the left of its
 /// contents. While the sidebar moves, the outline follows the sidebar's edge frame
 /// by frame -- cheap, only a shape changes -- while the contents are laid out once,
@@ -3752,7 +3740,7 @@ private struct LiveOutline: ViewModifier, Animatable {
         content
             .background(alignment: .topLeading) {
                 GeometryReader { geo in
-                    CardGlassFill(cornerRadius: cornerRadius)
+                    GlassFill(cornerRadius: cornerRadius)
                         // Same specular rim as every card, drawn by Core Animation.
                         .overlay(GlassRim(cornerRadius: cornerRadius).allowsHitTesting(false))
                         .frame(width: geo.size.width + overhang, height: geo.size.height)

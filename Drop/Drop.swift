@@ -4343,7 +4343,18 @@ struct HoverIconButton: View {
 
     var body: some View {
         let resolvedColor = isActive ? (activeColor ?? color) : color
-        GlassInteractive(shape: shape, tint: resolvedColor, isActive: isActive, disabled: disabled, action: action) {
+        // Clears the hover caption the instant the button is actually pressed, not
+        // just on hover-exit -- reported live: collapsing a card's settings (this
+        // exact button) leaves "Hide Options"/"Show Options" ghosted on screen,
+        // because the button ITSELF moves when the row above it shrinks/grows, and
+        // nothing tells AppKit's hover tracking that happened without a fresh
+        // mouse-moved event, so isHovering just stays true at the button's now-
+        // stale old position. The same risk applies to any other expandable button
+        // whose own click can shift layout (e.g. the sidebar's own toggle).
+        GlassInteractive(shape: shape, tint: resolvedColor, isActive: isActive, disabled: disabled, action: {
+            isHovering = false
+            action()
+        }) {
             Image(systemName: icon)
                 .font(.appMono(size: size))
                 // A button that changes what it is (collapse -> cancel -> redownload) swaps its

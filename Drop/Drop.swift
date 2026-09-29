@@ -4407,7 +4407,21 @@ struct HoverIconButton: View {
                     .clipShape(Capsule())
                     .offset(x: -(buttonWidth + 6))
                     .allowsHitTesting(false)
-                    .transition(.focus(blur: 5, scale: 0.9, opacity: 0.3, anchor: .trailing))
+                    // Insertion-only, like glassPopInOnly/blurInOnly (see AnyTransition's own
+                    // "if/else branches" comment): a SYMMETRIC transition here left the caption
+                    // visibly stuck mid-fade -- reported live as still ghosting after the
+                    // isHovering=false-on-click fix, which addressed a real but secondary risk
+                    // (the button's own hover state going stale), not this one. The actual
+                    // mechanism: an animated REMOVAL can get interrupted before it finishes
+                    // (isHovering flips again, or this card's OWN click also kicks off the
+                    // settings-collapse animation competing for the same frames), leaving a
+                    // half-blurred, half-scaled frame on screen indefinitely. Removal is now
+                    // instant; the fade-in still gets the pleasant animation.
+                    .transition(.asymmetric(
+                        insertion: .focus(blur: 5, scale: 0.9, opacity: 0.3, anchor: .trailing)
+                            .animation(.spring(response: 0.25, dampingFraction: 0.85)),
+                        removal: .identity
+                    ))
             }
         }
         .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isHovering)

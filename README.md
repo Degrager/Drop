@@ -1,6 +1,6 @@
 # Drop
 
-[![macOS 14+](https://img.shields.io/badge/macOS-14%2B-0A0A0A?style=flat-square&logo=apple&logoColor=white)](#system-requirements)
+[![macOS 26+](https://img.shields.io/badge/macOS-14%2B-0A0A0A?style=flat-square&logo=apple&logoColor=white)](#system-requirements)
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-0A0A0A?style=flat-square)](#system-requirements)
 [![Swift](https://img.shields.io/badge/Swift-SwiftUI-0A0A0A?style=flat-square&logo=swift&logoColor=white)](#how-it-works)
 
@@ -15,7 +15,7 @@ Drop is a fast, native macOS app for downloading and converting online video and
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later
+- macOS 26 (Tahoe) or later
 - Apple Silicon or Intel Mac
 
 ## Installation

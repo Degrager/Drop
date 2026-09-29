@@ -5700,13 +5700,43 @@ struct ContentView: View {
         .environment(\.sidebarLiveInset, sidebarWidth - WindowLayout.compactSidebarWidth)
         .environment(\.cardContentInset, pageInset - WindowLayout.compactSidebarWidth)
         .onChange(of: isCompactSidebar) { _, compact in
+            let target = compact ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
+            // A crossing caused by the window ITSELF being live-dragged snaps instantly --
+            // no animation, no scheduled work at all. Only a manual toggle click gets the
+            // sequence below. Reported live: "waving the window back and forth near the
+            // breakpoint" made the WINDOW ITSELF lag, not just the sidebar's own visuals --
+            // even at a short duration, each crossing's withAnimation + several scheduled
+            // asyncAfter callbacks is real synchronous work, and rapid oscillation can cross
+            // the breakpoint again before the previous crossing's work has finished, so it
+            // piles up. That work runs inside this onChange, which AppKit calls SYNCHRONOUSLY
+            // while tracking a live resize -- so it directly delays the window's own frame
+            // tracking, not just what's drawn inside it. A manual click can't repeat anywhere
+            // near fast enough to compound the same way, so it keeps the full glide.
+            if NSApp.keyWindow?.inLiveResize == true {
+                sidebarToggleGeneration += 1
+                sidebarSequencePlaying = false
+                // Also invalidates any in-flight manual-click sequence's own "set false"
+                // callback (via the generation bump above) -- without this explicit reset,
+                // an interrupted click could leave cards frozen behind the facade forever.
+                LiveResizeState.shared.setSidebarMoving(false)
+                var snap = Transaction()
+                snap.disablesAnimations = true
+                withTransaction(snap) {
+                    sidebarWidth = target
+                    sidebarDisplayCompact = compact
+                    pageInset = target
+                    if mainAreaWidth > 0 {
+                        columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth - (target - WindowLayout.compactSidebarWidth))
+                    }
+                }
+                return
+            }
             // Toggle sequence, per request: every row blurs/shrinks out AT
             // ONCE while the card visibly shrinks/grows; once the width lands
             // the new row set pops IN one by one, top-to-bottom. See
             // AnyTransition.dominoPop. The page beside the card is laid out
             // once at its final width (see body), so its breakpoints flip
             // once, at the start, rather than on every intermediate width.
-            let target = compact ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
             sidebarToggleGeneration += 1
             let generation = sidebarToggleGeneration
             // The toggle button and the window's width crossing

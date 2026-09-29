@@ -392,7 +392,7 @@ struct PreviewCard<Settings: View>: View {
                 // during analyze never remounts/re-renders once analyze
                 // finishes -- only the skeleton's opacity animates out from
                 // underneath an image that was already there.
-                ThumbnailSkeleton(isPulsing: !canRevealThumb)
+                ThumbnailSkeleton()
                     .opacity(canRevealThumb ? 0 : 1)
                 if let thumb = thumbnail {
                     // Sharpens out of a blur as the skeleton pulses away
@@ -424,9 +424,7 @@ struct PreviewCard<Settings: View>: View {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                 ZStack(alignment: .leading) {
                     if showsTitleBar {
-                        // A Core Animation pulse (a SwiftUI repeatForever here kept the whole
-                        // window redrawing at idle), still once the title is showing.
-                        PulsingSkeleton(cornerRadius: 4, isPulsing: !titleRevealed)
+                        SkeletonFill(cornerRadius: 4)
                             .frame(width: titlePhase >= 1 ? min(max(measuredTitleWidth, 60), Self.titleMaxWidth) : Self.defaultTitleBarWidth, height: 14)
                             .opacity(titleRevealed ? 0 : 1)
                     }

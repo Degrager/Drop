@@ -1336,9 +1336,15 @@ struct MetaLinesContent: View {
     }
 
     /// One row of the aligned grid. Each divider is a column of its own, so the dividers line up
-    /// from the IN row down to the OUT row, and it is drawn only between two cells that exist
-    /// (a row with no video has nothing to divide the length from).
-    private func gridRow(_ chips: [ChipData], _ label: String, out: Bool, withTime: Bool, hasVideoColumn: Bool) -> some View {
+    /// from the IN row down to the OUT row. A divider's presence is decided by whether that
+    /// column exists ANYWHERE across both rows (`hasVideoColumn`/`hasAudioColumn`), not by
+    /// whether THIS row happens to have a cell on both sides of it: switching the OUT row to
+    /// Video Only or Audio Only leaves it with just one of video/audio, but the IN row (the
+    /// source) still has both -- checking only this row's own cells hid the OUT row's divider
+    /// at that column while the IN row directly above it kept showing one, an inconsistent,
+    /// seemingly missing divider (reported live). Every row that has anything before a column
+    /// that exists anywhere gets that divider, even where its own cell on the far side is empty.
+    private func gridRow(_ chips: [ChipData], _ label: String, out: Bool, withTime: Bool, hasVideoColumn: Bool, hasAudioColumn: Bool) -> some View {
         let time = withTime ? chips.first(where: { $0.metaColumn == .time }) : nil
         let video = chips.first(where: { $0.metaColumn == .video })
         let audio = chips.first(where: { $0.metaColumn == .audio })
@@ -1346,10 +1352,10 @@ struct MetaLinesContent: View {
             tag(label, out: out)
             if withTime {
                 slot(time)
-                if hasVideoColumn { divider(time != nil && video != nil) }
+                if hasVideoColumn { divider(hasVideoColumn && time != nil) }
             }
             if hasVideoColumn { slot(video) }
-            divider(audio != nil && (video != nil || time != nil))
+            divider(hasAudioColumn && (video != nil || time != nil))
             slot(audio)
         }
     }
@@ -1361,11 +1367,13 @@ struct MetaLinesContent: View {
         // No video column when neither row has video (an audio-only file): an empty column would
         // still cost its spacing, and push the divider away from the audio it belongs to.
         let hasVideoColumn = (input + output).contains { $0.metaColumn == .video }
+        // Same idea for the audio column/divider -- see gridRow's own doc comment.
+        let hasAudioColumn = (input + output).contains { $0.metaColumn == .audio }
         // The row: tag, [time, its divider if there is video], [video], the divider before audio, audio.
         let columns = 1 + (withTime ? (hasVideoColumn ? 2 : 1) : 0) + (hasVideoColumn ? 1 : 0) + 2
         return AlignedRows(columns: columns, columnSpacing: 9, rowSpacing: 3) {
-            if !input.isEmpty { gridRow(input, "IN", out: false, withTime: withTime, hasVideoColumn: hasVideoColumn) }
-            if !output.isEmpty { gridRow(output, "OUT", out: true, withTime: withTime, hasVideoColumn: hasVideoColumn) }
+            if !input.isEmpty { gridRow(input, "IN", out: false, withTime: withTime, hasVideoColumn: hasVideoColumn, hasAudioColumn: hasAudioColumn) }
+            if !output.isEmpty { gridRow(output, "OUT", out: true, withTime: withTime, hasVideoColumn: hasVideoColumn, hasAudioColumn: hasAudioColumn) }
         }
     }
 
@@ -1496,6 +1504,14 @@ struct PersistentCapsule: View {
     /// split second." Measuring the real target means .growing and .shown can share ONE width
     /// (no separate "now relax to nil" step needed at all, which is what caused the late jump).
     @State private var measuredWidth: CGFloat?
+    /// True for the brief window between new content landing (`lastChips`/`lastNote`
+    /// changing) and the hidden probe's re-measurement actually arriving -- see the fixedSize
+    /// comment above for why a same-kind swap needs this. Cleared on a fixed timer rather than
+    /// waiting on the next `onPreferenceChange` firing: that closure only fires when the
+    /// measured value actually differs from before, so a swap that happens to land on the
+    /// exact same width would otherwise never clear this.
+    @State private var contentPendingMeasurement = false
+    private static let measurementSettleDuration: Double = 0.15
 
     private static let pillWidth: CGFloat = 150
     private static let growDuration: Double = 0.3
@@ -1553,12 +1569,18 @@ struct PersistentCapsule: View {
                     // small width normal height, to tall height for a split second, back to
                     // normal height but correct width." Only .shown lets this wrap normally
                     // again, so a genuinely narrow window still wraps as before.
-                    .fixedSize(horizontal: phase != .shown, vertical: false)
+                    //
+                    // `contentPendingMeasurement` covers the SAME class of bug for a same-
+                    // kind swap while already .shown (switching audio format -- e.g. MP3 to
+                    // FLAC -- with the card already expanded): `phase` never leaves .shown for
+                    // that swap, so this fixedSize guard alone missed it, and the capsule
+                    // visibly grew taller for a split second there too (reported live).
+                    .fixedSize(horizontal: phase != .shown || contentPendingMeasurement, vertical: false)
                     .opacity(phase == .shown ? 1 : 0)
                     .blur(radius: phase == .shown ? 0 : 5)
             } else if let note = lastNote {
                 NoteContent(icon: note.icon, text: note.text)
-                    .fixedSize(horizontal: phase != .shown, vertical: false)
+                    .fixedSize(horizontal: phase != .shown || contentPendingMeasurement, vertical: false)
                     .opacity(phase == .shown ? 1 : 0)
                     .blur(radius: phase == .shown ? 0 : 5)
             }
@@ -1602,11 +1624,27 @@ struct PersistentCapsule: View {
         .reportsFacadeMeta()
         .frame(maxWidth: .infinity, alignment: .leading)
         .onPreferenceChange(CapsuleWidthPreferenceKey.self) { newValue in
-            // A brief animation here too: this can legitimately fire a frame after `advance`
-            // already started an unrelated transition (the probe re-measures asynchronously),
-            // so if the target nudges afterward, it eases into place instead of snapping.
-            withAnimation(.easeOut(duration: 0.15)) {
+            if measuredWidth == nil, phase == .shown {
+                // The very first measurement this view instance has ever taken, with
+                // content that was ALREADY resolved before this render (phase never
+                // passed through .growing to get here) -- this happens when the whole
+                // Download/Convert tab is torn down and rebuilt after switching to
+                // another tab and back, which resets every @State here including this
+                // one even though the card itself finished analyzing long ago.
+                // Animating this first width made the capsule visibly grow from the
+                // analyzing pill's own width every single time you returned to the
+                // tab, even though nothing was actually still analyzing (reported
+                // live). A genuinely new card's first measurement still animates:
+                // phase is .growing (not .shown yet) at that exact moment -- see
+                // growThenReveal.
                 measuredWidth = newValue
+            } else {
+                // A brief animation here too: this can legitimately fire a frame after `advance`
+                // already started an unrelated transition (the probe re-measures asynchronously),
+                // so if the target nudges afterward, it eases into place instead of snapping.
+                withAnimation(.easeOut(duration: 0.15)) {
+                    measuredWidth = newValue
+                }
             }
         }
         .onChange(of: content) { _, newContent in advance(to: newContent) }
@@ -1634,10 +1672,14 @@ struct PersistentCapsule: View {
                 lastChips = chips
                 growThenReveal()
             } else if previousKind == .output {
-                // Same kind (the Video/Audio toggle's own output line changing): swap in
-                // place, unanimated -- matches the design this replaces, which deliberately
-                // never animated a change WITHIN a kind.
+                // Same kind (the Video/Audio toggle's own output line changing, or a format/
+                // bitrate change with the card already expanded): swap in place, unanimated --
+                // matches the design this replaces, which deliberately never animated a change
+                // WITHIN a kind. Still needs markPendingMeasurement: `phase` stays .shown
+                // through this whole swap, so nothing else guards against the stale-width
+                // wrap-then-unwrap flash (see the fixedSize comment in body).
                 lastChips = chips
+                markPendingMeasurement()
             } else {
                 // note -> output without a trip through analyzing: a plain cross-fade.
                 withAnimation(.easeInOut(duration: Self.swapDuration)) {
@@ -1652,12 +1694,26 @@ struct PersistentCapsule: View {
                 growThenReveal()
             } else if previousKind == .note {
                 lastNote = (icon, text)
+                markPendingMeasurement()
             } else {
                 withAnimation(.easeInOut(duration: Self.swapDuration)) {
                     lastNote = (icon, text)
                     lastChips = nil
                 }
             }
+        }
+    }
+
+    /// Flags that new content just landed and the hidden probe hasn't measured it yet, then
+    /// clears itself after a fixed delay -- not left to `onPreferenceChange` alone, which only
+    /// fires when the newly measured width actually differs from before (a swap that happens to
+    /// land on the same width would otherwise never clear it).
+    private func markPendingMeasurement() {
+        contentPendingMeasurement = true
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(Self.measurementSettleDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            contentPendingMeasurement = false
         }
     }
 
@@ -2206,6 +2262,7 @@ extension View {
                     // card's own height (never flipping) if no window is found, which
                     // only means the old below-only behavior for that edge case.
                     let cardGlobalTop = proxy.frame(in: .global).minY
+                    let cardGlobalLeft = proxy.frame(in: .global).minX
                     let windowHeight = NSApplication.shared.windows.first(where: { !($0 is NSPanel) })?.frame.height ?? (cardGlobalTop + proxy.size.height)
                     // Reserves room for the bottom bar/window chrome below the content
                     // area -- approximate on purpose (see the Entry.height doc comment).
@@ -2213,26 +2270,111 @@ extension View {
                     let opensUpward = cardGlobalTop + rect.maxY + 6 + entry.height > windowHeight - bottomMargin
                     let y = opensUpward ? rect.minY - 6 - entry.height : rect.maxY + 6
                     ZStack(alignment: .topLeading) {
-                        // No `.transition` here: this is a full-card-sized invisible
-                        // tap catcher, not something the user ever sees. Blurring and
-                        // scaling it along with the menu (the first version transitioned
-                        // this whole ZStack together) meant animating a layer the size
-                        // of the card on every open and close -- confirmed as the
-                        // dismiss stutter. Only the small menu below needs the effect.
-                        Color.black.opacity(0.001)
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .contentShape(Rectangle())
-                            .onTapGesture { withAnimation(.spring(response: 0.2)) { openID.wrappedValue = nil } }
+                        // Was an invisible, card-sized SwiftUI tap-catcher (a view that
+                        // CLAIMS hit-testing over the whole card so it can see an
+                        // "outside" tap) -- that meant the tap which dismissed the menu
+                        // was also CONSUMED, never reaching whatever real control was
+                        // underneath it, so acting on anything else while a menu was
+                        // open took two clicks: one to dismiss, a second to actually
+                        // act (reported live). An AppKit local event monitor instead
+                        // OBSERVES every left-click in the window without claiming
+                        // SwiftUI's own hit-testing at all, so the same click both
+                        // dismisses this menu and still reaches its real target.
+                        OutsideClickMonitor(
+                            // Unioned with the triggering field's OWN rect (`rect`, not
+                            // just the popover's), or clicking the trigger again to close
+                            // it -- the normal way to dismiss any of these -- raced its own
+                            // toggle action: this monitor saw that click as "outside" and
+                            // closed the menu first, so the field's own `isOpen ? nil : id`
+                            // then read it as already-closed and reopened it (reported
+                            // live: "works if i click and hold, but then re-opens after
+                            // release"). Excluding the trigger's own area means a click on
+                            // it is never treated as an outside dismiss at all -- its own
+                            // existing toggle handles open/close by itself, undisturbed.
+                            excluding: CGRect(x: cardGlobalLeft + x, y: cardGlobalTop + y, width: entry.width, height: entry.height)
+                                .union(CGRect(x: cardGlobalLeft + rect.minX, y: cardGlobalTop + rect.minY, width: rect.width, height: rect.height)),
+                            windowHeight: windowHeight
+                        ) {
+                            withAnimation(.spring(response: 0.2)) { openID.wrappedValue = nil }
+                        }
+                        .frame(width: 0, height: 0)
                         entry.content()
                             .offset(x: x, y: y)
                             .transition(.focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top))
                     }
                 }
             }
-            // Only intercepts clicks while something is actually open -- otherwise this
-            // full-card-sized layer would sit over every other control on the card.
-            .allowsHitTesting(openID.wrappedValue != nil)
         }
+    }
+}
+
+/// Watches every left-click in the window and calls `action` when it lands outside
+/// `excluding`, WITHOUT consuming the event -- unlike a SwiftUI view that claims hit-testing
+/// over a region to catch an "outside" tap, this lets the very same click that dismisses a
+/// popover also continue on to whatever real control is actually underneath it. Purely an
+/// event observer, never part of the view hierarchy's own hit-testing (see `hitTest` below).
+/// `excluding` and `windowHeight` are both in SwiftUI's top-left-origin, Y-down coordinate
+/// space (matching dropdownPopoverOverlay's own window-relative math) -- converted here to
+/// AppKit's bottom-left-origin, Y-up `NSEvent.locationInWindow`.
+struct OutsideClickMonitor: NSViewRepresentable {
+    let excluding: CGRect
+    let windowHeight: CGFloat
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> MonitorView {
+        let view = MonitorView()
+        view.excluding = excluding
+        view.windowHeight = windowHeight
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ nsView: MonitorView, context: Context) {
+        nsView.excluding = excluding
+        nsView.windowHeight = windowHeight
+        nsView.action = action
+    }
+
+    final class MonitorView: NSView {
+        var excluding: CGRect = .zero
+        var windowHeight: CGFloat = 0
+        var action: (() -> Void)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            guard window != nil else { return }
+            // A local monitor always gets first look at an event, before AppKit's
+            // own normal dispatch -- true for every event type, so watching
+            // mouseUp instead of mouseDown (an earlier version of this) didn't
+            // change the ordering, only which half of the click it raced.
+            // Calling `action` synchronously here started tearing down this
+            // popover's view hierarchy WHILE the target control's own
+            // mouseDown->mouseUp click-tracking was still using it, cancelling
+            // the target's own click before it could complete (reported live
+            // both ways: needed two clicks, and separately, a second click
+            // doing nothing after switching to mouseUp). Returning the event
+            // unchanged lets normal dispatch -- including the target's own
+            // click -- run first and finish completely in this same turn;
+            // deferring `action` to the NEXT run loop turn (main.async) makes
+            // sure this popover only starts disappearing after that.
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                guard let self, event.window === self.window else { return event }
+                let point = CGPoint(x: event.locationInWindow.x, y: self.windowHeight - event.locationInWindow.y)
+                if !self.excluding.contains(point) {
+                    DispatchQueue.main.async { [weak self] in self?.action?() }
+                }
+                return event
+            }
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 

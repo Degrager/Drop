@@ -5389,7 +5389,16 @@ struct ContentView: View {
     private static let sidebarWidthDuration: Double = 0.22
     /// Resize style: how long the card takes to shrink/grow, with its tabs and
     /// icons resizing along with it instead of leaving and popping back.
-    private static let sidebarResizeDuration: Double = 0.3
+    /// Was 0.3 -- a window-drag crossing the 1000pt breakpoint force-collapses/
+    /// expands the sidebar WHILE every drag frame is also re-laying-out the
+    /// page, and animating that alongside a live AppKit resize stalls frames
+    /// (measured: ~6 per crossing at 0.3s). Halving the duration roughly halves
+    /// the stall count (measured: ~3 per crossing at 0.15s) -- reported live as
+    /// still stuttering at the old duration even with the page/card side of a
+    /// resize now smooth (see the card-facade and pulse-animation fixes this
+    /// same session). A manual sidebar-toggle click is unaffected either way,
+    /// it was never the part that stuttered.
+    private static let sidebarResizeDuration: Double = 0.15
     // How long the reveal's last row takes to read as fully settled: its own
     // delay plus a little slack for its spring's overshoot to visibly damp
     // out (a spring doesn't stop dead at `response`, it keeps interpolating

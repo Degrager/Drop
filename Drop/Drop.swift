@@ -1051,8 +1051,19 @@ struct Download: Identifiable {
             // M4A is native passthrough (no re-encode), so its real bitrate is the source's
             // own rather than one of the quality presets. Auto is the same idea for a
             // re-encoded format: it means "match the source exactly," so it shows that real
-            // number too instead of the generic "Auto" label.
-            let bitrate = (format == .m4a || audioQuality == .auto) ? bitrateLabel(kbps: snapshot.sourceABR) : audioQuality.label
+            // number too instead of the generic "Auto" label. FLAC repurposes the same enum
+            // cases for a sample-rate tier instead of a bitrate (see AudioQuality.flacLabel) --
+            // falling through to audioQuality.label here showed a literal "256kbps"/"128kbps"
+            // that didn't match the BITRATE dropdown's own "96kHz"/"48kHz" for that exact same
+            // selection (reported live).
+            let bitrate: String?
+            if format == .flac {
+                bitrate = audioQuality.flacLabel
+            } else if format == .m4a || audioQuality == .auto {
+                bitrate = bitrateLabel(kbps: snapshot.sourceABR)
+            } else {
+                bitrate = audioQuality.label
+            }
             result.append(.audio([format.rawValue.uppercased(), snapshot.sourceChannelLabel, bitrate]) ?? .audioPlaceholder)
         case .videoAndAudio:
             // Video is never re-encoded when merging video+audio, so the
@@ -6944,7 +6955,7 @@ struct ContentView: View {
                             // Every video container is a plain remux -- every option is
                             // "Original," so there's no Re-encodes counterpart to explain,
                             // unlike audio where only M4A qualifies.
-                            nativeLegend(positiveLabel: "Original", showReencodeHint: p.mediaMode == .audioOnly)
+                            nativeLegend(positiveLabel: "Original")
                         }
                         .frame(height: 15, alignment: .leading)
                         SegmentedCapsule(options: p.mediaMode == .audioOnly
@@ -6981,7 +6992,17 @@ struct ContentView: View {
                     .id(p.mediaMode)
                     .transition(.pageSwap)
                 }
-                .animation(.easeOut(duration: 0.2), value: p.mediaMode)
+                // Scoped to BOTH: mediaMode swaps which row can appear at all (VIDEO vs
+                // AUDIO), but the AUDIO row can also appear/disappear on its own within
+                // audioOnly mode alone -- switching TO m4a (no bitrate to offer) or away
+                // from it. That second case doesn't touch mediaMode, so scoping this to
+                // mediaMode alone left it with no active animation at all: the row's
+                // .transition(.pageSwap) exists but has nothing animating to apply it to,
+                // so the card's height snapped shut instantly instead of easing shut
+                // (reported live). A plain String, not a tuple: .animation(_:value:)
+                // needs one Equatable value, and a raw tuple of two Equatable enums isn't
+                // itself Equatable.
+                .animation(.easeOut(duration: 0.2), value: "\(p.mediaMode.rawValue)|\(p.audioFormat.rawValue)")
             }
         }
     }
@@ -7419,8 +7440,17 @@ struct ContentView: View {
                 // M4A is native passthrough (no re-encode -- see audioFormat's own doc
                 // comment), so its real bitrate is the source's own rather than one of the
                 // quality presets. Auto means the same thing for a re-encoded format --
-                // "match the source exactly" -- so it shows that real number too.
-                let bitrate = (audioFormat == .m4a || audioQuality == .auto) ? bitrateLabel(kbps: sourceABR) : audioQuality.label
+                // "match the source exactly" -- so it shows that real number too. FLAC
+                // repurposes the same enum cases for a sample-rate tier instead of a
+                // bitrate (see AudioQuality.flacLabel) -- mirrors Download.outputChips.
+                let bitrate: String?
+                if audioFormat == .flac {
+                    bitrate = audioQuality.flacLabel
+                } else if audioFormat == .m4a || audioQuality == .auto {
+                    bitrate = bitrateLabel(kbps: sourceABR)
+                } else {
+                    bitrate = audioQuality.label
+                }
                 result.append(.audio([audioFormat.rawValue.uppercased(), sourceChannelLabel, bitrate]) ?? .audioPlaceholder)
             case .videoAndAudio:
                 // Video and audio are both stream-copied when merging, so the
@@ -8459,25 +8489,16 @@ struct FlowLayout: Layout {
 // hover growth to overlap neighboring chips. Selection/hover feedback comes
 // from glow + border + background only.
 
-/// Small legend explaining the green (positive/native/original) vs amber (re-encode) dot
-/// shown on format/codec chips. `positiveLabel` reads "Native" for Download's format rows
-/// (true remux-native containers) and "Original" for Convert's codec rows (matches source).
-func nativeLegend(positiveLabel: String = "Native", showReencodeHint: Bool = true) -> some View {
-    // Stacked, one entry per line: it lives in FormRow's narrow label column,
-    // where the two side by side used to wrap "Re-encodes" mid-word.
-    VStack(alignment: .leading, spacing: 2) {
-        HStack(spacing: 4) {
-            Circle().fill(DesignTokens.Accent.success).frame(width: 5, height: 5)
-            Text(positiveLabel).font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                .lineLimit(1).fixedSize()
-        }
-        if showReencodeHint {
-            HStack(spacing: 4) {
-                Circle().fill(DesignTokens.Accent.warning).frame(width: 5, height: 5)
-                Text("Re-encodes").font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
-                    .lineLimit(1).fixedSize()
-            }
-        }
+/// Small legend explaining the green (positive/native/original) dot shown on format/codec
+/// chips. `positiveLabel` reads "Native" for Download's format rows (true remux-native
+/// containers) and "Original" for Convert's codec rows (matches source). The amber
+/// re-encode counterpart was removed -- the per-chip dot already distinguishes native
+/// from re-encoding options, so a second line spelling that out here was redundant.
+func nativeLegend(positiveLabel: String = "Native") -> some View {
+    HStack(spacing: 4) {
+        Circle().fill(DesignTokens.Accent.success).frame(width: 5, height: 5)
+        Text(positiveLabel).font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+            .lineLimit(1).fixedSize()
     }
 }
 

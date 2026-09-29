@@ -3463,9 +3463,7 @@ struct GlassInteractive<Content: View>: View {
                             // (e.g. urlCard's outer capsule) already paints
                             // this; stacking it again doubles the tint and
                             // reads as a visible second pill.
-                            VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                            Color.black.opacity(disabled ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint)
-                            DitherNoise(opacity: 0.035)
+                            GlassBase(tint: disabled ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint, grain: 0.035)
                         }
                         // Keyed on isActive so selecting/deselecting swaps the fill
                         // layer (chipFill) instead of lerping tint AND alpha together,
@@ -3729,11 +3727,17 @@ struct WindowDither: View {
     }
 }
 
-/// The frosted fill of a card (blur, black tint, wash, grain), clipped to its
-/// rounded shape -- shared by GlassCard and LiveGlassCard.
-struct GlassFill: View {
-    var cornerRadius: CGFloat
-    var opacity: Double
+/// The unclipped blur+tint+wash+grain stack behind every hand-rolled glass
+/// surface in the app (cards, buttons, capsule fields, popovers). Callers
+/// clip to whatever shape they need and add their own stroke/shadow --
+/// this is just the fill. Consolidating it here means the eventual switch
+/// to real Liquid Glass (see CardGlassFill) only has to change one place
+/// to reach every surface below, instead of the 6+ call sites that used
+/// to hand-roll this same ZStack independently.
+struct GlassBase: View {
+    var tint: Double = DesignTokens.Glass.blackTint
+    var wash: Double = 0
+    var grain: Double = 0
 
     var body: some View {
         ZStack {
@@ -3743,15 +3747,73 @@ struct GlassFill: View {
             VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
             // Heavy black tint on top so the material reads as black
             // smoked glass, not grey.
-            Color.black.opacity(DesignTokens.Glass.blackTint)
-            Color.white.opacity(opacity * DesignTokens.Glass.whiteWash)
-            // Fine grain across the frosted-glass fill -- breaks up
-            // 8-bit banding on the near-black surface and gives the
-            // card a textured, physical "frosted" quality instead of
-            // a flat tinted panel.
-            DitherNoise(opacity: 0.04)
+            Color.black.opacity(tint)
+            if wash > 0 {
+                Color.white.opacity(wash)
+            }
+            if grain > 0 {
+                // Fine grain across the frosted-glass fill -- breaks up
+                // 8-bit banding on the near-black surface and gives the
+                // surface a textured, physical "frosted" quality instead
+                // of a flat tinted panel.
+                DitherNoise(opacity: grain)
+            }
         }
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
+/// The frosted fill of a card (blur, black tint, wash, grain), clipped to its
+/// rounded shape -- shared by GlassCard and LiveGlassCard.
+struct GlassFill: View {
+    var cornerRadius: CGFloat
+    var opacity: Double
+
+    var body: some View {
+        GlassBase(wash: opacity * DesignTokens.Glass.whiteWash, grain: 0.04)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
+/// The same frosted fill as GlassFill/GlassCard, clipped to a capsule and
+/// ringed with the standard field border -- the exact recipe the Download
+/// paste field, Convert's drop-zone bar, History's search bar, and the Log
+/// header all used to hand-roll independently. `isDragging` dims the tint
+/// and brightens the border for the drag-over cue (Download/Convert only;
+/// History and Log simply never pass it).
+struct GlassFieldCapsule: View {
+    var isDragging: Bool = false
+
+    var body: some View {
+        GlassBase(
+            tint: isDragging ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint,
+            wash: 0.55 * DesignTokens.Glass.whiteWash,
+            grain: 0.04
+        )
+        .clipShape(Capsule())
+        .overlay(
+            Capsule()
+                .stroke(
+                    isDragging ? Color.white.opacity(DesignTokens.Text.secondary) : Color.white.opacity(DropGrid.fieldBorderOpacity),
+                    lineWidth: isDragging ? 1.5 : DropGrid.fieldBorderWidth
+                )
+        )
+    }
+}
+
+/// Cards specifically (via LiveOutline/LiveGlassCard) use the real system Liquid
+/// Glass material instead of GlassFill's hand-rolled VisualEffectBlur + flat black
+/// tint -- reported live as "its justa gradient": the manual tint/wash stack has no
+/// actual dynamic refraction, just a static color layered over a blur, so lowering
+/// its opacity alone can't make it read as genuine glass. Liquid Glass is real
+/// system material with adaptive specular/refractive behavior. Scoped to cards
+/// only -- the sidebar, buttons and paste field still use GlassFill and are
+/// unaffected. Requires macOS 26+ (raised from 14 for this).
+private struct CardGlassFill: View {
+    var cornerRadius: CGFloat
+
+    var body: some View {
+        Color.clear
+            .glassEffect(.regular.tint(.black.opacity(0.35)), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
@@ -3793,7 +3855,7 @@ private struct LiveOutline: ViewModifier, Animatable {
         content
             .background(alignment: .topLeading) {
                 GeometryReader { geo in
-                    GlassFill(cornerRadius: cornerRadius, opacity: opacity)
+                    CardGlassFill(cornerRadius: cornerRadius)
                         // Same specular rim as every card, drawn by Core Animation.
                         .overlay(GlassRim(cornerRadius: cornerRadius).allowsHitTesting(false))
                         .frame(width: geo.size.width + overhang, height: geo.size.height)
@@ -6821,22 +6883,11 @@ struct ContentView: View {
         .frame(height: fieldHeight)
         .background(
             // Same black-frosted-glass material as every card and the
-            // sidebar (VisualEffectBlur + black tint + white wash + grain),
-            // just clipped to a Capsule instead of GlassCard's
+            // sidebar, just clipped to a Capsule instead of GlassCard's
             // RoundedRectangle -- the field used to be a flat
             // Color.white.opacity(0.05) fill, a visibly different/lighter
             // material than the rest of the app's glass surfaces.
-            ZStack {
-                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                Color.black.opacity(isDragging ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint)
-                Color.white.opacity(0.55 * DesignTokens.Glass.whiteWash)
-                DitherNoise(opacity: 0.04)
-            }
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(isDragging ? Color.white.opacity(DesignTokens.Text.secondary) : Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: isDragging ? 1.5 : DropGrid.fieldBorderWidth)
-            )
+            GlassFieldCapsule(isDragging: isDragging)
         )
         // Waiting-for-a-click cue lives on the OUTER bar capsule (field +
         // embedded button together) so the pulse ring traces the entire

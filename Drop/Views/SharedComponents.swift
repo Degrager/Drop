@@ -890,19 +890,7 @@ struct LogView: View {
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity)
         .frame(height: fieldHeight, alignment: .center)
-        .background(
-            ZStack {
-                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                Color.black.opacity(DesignTokens.Glass.blackTint)
-                Color.white.opacity(0.55 * DesignTokens.Glass.whiteWash)
-                DitherNoise(opacity: 0.04)
-            }
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth)
-            )
-        )
+        .background(GlassFieldCapsule())
         // Fills the tab's content column exactly (the whole Log panel is
         // pinned to it -- see ContentView), matching every other tab's
         // header bar.
@@ -2272,15 +2260,23 @@ private struct DropdownMenuRow: View {
 private struct DropdownMenuChrome<Content: View>: View {
     @ViewBuilder let content: () -> Content
     var body: some View {
-        content()
-            .background(
-                ZStack {
-                    VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                    Color.black.opacity(DesignTokens.Glass.blackTint)
-                }
-            )
-            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
+        content().popoverGlassChrome()
+    }
+}
+
+/// The glass chrome shared by every floating popover surface in the app
+/// (dropdown menus above, Convert's file-switcher popup) -- blur + black
+/// tint, a hairline rim, two stacked shadows for depth against the black
+/// card behind it. Pulled out as its own modifier (rather than only living
+/// inside DropdownMenuChrome) so surfaces that build their popup content
+/// directly, instead of through DropdownMenuChrome's wrapper, can still
+/// share the exact same recipe instead of re-declaring it.
+extension View {
+    func popoverGlassChrome(cornerRadius: CGFloat = DesignTokens.Radius.large) -> some View {
+        self
+            .background(GlassBase(tint: DesignTokens.Glass.blackTint))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
             .shadow(color: .black.opacity(0.5), radius: 6, y: 3)
             .shadow(color: .black.opacity(0.6), radius: 24, y: 12)

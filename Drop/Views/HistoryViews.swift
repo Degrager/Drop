@@ -113,19 +113,7 @@ struct HistoryView: View {
             }
         }
         .frame(height: fieldHeight)
-        .background(
-            ZStack {
-                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                Color.black.opacity(DesignTokens.Glass.blackTint)
-                Color.white.opacity(0.55 * DesignTokens.Glass.whiteWash)
-                DitherNoise(opacity: 0.04)
-            }
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth)
-            )
-        )
+        .background(GlassFieldCapsule())
         // Rim glow on hover or focus (cursor in the field) -- same cue as
         // urlCard's and Convert's header bars.
         .overlay {
@@ -390,13 +378,8 @@ struct HistoryRow: View {
         // versus the rest of the design language). Mirrors GlassCard's
         // exact layer order: blur base, black tint, white wash, hover lift.
         .background(
-            ZStack {
-                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                Color.black.opacity(DesignTokens.Glass.blackTint)
-                Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Glass.whiteWash)
-                DitherNoise(opacity: 0.04)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous))
+            GlassBase(wash: hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Glass.whiteWash, grain: 0.04)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous))
         )
         .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
             .stroke(Color.white.opacity(hovering ? DesignTokens.Interactive.strokeHover : DesignTokens.Interactive.strokeRest), lineWidth: 0.5))

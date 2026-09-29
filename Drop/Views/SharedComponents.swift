@@ -1098,6 +1098,12 @@ struct SidebarTabItem: View {
             isActive: isSelected,
             activeFillOverride: (rest: 0.05, active: 0.14, hover: 0.09, press: 0.17),
             restStrokeOverride: 0.34,
+            // chipFill's default 0.9 scale was tuned for chip-scale elements --
+            // on a full-width pill this wide, that same 10% delta is visibly
+            // tens of points, so the selected fill starts noticeably narrower
+            // than the pill and grows to meet it. 0.98 keeps the same soft
+            // pop at a scale that doesn't read as its own separate shape.
+            fillScaleOverride: 0.98,
             action: action
         ) {
             HStack(spacing: 7) {

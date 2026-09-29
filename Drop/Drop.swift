@@ -6939,19 +6939,7 @@ struct ContentView: View {
             primaryControl: controls?.primary,
             secondaryControl: controls?.secondary,
             onCancel: cancelDownload,
-            showsSettings: dl == nil && !failedAnalyze,
-            // The VIDEO row always has exactly 1 field (RESOLUTION); the AUDIO row also has
-            // exactly 1 (BITRATE) but only exists at all for a non-M4A format -- M4A hides
-            // the row entirely (see the settings closure below).
-            settingsFieldCounts: (p.mediaMode != .audioOnly || p.audioFormat != .m4a) ? [1] : [],
-            // DOWNLOAD AS has 2 options normally, but only 1 (Audio Only) for a source with
-            // no video track at all. OUTPUT FORMAT's real count already comes from the same
-            // options builder the real row uses, so it can't drift out of sync with it (MOV's
-            // own AV1/VP9 gating, WAV/M4A/MP3/FLAC always being 4, etc.).
-            topStripSegmentCounts: [
-                p.hasVideo ? 2 : 1,
-                p.mediaMode == .audioOnly ? downloadAudioFormatOptions(preview: preview).count : downloadVideoFormatOptions(preview: preview).count
-            ]
+            showsSettings: dl == nil && !failedAnalyze
         ) {
             // Same field layout as Convert's own analyze card (the 2026-09-26
             // redesign, see [[convert-analyze-lag]]): DOWNLOAD AS and FORMAT
@@ -6973,7 +6961,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         FieldCaption(icon: "switch.2", text: "DOWNLOAD AS")
                             .frame(height: 15, alignment: .leading)
-                        SegmentedCapsule(options: downloadModeOptions(preview: preview), fill: false)
+                        SegmentedCapsule(options: downloadModeOptions(preview: preview), fill: false, groupID: "downloadAs")
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 10) {
@@ -6987,7 +6975,7 @@ struct ContentView: View {
                         .frame(height: 15, alignment: .leading)
                         SegmentedCapsule(options: p.mediaMode == .audioOnly
                             ? downloadAudioFormatOptions(preview: preview)
-                            : downloadVideoFormatOptions(preview: preview))
+                            : downloadVideoFormatOptions(preview: preview), groupID: "outputFormat")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }

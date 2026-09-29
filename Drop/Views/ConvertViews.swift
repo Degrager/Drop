@@ -2689,30 +2689,6 @@ struct ConvertPreviewCard: View {
     /// would just be a single, unpressable segment.
     private var showsModeRow: Bool { modeOptions.count > 1 }
 
-    /// The real per-row field count below, for CardFacade's resize placeholder (see
-    /// PreviewCard.settingsFieldCounts) -- mirrors the settings closure's own conditions
-    /// exactly: VIDEO's CODEC is always there, RESOLUTION/BITRATE join only when the source
-    /// actually offers them; AUDIO's CODEC is always there, BITRATE joins only when the
-    /// chosen codec has one (a lossless codec's row keeps its Spacer-filled width instead).
-    private var settingsFieldCounts: [Int] {
-        var counts: [Int] = []
-        if job.mediaMode.isVideo {
-            counts.append(1 + (job.availableResolutions.isEmpty ? 0 : 1) + (job.supportsVideoBitrate ? 1 : 0))
-        }
-        if job.mediaMode != .videoOnly {
-            counts.append(job.supportsAudioBitrate ? 2 : 1)
-        }
-        return counts
-    }
-
-    /// Same idea as settingsFieldCounts, for the top strip's two SegmentedCapsule groups
-    /// (CONVERT AS, then OUTPUT FORMAT) -- reuses the same option-builders the real row
-    /// does, so it can't drift out of sync with them. CONVERT AS is left out entirely when
-    /// showsModeRow hides it (an audio file has only the one option).
-    private var topStripSegmentCounts: [Int] {
-        (showsModeRow ? [modeOptions.count] : []) + [formatOptions.count]
-    }
-
     private var convertSettingsCard: some View {
         PreviewCard(
             isSelected: job.isSelected,
@@ -2725,9 +2701,7 @@ struct ConvertPreviewCard: View {
             secondaryTitle: job.inputURL.path,
             subtitle: subtitleView, // IN / OUT lines
             headerAccessory: headerAccessory,
-            footer: footer,
-            settingsFieldCounts: settingsFieldCounts,
-            topStripSegmentCounts: topStripSegmentCounts
+            footer: footer
         ) {
             // Two rows instead of one-row-per-option (the redesign approved
             // 2026-09-26): CONVERT AS and OUTPUT FORMAT share a top strip --
@@ -2748,7 +2722,7 @@ struct ConvertPreviewCard: View {
                                 // point or two (legend text is 8.5pt vs the caption's 10pt),
                                 // enough to visibly un-level the pills sitting right below them.
                                 .frame(height: 15, alignment: .leading)
-                            SegmentedCapsule(options: modeOptions, fill: false)
+                            SegmentedCapsule(options: modeOptions, fill: false, groupID: "convertAs")
                         }
                     }
                     VStack(alignment: .leading, spacing: 6) {
@@ -2761,7 +2735,7 @@ struct ConvertPreviewCard: View {
                             nativeLegend(positiveLabel: "Original")
                         }
                         .frame(height: 15, alignment: .leading)
-                        SegmentedCapsule(options: formatOptions)
+                        SegmentedCapsule(options: formatOptions, groupID: "outputFormat")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }

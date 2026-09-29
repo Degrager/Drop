@@ -296,16 +296,25 @@ struct CardFacadeMetrics: Equatable {
     var flat = false
     /// A flat row's move controls (the up / down pair before its thumbnail).
     var hasLeadingControls = false
-    /// How many compact dropdown fields sit in each FieldsTrackRow of the real settings
-    /// content, in order (e.g. `[1]` for Download's single-field BITRATE row, `[3]` for
-    /// Convert's CODEC+RESOLUTION+BITRATE video row) -- see PreviewCard.settingsFieldCounts's
-    /// own doc comment for why this has to be reported explicitly rather than measured.
-    var settingsFieldCounts: [Int] = []
-    /// How many SegmentedCapsule pills sit in each of the top strip's field groups, in
-    /// order (e.g. `[2, 3]` for DOWNLOAD AS's Video+Audio/Audio Only beside a 3-option
-    /// OUTPUT FORMAT) -- one entry when the first group is hidden entirely (an audio file
-    /// has only one CONVERT AS option, so Convert skips that whole group; see showsModeRow).
-    var topStripSegmentCounts: [Int] = []
+    /// Every visible "field" in the settings content -- a SegmentedCapsule pill, a
+    /// DropdownField/DropdownBitrateField box -- measured ONCE from the real layout (see
+    /// `reportsFacadeFieldShape`) and replayed by CardFacade as plain grey shapes at these
+    /// exact positions/sizes while frozen. Two hand-authored, counted versions of this came
+    /// before it (`settingsFieldCounts`/`topStripSegmentCounts`) and both needed a new call
+    /// site update for every new card layout, plus still guessed at individual widths --
+    /// reported live as still not matching ("the width of the fields in the facade dont
+    /// match the width and the layout of the fields in the actual card"). This one is
+    /// fully generic: any card automatically gets a correctly-shaped facade for whatever
+    /// fields its real settings content actually has, with no per-layout code here at all.
+    /// Keyed by each field's own stable id (SegmentOption.id, DropdownField.id, ...) rather
+    /// than a plain array, so a field that disappears (a row hidden for the current format)
+    /// removes only its own entry (`onDisappear`) instead of leaving a stale phantom shape
+    /// or needing some other reset-and-rebuild dance between independent reporters.
+    /// Coordinates are relative to the card's own top-left (the `"cardFacadeFields"` named
+    /// coordinate space established in FrozenDuringResize), which is also where CardFacade
+    /// itself is placed, so a measured rect and the shape drawn from it always land in the
+    /// same spot.
+    var fieldShapes: [String: CGRect] = [:]
     /// True once the card itself (not just a piece of it) has reported.
     var reported = false
 }
@@ -361,6 +370,48 @@ extension View {
     /// This view is the card's metadata capsule.
     func reportsFacadeMeta() -> some View {
         reportsToFacade { metrics, size in metrics.metaSize = size }
+    }
+}
+
+/// The named coordinate space `reportsFacadeFieldShape` measures every field against --
+/// established once, in FrozenDuringResize, around the same content CardFacade replaces,
+/// so a measured rect and the shape CardFacade draws from it always share one origin
+/// regardless of where the whole card is currently positioned on screen.
+let cardFacadeFieldsSpace = "cardFacadeFields"
+
+private struct FacadeFieldShapeReporter: ViewModifier {
+    @Environment(\.cardFacadeMemory) private var memory
+    let id: String
+
+    func body(content: Content) -> some View {
+        content.background(GeometryReader { geo in
+            Color.clear
+                .onAppear { report(geo.frame(in: .named(cardFacadeFieldsSpace))) }
+                .onChange(of: geo.frame(in: .named(cardFacadeFieldsSpace))) { _, rect in report(rect) }
+                .onDisappear { memory?.metrics.fieldShapes[id] = nil }
+        })
+    }
+
+    private func report(_ rect: CGRect) {
+        // A frozen card is given no room, so what it measures then is not its real shape.
+        guard let memory, !LiveResizeState.shared.freezesCards, rect.width > 1 else { return }
+        memory.metrics.fieldShapes[id] = rect
+    }
+}
+
+extension View {
+    /// Marks this view as one visible "field" (a SegmentedCapsule pill, a DropdownField/
+    /// DropdownBitrateField box) whose measured frame CardFacade's resize placeholder
+    /// should redraw as a plain grey shape while frozen -- see CardFacadeMetrics.
+    /// fieldShapes's own doc comment for why this replaces two earlier, hand-counted
+    /// versions. `id` must be stable and unique among this card's OTHER fields (an
+    /// option's own `.id`, a field's own `id:` string) -- it's the dictionary key this
+    /// field's shape is stored/removed under, independent of every other field's own
+    /// lifecycle. A no-op everywhere this isn't inside a facade-tracked card
+    /// (cardFacadeMemory is nil): every other use of these shared components (Convert's
+    /// queue reorder controls, chips elsewhere in the app, ...) pays nothing for this.
+    func reportsFacadeFieldShape(id: String) -> some View {
+        modifier(FacadeFieldShapeReporter(id: id))
     }
 }
 
@@ -498,69 +549,33 @@ struct CardFacade: View {
             .frame(width: CardMetrics.statusWidth - (metrics.buttonCount >= 3 ? CardMetrics.buttonSlot : 0), alignment: .trailing)
     }
 
-    /// A settings-row caption bar + a row of small pill segments, standing in for a
-    /// FieldCaption + SegmentedCapsule field group (DOWNLOAD AS/CONVERT AS, OUTPUT FORMAT).
-    private func fieldGroup(captionWidth: CGFloat, segments: Int) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(Color.white.opacity(0.07))
-                .frame(width: captionWidth, height: 8)
-            HStack(spacing: 4) {
-                ForEach(0..<segments, id: \.self) { _ in
-                    Capsule().fill(Color.white.opacity(0.05)).frame(width: 44, height: 27)
-                }
-            }
-        }
-    }
-
-    /// One FieldsTrackRow's worth of placeholder: a 60pt caption bar (FieldsTrackRow's own
-    /// fixed caption width, not a guess) plus `fieldCount` compact, rounded-rect dropdown-
-    /// field placeholders sharing the remaining width evenly -- same as real DropdownFields
-    /// do when several sit in one FieldsTrackRow (each is `.frame(maxWidth: .infinity)`).
-    private func trackRow(fieldCount: Int) -> some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(Color.white.opacity(0.07))
-                .frame(width: 60, height: 8)
-            ForEach(0..<max(fieldCount, 1), id: \.self) { _ in
-                RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                    .fill(Color.white.opacity(0.05))
-                    .frame(height: 30)
-                    .frame(maxWidth: .infinity)
-            }
-        }
-    }
-
-    /// The only pieces that stretch with the card. Mirrors the settings layout every card
-    /// has used since the 2026-09-26 redesign (see convertSettingsCard/downloadCard's own
-    /// comments): a top strip of field groups side by side (each a caption + a row of
-    /// SegmentedCapsule's own small discrete pills, one entry per `metrics.
-    /// topStripSegmentCounts`, last one stretching to fill), then one FieldsTrackRow
-    /// (caption + N compact rounded-rect dropdown fields) per entry in `metrics.
-    /// settingsFieldCounts` -- NOT a single guessed shape. An earlier version hardcoded
-    /// "2 groups of 2/3 segments, one row of 2 fields", which was wrong for Download
-    /// (DOWNLOAD AS is 1 or 2 depending on whether the source has video; the settings row
-    /// always has exactly 1 field) and Convert (1-3 fields depending on which codec/
-    /// resolution/bitrate controls that source actually offers) alike -- reported live as
-    /// still not matching after the first shape fix ("the facades dont match the rows and
-    /// fields of the cards"). Each real call site now reports its own actual shape
-    /// explicitly (see PreviewCard.settingsFieldCounts/topStripSegmentCounts), since this
-    /// view has no way to count the real SegmentedCapsule/FieldsTrackRow/DropdownField
-    /// content inside the opaque `settings` closure itself.
+    /// The only piece that stretches with the card while frozen: one plain rounded shape per
+    /// real field the card has actually reported (see CardFacadeMetrics.fieldShapes), each
+    /// drawn at its own measured position and size, plus a divider 12pt above the topmost
+    /// one -- matching the 12pt gap the real settings content itself uses above its first
+    /// row. No per-layout code at all: whatever fields a card's real settings content has,
+    /// this draws that many placeholders, at their real widths, in their real places. Two
+    /// earlier, hand-authored/hand-counted versions of this both needed a call-site update
+    /// for every new card layout and still guessed at individual field widths -- reported
+    /// live as still not matching ("the width of the fields in the facade dont match the
+    /// width and the layout of the fields in the actual card").
     private var settingsRows: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5)
-            HStack(alignment: .top, spacing: 16) {
-                ForEach(Array(metrics.topStripSegmentCounts.enumerated()), id: \.offset) { index, segments in
-                    let isLast = index == metrics.topStripSegmentCounts.count - 1
-                    fieldGroup(captionWidth: isLast ? 90 : 70, segments: segments)
-                        .frame(maxWidth: isLast ? .infinity : nil, alignment: .leading)
+        ZStack(alignment: .topLeading) {
+            if let bounds = metrics.fieldShapes.values.reduce(into: CGRect?.none, { result, rect in result = result?.union(rect) ?? rect }) {
+                Rectangle().fill(Color.white.opacity(0.07))
+                    .frame(width: bounds.width, height: 0.5)
+                    .position(x: bounds.midX, y: bounds.minY - 12)
+            }
+            ForEach(Array(metrics.fieldShapes.keys), id: \.self) { key in
+                if let rect = metrics.fieldShapes[key] {
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
                 }
             }
-            ForEach(Array(metrics.settingsFieldCounts.enumerated()), id: \.offset) { _, count in
-                trackRow(fieldCount: count)
-            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     // MARK: A Convert queue row
@@ -635,12 +650,20 @@ struct CardFacade: View {
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 9) {
                     leading
-                    if metrics.expanded, !metrics.analyzing { settingsRows }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .clipped()
+            }
+            .overlay(alignment: .topLeading) {
+                // Unpadded: fieldShapes' coordinates are already relative to the card's own
+                // top-left (the same "cardFacadeFields" space `content` measures against, see
+                // FrozenDuringResize), so this must share that exact origin, not the (12, 10)
+                // padded one `leading`'s overlay above uses.
+                if metrics.expanded, !metrics.analyzing {
+                    settingsRows.clipped()
+                }
             }
             .overlay(alignment: .topTrailing) {
                 HStack(spacing: 12) {
@@ -743,6 +766,10 @@ struct FrozenDuringResize: ViewModifier {
         FreezeLayout(frozen: frozen, memory: memory) {
             content
                 .environment(\.cardFacadeMemory, memory)
+                // Same origin FreezeLayout places both children at (bounds.origin), so a
+                // field's measured rect here lines up with the shape CardFacade draws from
+                // it -- see reportsFacadeFieldShape.
+                .coordinateSpace(name: cardFacadeFieldsSpace)
                 .opacity(frozen ? 0 : 1)
                 .animation(nil, value: frozen)
                 .allowsHitTesting(!frozen)
@@ -763,8 +790,6 @@ struct FrozenDuringResize: ViewModifier {
             memory.metrics.hasLink = state.hasLink
             memory.metrics.flat = state.flat
             memory.metrics.hasLeadingControls = state.hasLeadingControls
-            memory.metrics.settingsFieldCounts = state.settingsFieldCounts
-            memory.metrics.topStripSegmentCounts = state.topStripSegmentCounts
             memory.metrics.reported = true
         }
         // The start is always a cut (nil while freezing): during a drag the window is already
@@ -1946,6 +1971,11 @@ struct SegmentedCapsule: View {
     /// true: the segments share the capsule's full width. false: they hug
     /// their labels (mode toggles with two or three short options).
     var fill: Bool = true
+    /// This row's own name ("DOWNLOAD AS", "OUTPUT FORMAT", ...), prefixed onto each
+    /// option's own id to key its facade field-shape report (see reportsFacadeFieldShape) --
+    /// a card can have more than one SegmentedCapsule, and their options' ids are free to
+    /// collide (both rows might have an option literally called "same").
+    var groupID: String = ""
 
     /// Every segment is as tall as the tallest kind in the row (one with a subtext).
     private var rowHeight: CGFloat { options.contains { $0.subtext != nil } ? 36 : 26 }
@@ -1968,7 +1998,10 @@ struct SegmentedCapsule: View {
 
     private var oneLine: some View {
         HStack(spacing: 2) {
-            ForEach(options) { SegmentButton(option: $0, fill: fill, standalone: false, height: rowHeight) }
+            ForEach(options) {
+                SegmentButton(option: $0, fill: fill, standalone: false, height: rowHeight)
+                    .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)")
+            }
         }
         .padding(3)
         .background(Color.white.opacity(0.04), in: Capsule())
@@ -1983,7 +2016,10 @@ struct SegmentedCapsule: View {
                 ViewThatFits(in: .horizontal) {
                     oneLine
                     FlowLayout(spacing: 6) {
-                        ForEach(options) { SegmentButton(option: $0, fill: false, standalone: true, height: rowHeight) }
+                        ForEach(options) {
+                            SegmentButton(option: $0, fill: false, standalone: true, height: rowHeight)
+                                .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)")
+                        }
                     }
                 }
             }
@@ -2502,6 +2538,7 @@ struct DropdownField: View {
                 )
             }
             .buttonStyle(.plain)
+            .reportsFacadeFieldShape(id: id)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .anchorPreference(key: DropdownPopoverPreferenceKey.self, value: .bounds) { anchor in
@@ -2592,6 +2629,7 @@ struct DropdownBitrateField: View {
                 )
             }
             .buttonStyle(.plain)
+            .reportsFacadeFieldShape(id: id)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .anchorPreference(key: DropdownPopoverPreferenceKey.self, value: .bounds) { anchor in

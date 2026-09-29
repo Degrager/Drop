@@ -158,6 +158,11 @@ struct PreviewCard<Settings: View>: View {
     /// real shape here -- purely for CardFacade's resize placeholder to draw the right number
     /// of rows/fields instead of a guessed shape (reported live as not matching otherwise).
     var settingsFieldCounts: [Int] = []
+    /// How many SegmentedCapsule pills sit in each of the top strip's field groups (DOWNLOAD
+    /// AS/CONVERT AS, then OUTPUT FORMAT), in the same order they're drawn -- one entry when
+    /// the first group is hidden entirely (Convert's showsModeRow == false). Same rationale
+    /// as settingsFieldCounts: CardFacade can't count real SegmentedCapsule options itself.
+    var topStripSegmentCounts: [Int] = []
 
     // Settings content
     @ViewBuilder var settings: () -> Settings
@@ -282,6 +287,7 @@ struct PreviewCard<Settings: View>: View {
             hasStatusLabel: statusLabel != nil,
             hasLink: expanded && showsSettings && !isAnalyzing && !secondaryTitle.isEmpty,
             settingsFieldCounts: settingsFieldCounts,
+            topStripSegmentCounts: topStripSegmentCounts,
             reported: true
         ))
         // The analyzing card has exactly the finished card's shape (radius, padding, header

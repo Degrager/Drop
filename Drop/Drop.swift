@@ -5198,6 +5198,16 @@ struct DropApp: App {
     }
 }
 
+/// A copied/dropped line turned into an actual URL Drop can act on. A link
+/// copied without its scheme (common: many browser address bars hide
+/// "https://") otherwise silently failed validation everywhere that reads
+/// from the clipboard -- reported live as "having the link copied without
+/// the https:// doesn't work." `line` must already be trimmed and non-empty.
+func normalizedDropURLLine(_ line: String) -> String {
+    if let url = URL(string: line), url.scheme != nil { return line }
+    return "https://\(line)"
+}
+
 /// Shared URL-list validator used by both the Download tab's Paste & Analyze
 /// button and the menu bar's Paste & Analyze button, so "every line must be
 /// a valid http/https URL" is defined in exactly one place.
@@ -5205,6 +5215,7 @@ func dropAllLinesAreURLs(_ text: String) -> Bool {
     let lines = text.components(separatedBy: "\n")
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty }
+        .map(normalizedDropURLLine)
     guard !lines.isEmpty else { return false }
     return lines.allSatisfy { line in
         guard let url = URL(string: line),
@@ -5293,6 +5304,11 @@ struct ContentView: View {
     // identically in both places. Refreshed on appear and whenever Drop becomes the
     // active app (the moment a link copied elsewhere would first be visible here).
     @State private var clipboardPreview: MenuBarClipboard = .empty
+    /// The raw clipboard string, kept only for the .notLinks case -- shown as-is
+    /// (whatever text/junk is actually there) instead of a generic placeholder,
+    /// per the user's own call: the field always mirrors the real clipboard, in
+    /// every state, never a stand-in message.
+    @State private var clipboardRawText: String = ""
     /// True for a few seconds right after a NEW link appears on the clipboard --
     /// WaitingPulseGlow's own trigger, see refreshClipboardPreview. Deliberately
     /// bounded: the old focus-based trigger this replaced could only ever run for
@@ -6557,7 +6573,14 @@ struct ContentView: View {
         ) {
             if !isRetry {
                 if let s = NSPasteboard.general.string(forType: .string) {
-                    let candidate = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Normalized per line (adds a missing https:// -- see
+                    // normalizedDropURLLine) before anything downstream reads it, so a
+                    // link copied without its scheme still analyzes correctly.
+                    let candidate = s.components(separatedBy: "\n")
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                        .map(normalizedDropURLLine)
+                        .joined(separator: "\n")
                     // Check the clipboard candidate against the queue
                     // BEFORE committing it into urlText -- committing first
                     // and only bailing out afterward (previous approach)
@@ -6635,12 +6658,8 @@ struct ContentView: View {
     /// pulse -- see clipboardPulseActive's own comment for why this can't just be
     /// "pulse for as long as .links holds."
     private func refreshClipboardPreview() {
-        let next: MenuBarClipboard
-        if let raw = NSPasteboard.general.string(forType: .string) {
-            next = MenuBarModel.describe(raw)
-        } else {
-            next = .empty
-        }
+        let raw = NSPasteboard.general.string(forType: .string) ?? ""
+        let next = raw.isEmpty ? .empty : MenuBarModel.describe(raw)
         if next != clipboardPreview, case .links = next {
             clipboardPulseGeneration += 1
             let generation = clipboardPulseGeneration
@@ -6650,19 +6669,27 @@ struct ContentView: View {
             }
         }
         clipboardPreview = next
+        clipboardRawText = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// urlCard's field has nothing of its own to type or paste into: it just shows
-    /// whatever's already on the clipboard (see clipboardPreview) or, if a link was
-    /// dropped onto it instead, that. `isLink` picks the bright/dim text color the
-    /// same way MenuBarQuickView's well does.
+    /// urlCard's field has nothing of its own to type or paste into, in ANY state --
+    /// it always shows whatever's really on the clipboard, never an editable value
+    /// or a stand-in message. `isLink` picks the bright/dim text color the same way
+    /// MenuBarQuickView's well does.
     private var clipboardFieldContent: (text: String, isLink: Bool) {
-        if !urlText.isEmpty { return (urlText, true) }
         switch clipboardPreview {
-        case .empty, .notLinks:
-            return ("Copy a link to see it here", false)
-        case .links(_, let title, let detail):
-            return (detail.isEmpty ? title : "\(title)  \(detail)", true)
+        case .empty:
+            return ("Clipboard's Empty", false)
+        case .notLinks:
+            return (clipboardRawText, false)
+        case .links(let count, let title, let detail):
+            // A single link reads as one continuous URL (host immediately followed
+            // by its path, no gap) -- reported live as a stray double space here
+            // ("youtube.com    /watch?..." instead of "youtube.com/watch?...").
+            // Several links keep a separating space; there's no single URL to read
+            // as continuous there ("3 links  youtube.com, vimeo.com").
+            guard !detail.isEmpty else { return (title, true) }
+            return (count == 1 ? "\(title)\(detail)" : "\(title)  \(detail)", true)
         }
     }
 
@@ -6701,6 +6728,11 @@ struct ContentView: View {
                 // well, or a link just dropped onto it. Left-aligned to match the
                 // convention every other URL/paste field in the app uses.
                 let content = clipboardFieldContent
+                // No clear button in any state now -- nothing here is ever editable
+                // (a drop still lands in urlText as a fallback the Analyze button
+                // reads if the clipboard itself can't be read, but the field never
+                // shows or clears it directly), so a constant trailing inset is
+                // enough; there's no longer a control to leave room for.
                 Text(content.text)
                     .font(.appMono(size: 13))
                     .foregroundColor(.white.opacity(content.isLink ? 1 : 0.18))
@@ -6710,36 +6742,11 @@ struct ContentView: View {
                     .frame(height: fieldHeight, alignment: .center)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 10)
-                    // Leave room on the trailing edge for the clear button so the
-                    // text never sits underneath it.
-                    .padding(.trailing, urlText.isEmpty ? 14 : 36)
+                    .padding(.trailing, 14)
                     .onDrop(of: ["public.url", "public.plain-text"], isTargeted: $isDragging) { providers in
                         self.handleDrop(providers: providers)
                         return true
                     }
-
-                if !urlText.isEmpty {
-                    // Migrated onto the shared GlassInteractive base so the
-                    // clear button gets real hover/press glow feedback
-                    // instead of sitting there inert. Explicit .center
-                    // frame alignment keeps it vertically lined up with
-                    // the text field's own center regardless of font
-                    // metrics/line-height quirks.
-                    HStack {
-                        Spacer()
-                        GlassInteractive(shape: .circle, tint: .red, action: {
-                            urlText = ""
-                            analyzeResult = nil
-                            duplicateURLDetected = false
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.appMono(size: 15))
-                                .padding(4)
-                        }
-                        .padding(.trailing, 8)
-                    }
-                    .frame(height: fieldHeight, alignment: .center)
-                }
             }
             .frame(maxWidth: .infinity)
 
@@ -6759,25 +6766,31 @@ struct ContentView: View {
             // so this flag has to stand on its own rather than depending
             // on the field actually holding text.
             let _isDuplicate = duplicateURLDetected && !_isRetry
+            // Whatever's on the clipboard right now isn't a link -- only matters
+            // when nothing else (a drop, a retry, a duplicate hit) already has an
+            // opinion, since a dropped link should still analyze regardless of
+            // clipboard state.
+            let _clipboardHasLink: Bool = { if case .links = clipboardPreview { return true }; return false }()
+            let _isClipboardInvalid = _isEmpty && !_isRetry && !_isDuplicate && !_clipboardHasLink
             // No longer gated on isAnalyzing -- the button stays fully
             // interactive while a previous paste's analyze is still in
             // flight, so pasting/submitting the next link never has to
             // wait on the last one to finish. isAnalyzing still exists for
             // the underlying pipeline's own per-batch bookkeeping, it's
             // just no longer surfaced on this control.
-            let _pasteLabel: String = !readyToDownload ? "Setup Needed" : (_isRetry ? "Invalid" : (_isDuplicate ? "Already Analyzed" : "Analyze Link"))
-            let _pasteIcon: String  = !readyToDownload ? "lock.fill" : (_isRetry ? "exclamationmark.triangle" : (_isDuplicate ? "checkmark.circle" : "doc.on.clipboard"))
+            let _pasteLabel: String = !readyToDownload ? "Setup Needed" : (_isRetry ? "Invalid" : (_isDuplicate ? "Already Analyzed" : (_isClipboardInvalid ? "Invalid Link" : "Analyze Link")))
+            let _pasteIcon: String  = !readyToDownload ? "lock.fill" : (_isRetry || _isClipboardInvalid ? "exclamationmark.triangle" : (_isDuplicate ? "checkmark.circle" : "doc.on.clipboard"))
             // Back to black/white per request -- keep red only for the
             // actual invalid/retry error state. Duplicate uses the same
             // amber/orange the app already reserves for "needs attention
             // but not an error" (see AnalyzeResult.unknown's orange vs.
             // the red danger tint used for genuine invalid input).
-            let _pasteTint: Color   = !readyToDownload ? Color.white.opacity(DesignTokens.Text.secondary) : (_isRetry ? DesignTokens.Accent.danger : (_isDuplicate ? Color.orange.opacity(0.8) : Color.white))
+            let _pasteTint: Color   = !readyToDownload ? Color.white.opacity(DesignTokens.Text.secondary) : ((_isRetry || _isClipboardInvalid) ? DesignTokens.Accent.danger : (_isDuplicate ? Color.orange.opacity(0.8) : Color.white))
             pasteAnalyzeButton(
                 label: _pasteLabel,
                 icon: _pasteIcon,
                 tint: _pasteTint,
-                isRetry: _isRetry,
+                isRetry: _isRetry || _isClipboardInvalid,
                 innerPillHeight: innerPillHeight
             )
         }

@@ -4956,6 +4956,12 @@ final class LiveResizeState: ObservableObject {
     }
 }
 
+extension Notification.Name {
+    /// Posted by ContentView's onChange(of: sidebarCollapsedByUser) -- see
+    /// DropAppDelegate.sidebarCollapsedDidChange.
+    static let dropSidebarCollapsedChanged = Notification.Name("DropSidebarCollapsedChanged")
+}
+
 // MARK: - App Delegate (enforces the screen-relative minimum window size)
 
 class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -5027,6 +5033,12 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                   !(window is NSPanel), window.delegate !== self else { return }
             self.configureWindow(window)
         }
+        NotificationCenter.default.addObserver(
+            forName: .dropSidebarCollapsedChanged, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let collapsed = note.userInfo?["collapsed"] as? Bool else { return }
+            self?.sidebarCollapsedDidChange(collapsed: collapsed)
+        }
     }
 
     private func configureWindow(_ window: NSWindow) {
@@ -5088,15 +5100,34 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.setFrame(window.constrainFrameRect(frame, to: screen), display: true)
     }
 
+    /// The sidebar no longer auto-collapses as the window narrows -- its own
+    /// state (a free user choice) instead decides which floor applies.
+    private var currentMinimumSize: NSSize {
+        UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.minimumSizeCollapsed : WindowLayout.minimumSizeExpanded
+    }
+
     /// minSize only constrains drags (and SwiftUI can rewrite it from its own
     /// content minimum), so windowWillResize below enforces the same floor.
     private func applyMinimumSize(to window: NSWindow) {
-        window.minSize = WindowLayout.minimumSize
+        window.minSize = currentMinimumSize
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        let minimum = WindowLayout.minimumSize
+        let minimum = currentMinimumSize
         return NSSize(width: max(frameSize.width, minimum.width), height: max(frameSize.height, minimum.height))
+    }
+
+    /// Posted by ContentView when the user toggles the sidebar (see .dropSidebarCollapsedChanged).
+    /// Collapsing only ever lowers the floor, so the window never needs to move; expanding can
+    /// raise it above the window's current width, so this grows the window to fit if needed --
+    /// the strict-minimum guarantee has to hold immediately, not just for the NEXT drag.
+    func sidebarCollapsedDidChange(collapsed: Bool) {
+        guard let window = NSApplication.shared.windows.first(where: { !($0 is NSPanel) }) else { return }
+        applyMinimumSize(to: window)
+        guard !collapsed, window.frame.width < WindowLayout.minimumSizeExpanded.width else { return }
+        var frame = window.frame
+        frame.size.width = WindowLayout.minimumSizeExpanded.width
+        window.setFrame(window.constrainFrameRect(frame, to: window.screen), display: true, animate: true)
     }
 
     // Fires once when the user releases a window-edge drag (not on every
@@ -5315,9 +5346,6 @@ struct ContentView: View {
     // (isNarrowWindow).
     @State private var windowSize: CGSize = .zero
     @State private var mainAreaWidth: CGFloat = 0
-    /// Live window width is below WindowLayout.compactSidebarBreakpoint. Only
-    /// flips at the threshold, so reading it in `body` costs nothing per tick.
-    @State private var isNarrowWindow = false
     // What the height breakpoints below read. Equal to windowSize except while
     // NSApp.keyWindow?.inLiveResize is true, during which it is pinned to its
     // pre-drag value and only catches up once (via the .dropLiveResizeEnded
@@ -5406,15 +5434,15 @@ struct ContentView: View {
     // delay) or the last rows get cut off before their pop plays -- see the
     // ambient-wrapper comment below.
     private static var sidebarEnterTotal: Double { AnyTransition.dominoStagger * Double(sidebarRowCount - 1) + 0.2 }
-    /// Below this window width the sidebar is ALWAYS icons-only, to free the
-    /// room -- the toggle is disabled there rather than letting the sidebar
-    /// swallow a third of a narrow window.
-    /// Follows the LIVE window width (via isNarrowWindow), not the settled
-    /// snapshot the other breakpoints use, so the sidebar collapses/expands the
-    /// moment a drag crosses the threshold rather than when the mouse is
-    /// released.
-    private var sidebarForcedCollapsed: Bool { isNarrowWindow }
-    private var isCompactSidebar: Bool { sidebarForcedCollapsed || sidebarCollapsedByUser }
+    /// A free user choice, not window-width-driven: the sidebar used to also
+    /// auto-collapse below a breakpoint, animating every time a drag crossed
+    /// it -- a real, repeatedly-reported source of resize lag no matter how
+    /// that animation was tuned (shorter duration, snap-during-drag-only).
+    /// Removed per the user's own call: the window instead enforces a strict,
+    /// sidebar-state-dependent minimum width (see WindowLayout.minimumSize
+    /// Collapsed/Expanded, DropAppDelegate.sidebarCollapsedDidChange) so the
+    /// two states never fight over the same window.
+    private var isCompactSidebar: Bool { sidebarCollapsedByUser }
     private var isCompactHeight: Bool { settledWindowSize.height > 0 && settledWindowSize.height < WindowLayout.compactHeightBreakpoint }
     private var isTinyHeight: Bool { settledWindowSize.height > 0 && settledWindowSize.height < WindowLayout.tinyHeightBreakpoint }
     @State private var convertStagingJobs: [ConvertJob] = []
@@ -5685,12 +5713,9 @@ struct ContentView: View {
                     .onAppear {
                         windowSize = geo.size
                         settledWindowSize = geo.size
-                        isNarrowWindow = geo.size.width > 0 && geo.size.width < WindowLayout.compactSidebarBreakpoint
                     }
                     .onChange(of: geo.size) { _, newSize in
                         windowSize = newSize
-                        let narrow = newSize.width > 0 && newSize.width < WindowLayout.compactSidebarBreakpoint
-                        if narrow != isNarrowWindow { isNarrowWindow = narrow }
                         if NSApp.keyWindow?.inLiveResize != true { settledWindowSize = newSize }
                     }
             }
@@ -5701,36 +5726,6 @@ struct ContentView: View {
         .environment(\.cardContentInset, pageInset - WindowLayout.compactSidebarWidth)
         .onChange(of: isCompactSidebar) { _, compact in
             let target = compact ? WindowLayout.compactSidebarWidth : WindowLayout.sidebarWidth
-            // A crossing caused by the window ITSELF being live-dragged snaps instantly --
-            // no animation, no scheduled work at all. Only a manual toggle click gets the
-            // sequence below. Reported live: "waving the window back and forth near the
-            // breakpoint" made the WINDOW ITSELF lag, not just the sidebar's own visuals --
-            // even at a short duration, each crossing's withAnimation + several scheduled
-            // asyncAfter callbacks is real synchronous work, and rapid oscillation can cross
-            // the breakpoint again before the previous crossing's work has finished, so it
-            // piles up. That work runs inside this onChange, which AppKit calls SYNCHRONOUSLY
-            // while tracking a live resize -- so it directly delays the window's own frame
-            // tracking, not just what's drawn inside it. A manual click can't repeat anywhere
-            // near fast enough to compound the same way, so it keeps the full glide.
-            if NSApp.keyWindow?.inLiveResize == true {
-                sidebarToggleGeneration += 1
-                sidebarSequencePlaying = false
-                // Also invalidates any in-flight manual-click sequence's own "set false"
-                // callback (via the generation bump above) -- without this explicit reset,
-                // an interrupted click could leave cards frozen behind the facade forever.
-                LiveResizeState.shared.setSidebarMoving(false)
-                var snap = Transaction()
-                snap.disablesAnimations = true
-                withTransaction(snap) {
-                    sidebarWidth = target
-                    sidebarDisplayCompact = compact
-                    pageInset = target
-                    if mainAreaWidth > 0 {
-                        columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth - (target - WindowLayout.compactSidebarWidth))
-                    }
-                }
-                return
-            }
             // Toggle sequence, per request: every row blurs/shrinks out AT
             // ONCE while the card visibly shrinks/grows; once the width lands
             // the new row set pops IN one by one, top-to-bottom. See
@@ -5739,11 +5734,9 @@ struct ContentView: View {
             // once, at the start, rather than on every intermediate width.
             sidebarToggleGeneration += 1
             let generation = sidebarToggleGeneration
-            // The toggle button and the window's width crossing
-            // sidebarForcedCollapsed's threshold -- including mid-drag, live
-            // -- get the same animated sequence. sidebarSequencePlaying
-            // exempts it from the live-resize rule below that switches
-            // animations off.
+            // sidebarSequencePlaying exempts this from the live-resize rule below
+            // that switches animations off, in case the user drags the window
+            // (an unrelated resize) while this sequence is still playing.
             sidebarSequencePlaying = true
             // The cards stand down for the toggle: a facade takes their place while the
             // sidebar moves, and they are laid out once, at their final width, when it
@@ -5763,12 +5756,9 @@ struct ContentView: View {
             // re-layout is a single update.
             let chromeDuration = sidebarAnimationStyle == .resize ? Self.sidebarResizeDuration : Self.sidebarWidthDuration
             let newContentWidth = { mainAreaWidth - (target - WindowLayout.compactSidebarWidth) }
-            // Only a collapse the USER asked for waits for the sidebar. When the
-            // window itself forced it (a drag or zoom took the width under the
-            // breakpoint) the page has to fit the new width right now: waiting
-            // left the cards laid out for a sidebar that was already leaving, so
-            // after a fast shrink they wrapped for 0.3s with room to spare.
-            if compact && !isNarrowWindow {
+            // Every collapse is now a deliberate user toggle (see isCompactSidebar's
+            // own comment), so it always waits for the sidebar.
+            if compact {
                 // Collapsing: the content keeps its old size until the animation is over.
                 DispatchQueue.main.asyncAfter(deadline: .now() + chromeDuration) {
                     guard sidebarToggleGeneration == generation else { return }
@@ -5855,6 +5845,12 @@ struct ContentView: View {
                     if sidebarToggleGeneration == generation { sidebarSequencePlaying = false }
                 }
             }
+        }
+        // Tells DropAppDelegate to re-apply the window's minimum size for the new
+        // state, growing the window if expanding pushed it above the current width
+        // (see sidebarCollapsedDidChange) -- AppKit-level, so it lives outside SwiftUI.
+        .onChange(of: sidebarCollapsedByUser) { _, collapsed in
+            NotificationCenter.default.post(name: .dropSidebarCollapsedChanged, object: nil, userInfo: ["collapsed": collapsed])
         }
         .environment(\.isCompactHeight, isCompactHeight)
         .environment(\.isTinyHeight, isTinyHeight)
@@ -5989,22 +5985,18 @@ struct ContentView: View {
     /// the collapsed rail, at the card's leading edge, so it sits in the same
     /// spot whether the sidebar is open or closed. Open, the logo and "Drop"
     /// sit beside it; closed there's nothing else on the row, so it never
-    /// crowds the narrow rail. While the window is too narrow to expand at all
-    /// the toggle has no job, so the logo takes its slot instead.
+    /// crowds the narrow rail. Always the real toggle now -- expanding grows
+    /// the window to fit if it's currently too narrow (see
+    /// DropAppDelegate.sidebarCollapsedDidChange), so there's no "too narrow
+    /// to expand" state to fall back to the bare logo for anymore.
     private var sidebarToggleSlot: some View {
-        ZStack {
-            if sidebarForcedCollapsed {
-                sidebarLogo
-            } else {
-                HoverIconButton(
-                    icon: "sidebar.left", size: 13,
-                    help: isCompactSidebar ? "Expand sidebar" : "Collapse sidebar", expandable: true
-                ) {
-                    sidebarCollapsedByUser.toggle()
-                }
-                .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
-            }
+        HoverIconButton(
+            icon: "sidebar.left", size: 13,
+            help: isCompactSidebar ? "Expand sidebar" : "Collapse sidebar", expandable: true
+        ) {
+            sidebarCollapsedByUser.toggle()
         }
+        .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
         .frame(width: WindowLayout.compactSidebarWidth)
     }
 

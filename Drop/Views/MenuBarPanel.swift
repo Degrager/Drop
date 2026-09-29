@@ -226,7 +226,7 @@ struct MenuBarQuickView: View {
         let inactive = !model.canPaste && !model.queued
         return GlassButton(
             label: model.queued ? "Queued" : "Analyze Link",
-            icon: model.queued ? "checkmark" : "doc.on.clipboard",
+            icon: model.queued ? "checkmark" : "magnifyingglass",
             tint: model.queued ? DesignTokens.Accent.success : (inactive ? .white.opacity(0.4) : .white),
             verticalPadding: 9,
             fillHeight: true,

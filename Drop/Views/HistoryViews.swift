@@ -373,13 +373,16 @@ struct HistoryRow: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        // Same black-frosted glass material every other card in the app
-        // uses (was previously flat white-on-black with no blur -- a gap
-        // versus the rest of the design language). Mirrors GlassCard's
-        // exact layer order: blur base, black tint, white wash, hover lift.
+        // Same Liquid Glass material every other card in the app uses (was
+        // previously flat white-on-black with no blur -- a gap versus the
+        // rest of the design language). A slightly lighter tint on hover
+        // keeps the same "lift" cue GlassCard's white wash used to give,
+        // now expressed as a tint shift since Liquid Glass has no wash.
         .background(
-            GlassBase(wash: hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Glass.whiteWash, grain: 0.04)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous))
+            GlassBase(
+                tint: hovering ? DesignTokens.Glass.blackTint * 0.8 : DesignTokens.Glass.blackTint,
+                shape: RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
+            )
         )
         .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
             .stroke(Color.white.opacity(hovering ? DesignTokens.Interactive.strokeHover : DesignTokens.Interactive.strokeRest), lineWidth: 0.5))

@@ -2274,7 +2274,7 @@ private struct DropdownMenuChrome<Content: View>: View {
 extension View {
     func popoverGlassChrome(cornerRadius: CGFloat = DesignTokens.Radius.large) -> some View {
         self
-            .background(GlassBase(tint: DesignTokens.Glass.blackTint))
+            .background(GlassBase(shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)))
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
@@ -2749,6 +2749,6 @@ extension View {
     /// section has always used, so utility zones read as separate from the
     /// black content cards around them.
     func innerCard(cornerRadius: CGFloat = DesignTokens.Radius.medium) -> some View {
-        glassCard(cornerRadius: cornerRadius, opacity: 0.35)
+        glassCard(cornerRadius: cornerRadius, tint: DesignTokens.Glass.blackTint * 0.8)
     }
 }

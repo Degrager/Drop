@@ -97,7 +97,7 @@ struct PreviewCard<Settings: View>: View {
     /// button that looks tappable but does nothing.
     var collapseLocked: Bool = false
 
-    /// When false, cardHeader does NOT render its own CollapseToggleButton --
+    /// When false, cardHeader does NOT render its own options-reveal button --
     /// the call site is placing it elsewhere instead (Download puts it on
     /// the same line as its Video+Audio/Audio Only mode toggle, inside
     /// belowHeader). Convert has no mode-toggle row to share a line with,
@@ -519,8 +519,8 @@ struct PreviewCard<Settings: View>: View {
     private var primaryTrailingControl: CardControl? {
         if let primaryControl { return primaryControl }
         guard !isAnalyzing, collapseButtonInHeader, let isExpanded, !collapseLocked else { return nil }
-        return CardControl(icon: isExpanded.wrappedValue ? "chevron.up" : "chevron.down",
-                           help: isExpanded.wrappedValue ? "Hide options" : "Show options") {
+        return CardControl(icon: isExpanded.wrappedValue ? "chevron.up" : "slider.horizontal.3",
+                           help: isExpanded.wrappedValue ? "Hide Options" : "Show Options") {
             withAnimation(.easeOut(duration: 0.22)) { isExpanded.wrappedValue.toggle() }
         }
     }
@@ -551,7 +551,7 @@ struct PreviewCard<Settings: View>: View {
                 let cancelling = onCancel != nil
                 HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 16,
                                color: cancelling ? .orange : .red, help: cancelling ? "Cancel" : "Remove",
-                               expandable: primaryTrailingControl == nil && secondaryControl == nil) {
+                               expandable: true) {
                     if let onCancel { onCancel() } else { onRemove() }
                 }
                 .transition(.blurIn)
@@ -626,37 +626,6 @@ struct CompactModeChip: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: isSelected)
-    }
-}
-
-// MARK: - CollapseToggleButton
-
-/// Labeled show/hide control for PreviewCard's settings section — pairs an
-/// icon with a short text label so the collapse action is legible at a
-/// glance instead of relying on an icon-only chevron.
-/// Low-stakes chrome toggle (hide/show settings) -- deliberately kept on
-/// the neutral white tint rather than the blue accent used by primary/
-/// selected controls, so its visual weight stays subordinate to actions
-/// that actually matter (Download/Convert, destructive remove).
-struct CollapseToggleButton: View {
-    let isExpanded: Bool
-    let action: () -> Void
-
-    var body: some View {
-        GlassInteractive(shape: .roundedRect(DesignTokens.Radius.small), action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: isExpanded ? "chevron.up" : "slider.horizontal.3")
-                    .font(.system(size: 9, weight: .semibold))
-                // "Options" reads clearer than "Expand" for what this reveals
-                // (media mode / quality / format settings), and "Hide" is a
-                // shorter, plainer counterpart than "Collapse" once open.
-                Text(isExpanded ? "Hide" : "Options")
-                    .font(.appMono(size: 10, weight: .semibold))
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-        }
-        .help(isExpanded ? "Hide options" : "Show formatting options")
     }
 }
 

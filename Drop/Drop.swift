@@ -5304,11 +5304,6 @@ struct ContentView: View {
     // identically in both places. Refreshed on appear and whenever Drop becomes the
     // active app (the moment a link copied elsewhere would first be visible here).
     @State private var clipboardPreview: MenuBarClipboard = .empty
-    /// The raw clipboard string, kept only for the .notLinks case -- shown as-is
-    /// (whatever text/junk is actually there) instead of a generic placeholder,
-    /// per the user's own call: the field always mirrors the real clipboard, in
-    /// every state, never a stand-in message.
-    @State private var clipboardRawText: String = ""
     /// True for a few seconds right after a NEW link appears on the clipboard --
     /// WaitingPulseGlow's own trigger, see refreshClipboardPreview. Deliberately
     /// bounded: the old focus-based trigger this replaced could only ever run for
@@ -6669,19 +6664,22 @@ struct ContentView: View {
             }
         }
         clipboardPreview = next
-        clipboardRawText = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// urlCard's field has nothing of its own to type or paste into, in ANY state --
-    /// it always shows whatever's really on the clipboard, never an editable value
-    /// or a stand-in message. `isLink` picks the bright/dim text color the same way
-    /// MenuBarQuickView's well does.
+    /// it's never editable. `isLink` picks the bright/dim text color the same way
+    /// MenuBarQuickView's well does. Reported live: showing the clipboard's own raw
+    /// (non-link) text here, right after opening the app or a new window, could
+    /// read as blank/wrong before anything had actually been analyzed -- "it should
+    /// only ever say Copy a link to see it here" whenever there's nothing to act on,
+    /// empty clipboard or not-a-link alike; only a real link ever gets its own
+    /// preview text.
     private var clipboardFieldContent: (text: String, isLink: Bool) {
         switch clipboardPreview {
         case .empty:
             return ("Clipboard's Empty", false)
         case .notLinks:
-            return (clipboardRawText, false)
+            return ("Copy a link to see it here", false)
         case .links(let count, let title, let detail):
             // A single link reads as one continuous URL (host immediately followed
             // by its path, no gap) -- reported live as a stray double space here

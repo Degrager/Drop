@@ -11,10 +11,19 @@ import QuickLookThumbnailing
 enum WindowLayout {
     // MARK: Window size
 
-    /// Hard window minimum. Both numbers are the WHOLE window frame (title bar
-    /// included) -- what Accessibility Inspector reports and NSWindow.minSize
-    /// takes -- not the content area.
-    static let minimumSize = NSSize(width: 800, height: 800)
+    /// Hard window minimum, one for each sidebar state. Both numbers are the
+    /// WHOLE window frame (title bar included) -- what Accessibility Inspector
+    /// reports and NSWindow.minSize takes -- not the content area. The sidebar
+    /// no longer auto-collapses as the window narrows (see DropAppDelegate and
+    /// ContentView.isCompactSidebar -- removed per the user's own call: the
+    /// live-resize-triggered animation was a real, repeated source of resize
+    /// lag no matter how it was tuned). Instead the floor itself changes with
+    /// the sidebar's own state: toggling it open grows the window to at least
+    /// minimumSizeExpanded if it's currently narrower (see
+    /// DropAppDelegate.sidebarCollapsedDidChange); toggling it closed only
+    /// ever lowers the floor, so the window never needs to move.
+    static let minimumSizeCollapsed = NSSize(width: 800, height: 800)
+    static let minimumSizeExpanded = NSSize(width: 1000, height: 800)
     /// Every launch opens at this frame size (see DropAppDelegate).
     static let defaultSize = NSSize(width: 1050, height: 800)
 
@@ -38,8 +47,6 @@ enum WindowLayout {
     }
     /// The sidebar's margin from the window (leading 12 + trailing 8).
     static let sidebarMargins: CGFloat = 20
-    /// Window width below which the sidebar collapses to icons.
-    static let compactSidebarBreakpoint: CGFloat = 1000
 
     // MARK: Height breakpoints (against the content area: window minus title bar)
 

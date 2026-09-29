@@ -3397,6 +3397,14 @@ struct GlassInteractive<Content: View>: View {
     // stronger line to read as a distinct control at all. nil preserves
     // existing behavior for every current caller.
     var restStrokeOverride: Double? = nil
+    // Interchangeable characteristic: overrides the selected-fill's
+    // insertion/removal scale (chipFill's own 0.9 default). Tuned for
+    // chip-scale elements, where a 10% scale delta is a few points --
+    // on a full-width sidebar tab (~200pt) that same 10% is ~20pt, so
+    // the fill visibly starts narrower than the pill and catches up,
+    // reported live as "a weird glow ... then it gets wider". nil
+    // preserves 0.9 for every existing caller.
+    var fillScaleOverride: CGFloat? = nil
     let action: () -> Void
     @ViewBuilder let content: () -> Content
 
@@ -3438,7 +3446,7 @@ struct GlassInteractive<Content: View>: View {
                         // change alpha on the same layer, so they still animate in place.
                         tint.opacity(fillOpacity)
                             .id(isActive)
-                            .transition(.chipFill(scale: 0.9))
+                            .transition(.chipFill(scale: fillScaleOverride ?? 0.9))
                     }
                     .clipShape(clipShape)
                 )

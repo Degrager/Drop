@@ -6779,7 +6779,7 @@ struct ContentView: View {
             // the underlying pipeline's own per-batch bookkeeping, it's
             // just no longer surfaced on this control.
             let _pasteLabel: String = !readyToDownload ? "Setup Needed" : (_isRetry ? "Invalid" : (_isDuplicate ? "Already Analyzed" : (_isClipboardInvalid ? "Invalid Link" : "Analyze Link")))
-            let _pasteIcon: String  = !readyToDownload ? "lock.fill" : (_isRetry || _isClipboardInvalid ? "exclamationmark.triangle" : (_isDuplicate ? "checkmark.circle" : "doc.on.clipboard"))
+            let _pasteIcon: String  = !readyToDownload ? "lock.fill" : (_isRetry || _isClipboardInvalid ? "exclamationmark.triangle" : (_isDuplicate ? "checkmark.circle" : "magnifyingglass"))
             // Back to black/white per request -- keep red only for the
             // actual invalid/retry error state. Duplicate uses the same
             // amber/orange the app already reserves for "needs attention

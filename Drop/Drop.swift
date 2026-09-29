@@ -5057,50 +5057,74 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menuBar.install()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             if let window = NSApplication.shared.windows.first(where: { !($0 is NSPanel) }) {
-                window.delegate = self
-                self.applyMinimumSize(to: window)
-                self.applyLaunchSize(to: window)
-                window.collectionBehavior = [.managed, .fullScreenPrimary]
-                // Standard AppKit window -- no NonFullscreenWindow subclass
-                // override anymore, so both double-click-title-bar-to-zoom
-                // and the green button's native Spaces-fullscreen mode work
-                // exactly like any normal Mac app window.
-                // The window backing itself must be non-opaque with a
-                // clear background color for NSVisualEffectView's
-                // .behindWindow blending to have anything real to
-                // refract -- .behindWindow blur samples what's actually
-                // behind the window (desktop, other apps), but AppKit only
-                // composites that through if the window's own backing
-                // isn't opaque. Without this the material still renders as
-                // a flat blurred color because it's compositing against
-                // the window's opaque backing instead of true content
-                // behind it -- this is what produced the washed-out white
-                // splotches instead of real glass refraction.
-                window.isOpaque = false
-                window.backgroundColor = .clear
-                window.hasShadow = true
-                // Without this the title bar stays an opaque solid strip
-                // even though the rest of the window is now transparent --
-                // it's a separate chrome layer AppKit draws regardless of
-                // window.backgroundColor. isMovableByWindowBackground keeps
-                // drag-to-move working since the transparent title bar area
-                // no longer paints a draggable bar the user can visually
-                // grab.
-                window.titlebarAppearsTransparent = true
-                window.isMovableByWindowBackground = true
-                // Disables macOS's window-state-restoration snapshot --
-                // SwiftUI's WindowGroup opts into this by default, which
-                // caches a bitmap of the window's content on quit and shows
-                // it immediately on the next launch (before the app has
-                // actually finished initializing), swapping in real content
-                // once ready. Not related to the launch-time paste-field
-                // popup (that was the system Password AutoFill suggestion
-                // window -- see .textContentType(.URL) on the URL
-                // TextField) but still worth keeping off since Drop has no
-                // meaningful state worth restoring between launches.
-                window.isRestorable = false
+                self.configureWindow(window)
             }
         }
+        // The block above only ever runs once, on whatever window exists 0.1s after
+        // THIS launch. Closing the window (not quitting -- Drop stays alive via the
+        // menu bar) and reopening it from the Dock hands WindowGroup a BRAND NEW
+        // NSWindow that block never sees, so it kept none of the setup below --
+        // no delegate, so windowWillResize never fired, so minSize's own floor (which
+        // SwiftUI can silently rewrite smaller from its own content minimum, per
+        // applyMinimumSize's comment) had nothing enforcing it -- reported live as
+        // "closed the window and reopened it and it overrode the strict minimum
+        // window size." didBecomeKeyNotification fires for every window as it's
+        // first shown, launch's included, so `delegate !== self` (never yet
+        // configured) is what actually gates a fresh run here -- not "just
+        // reopened," since it must stay a no-op for the ordinary case of simply
+        // clicking back into the same, already-configured window.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, let window = note.object as? NSWindow,
+                  !(window is NSPanel), window.delegate !== self else { return }
+            self.configureWindow(window)
+        }
+    }
+
+    private func configureWindow(_ window: NSWindow) {
+        window.delegate = self
+        applyMinimumSize(to: window)
+        applyLaunchSize(to: window)
+        window.collectionBehavior = [.managed, .fullScreenPrimary]
+        // Standard AppKit window -- no NonFullscreenWindow subclass
+        // override anymore, so both double-click-title-bar-to-zoom
+        // and the green button's native Spaces-fullscreen mode work
+        // exactly like any normal Mac app window.
+        // The window backing itself must be non-opaque with a
+        // clear background color for NSVisualEffectView's
+        // .behindWindow blending to have anything real to
+        // refract -- .behindWindow blur samples what's actually
+        // behind the window (desktop, other apps), but AppKit only
+        // composites that through if the window's own backing
+        // isn't opaque. Without this the material still renders as
+        // a flat blurred color because it's compositing against
+        // the window's opaque backing instead of true content
+        // behind it -- this is what produced the washed-out white
+        // splotches instead of real glass refraction.
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        // Without this the title bar stays an opaque solid strip
+        // even though the rest of the window is now transparent --
+        // it's a separate chrome layer AppKit draws regardless of
+        // window.backgroundColor. isMovableByWindowBackground keeps
+        // drag-to-move working since the transparent title bar area
+        // no longer paints a draggable bar the user can visually
+        // grab.
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        // Disables macOS's window-state-restoration snapshot --
+        // SwiftUI's WindowGroup opts into this by default, which
+        // caches a bitmap of the window's content on quit and shows
+        // it immediately on the next launch (before the app has
+        // actually finished initializing), swapping in real content
+        // once ready. Not related to the launch-time paste-field
+        // popup (that was the system Password AutoFill suggestion
+        // window -- see .textContentType(.URL) on the URL
+        // TextField) but still worth keeping off since Drop has no
+        // meaningful state worth restoring between launches.
+        window.isRestorable = false
     }
 
     /// Every launch opens at WindowLayout.defaultSize, centered on the screen

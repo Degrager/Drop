@@ -3856,80 +3856,27 @@ struct GlassCard: ViewModifier {
     }
 }
 
-/// Thumbnail-loading placeholder -- a slow, quiet breathing fill instead
-/// of a flat static color. A flat `Color.white.opacity(x)` box against the
-/// black-frosted card reads as a jarring gray flash the instant it appears
-/// (no motion cue that it's *loading* vs. just broken/empty); this softly
-/// pulses between two low opacities so the same brief moment reads as
-/// "working on it" rather than a gray glitch.
-///
-/// The pulse runs ONLY while `isPulsing` -- something is really loading -- and it is a Core
-/// Animation layer animation (see PulsingSkeleton), not a SwiftUI `repeatForever`. Driven
-/// from SwiftUI it kept the update cycle re-laying-out and re-rendering the WHOLE window
-/// every frame, even with nothing on screen changing: ~40% of a core at idle for a single
-/// card, because the skeleton stays mounted under every thumbnail. (Writing the resting
-/// value back did not reliably end it either.)
+/// Thumbnail-loading placeholder -- a plain, quiet fill while a thumbnail
+/// hasn't resolved yet. Used to breathe between two opacities (a Core
+/// Animation layer, see the old PulsingSkeleton); removed per the user's
+/// call to drop every pulse from the card system -- the same reasoning
+/// already applied once to the metadata capsule ("remove the pulsing glow
+/// entirely for the cards, all we need is the light rim which works great").
 struct ThumbnailSkeleton: View {
-    var isPulsing: Bool = true
+    var body: some View {
+        SkeletonFill(cornerRadius: 0)
+    }
+}
+
+/// The same plain skeleton fill ThumbnailSkeleton uses, at a caller-chosen
+/// corner radius (PreviewCard's title-bar placeholder).
+struct SkeletonFill: View {
+    var cornerRadius: CGFloat
 
     var body: some View {
-        PulsingSkeleton(cornerRadius: 0, isPulsing: isPulsing)
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color.white.opacity(DesignTokens.Interactive.fillRest * 0.6))
     }
-}
-
-/// A rounded fill that breathes between two faint whites. The breathing is a
-/// CABasicAnimation, run by the render server: no per-frame work in the app, and nothing left
-/// running once it is removed.
-struct PulsingSkeleton: NSViewRepresentable {
-    var cornerRadius: CGFloat
-    var isPulsing: Bool = true
-
-    func makeNSView(context: Context) -> PulsingSkeletonView { PulsingSkeletonView() }
-    func updateNSView(_ view: PulsingSkeletonView, context: Context) {
-        view.cornerRadius = cornerRadius
-        view.setPulsing(isPulsing)
-    }
-}
-
-final class PulsingSkeletonView: NSView {
-    private static let rest = NSColor.white.withAlphaComponent(DesignTokens.Interactive.fillRest * 0.6).cgColor
-    private static let peak = NSColor.white.withAlphaComponent(DesignTokens.Interactive.fillRest * 1.6).cgColor
-    private static let key = "pulse"
-    private var pulsing = false
-
-    var cornerRadius: CGFloat = 0 {
-        didSet { layer?.cornerRadius = cornerRadius }
-    }
-
-    init() {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.backgroundColor = Self.rest
-        layer?.cornerCurve = .continuous
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    func setPulsing(_ on: Bool) {
-        guard on != pulsing else { return }
-        pulsing = on
-        guard let layer else { return }
-        if on {
-            let animation = CABasicAnimation(keyPath: "backgroundColor")
-            animation.fromValue = Self.rest
-            animation.toValue = Self.peak
-            animation.duration = 0.9
-            animation.autoreverses = true
-            animation.repeatCount = .infinity
-            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            layer.add(animation, forKey: Self.key)
-        } else {
-            layer.removeAnimation(forKey: Self.key)
-        }
-    }
-
-    // Purely decorative: never takes a click or a hover.
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// Waiting-for-paste cue shown around the field only while it's focused
@@ -5310,6 +5257,18 @@ struct ContentView: View {
     // identically in both places. Refreshed on appear and whenever Drop becomes the
     // active app (the moment a link copied elsewhere would first be visible here).
     @State private var clipboardPreview: MenuBarClipboard = .empty
+    /// True for a few seconds right after a NEW link appears on the clipboard --
+    /// WaitingPulseGlow's own trigger, see refreshClipboardPreview. Deliberately
+    /// bounded: the old focus-based trigger this replaced could only ever run for
+    /// as long as a cursor sat in an empty field (a user attention span), but a
+    /// link can sit on the clipboard for hours -- an indefinite Core Animation
+    /// layer for that whole stretch is exactly the "repeatForever" pattern this
+    /// codebase already treats as a real cost (see idle-animation-cost), and one
+    /// running continuously turned out to compete with the sidebar's OWN
+    /// animation for compositor time during a collapse/expand, reported live as
+    /// "resizing/sidebar animations feel laggy."
+    @State private var clipboardPulseActive = false
+    @State private var clipboardPulseGeneration = 0
     @State private var isUrlCardHovering = false
     @State private var isAnalyzing       = false
     @State private var hasInvalidURLs    = false
@@ -6635,13 +6594,26 @@ struct ContentView: View {
     /// Re-reads the clipboard into `clipboardPreview` -- called on appear and
     /// whenever Drop becomes active, the two moments a link copied elsewhere first
     /// becomes visible to this window (mirrors MenuBarModel.refreshClipboard, called
-    /// there when its panel opens instead).
+    /// there when its panel opens instead). A genuinely NEW link (the content
+    /// actually changed, not just re-read the same one) starts a short, bounded
+    /// pulse -- see clipboardPulseActive's own comment for why this can't just be
+    /// "pulse for as long as .links holds."
     private func refreshClipboardPreview() {
-        guard let raw = NSPasteboard.general.string(forType: .string) else {
-            clipboardPreview = .empty
-            return
+        let next: MenuBarClipboard
+        if let raw = NSPasteboard.general.string(forType: .string) {
+            next = MenuBarModel.describe(raw)
+        } else {
+            next = .empty
         }
-        clipboardPreview = MenuBarModel.describe(raw)
+        if next != clipboardPreview, case .links = next {
+            clipboardPulseGeneration += 1
+            let generation = clipboardPulseGeneration
+            clipboardPulseActive = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                if clipboardPulseGeneration == generation { clipboardPulseActive = false }
+            }
+        }
+        clipboardPreview = next
     }
 
     /// urlCard's field has nothing of its own to type or paste into: it just shows
@@ -6799,10 +6771,12 @@ struct ContentView: View {
         // text ZStack's bounds. Used to gate on the field being focused
         // (the "now paste" moment) -- there's no more focus to have now
         // that the field only ever displays, never accepts typing, so this
-        // pulses instead exactly when there's a real link sitting on the
-        // clipboard ready to go and nothing already queued from a drop.
+        // pulses instead for a few seconds right after a NEW link appears on
+        // the clipboard (clipboardPulseActive) -- NOT for as long as one sits
+        // there, which could be indefinitely and cost real compositor time the
+        // whole time (see clipboardPulseActive's own comment).
         .overlay {
-            if urlText.isEmpty, case .links = clipboardPreview {
+            if urlText.isEmpty, clipboardPulseActive {
                 WaitingPulseGlow()
             }
         }
@@ -6860,16 +6834,10 @@ struct ContentView: View {
     private func thumbnailView(urlString: String) -> AnyView {
         AnyView(
             AsyncImage(url: URL(string: urlString)) { phase in
-                // Loading = there is a URL and no result yet. With no URL, or once the image
-                // is in (or failed), the skeleton just sits there, still.
-                let loading: Bool = {
-                    if case .empty = phase { return URL(string: urlString) != nil }
-                    return false
-                }()
                 ZStack {
                     RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                         .fill(Color.clear)
-                        .overlay(ThumbnailSkeleton(isPulsing: loading).clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)))
+                        .overlay(ThumbnailSkeleton().clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)))
                     if case .success(let img) = phase {
                         img.resizable()
                             .aspectRatio(contentMode: .fill)
@@ -8529,14 +8497,6 @@ struct FlowLayout: Layout {
     }
 }
 
-// MARK: - Selector Chip
-// Unified chip for mode/format/quality selection. Two layouts:
-// - icon set: horizontal icon+label (formerly ModeChip)
-// - icon nil: vertical label+note, stacked (formerly FormatChip / QualityChip)
-// No scaleEffect — these render in tightly-packed HStacks where scale caused
-// hover growth to overlap neighboring chips. Selection/hover feedback comes
-// from glow + border + background only.
-
 /// Small legend explaining the green (positive/native/original) dot shown on format/codec
 /// chips. `positiveLabel` reads "Native" for Download's format rows (true remux-native
 /// containers) and "Original" for Convert's codec rows (matches source). The amber
@@ -8548,133 +8508,6 @@ func nativeLegend(positiveLabel: String = "Native") -> some View {
         Text(positiveLabel).font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
             .lineLimit(1).fixedSize()
     }
-}
-
-struct SelectorChip: View {
-    let label: String
-    var icon: String? = nil
-    var note: String = ""
-    let isSelected: Bool
-    var tint: Color = DesignTokens.Accent.primary
-    /// nil = no badge shown. true = "Native" (green dot), false = "Re-encode" (amber dot).
-    var nativeBadge: Bool? = nil
-    let action: () -> Void
-    @State private var hovering = false
-    /// A selected chip's glow breathes while the pointer is over it (see PulsingRing).
-    private var pulsing: Bool { isSelected && hovering }
-    @Environment(\.contentColumnWidth) private var columnWidth
-    /// The sub-note ("Universal compatibility, QuickTime-ready") is dropped in
-    /// a narrow column, where it forced every chip onto its own line; it stays
-    /// available as the tooltip.
-    private var showNote: Bool { !note.isEmpty && !(columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint) }
-
-    var body: some View {
-        Button(action: action) {
-            // One layout for every chip regardless of whether it carries an
-            // icon or a note -- previously icon-chips (Video + Audio, Audio
-            // Only) used a tight HStack while plain chips (MP4, 4K, etc.)
-            // used a width-filling VStack, so sibling rows of the same
-            // "choose one" pattern rendered at visibly different scales.
-            // Every chip now fills its row slot the same way.
-            VStack(spacing: 2) {
-                HStack(spacing: 5) {
-                    if let icon = icon {
-                        Image(systemName: icon)
-                            .font(.appMono(size: 11, weight: .semibold))
-                    }
-                    if let native = nativeBadge {
-                        Circle()
-                            .fill(native ? DesignTokens.Accent.success : DesignTokens.Accent.warning)
-                            .frame(width: 5, height: 5)
-                    }
-                    Text(label)
-                        .font(.appMono(size: 12, weight: .semibold))
-                }
-                .foregroundColor(isSelected ? tint : .white.opacity(hovering ? DesignTokens.Text.primary : DesignTokens.Text.tertiary))
-                if showNote {
-                    Text(note)
-                        .font(.appMono(size: 9))
-                        .foregroundColor(isSelected ? tint.opacity(0.75) : .white.opacity(hovering ? DesignTokens.Text.tertiary : DesignTokens.Text.disabled))
-                        .lineLimit(1)
-                }
-            }
-            // Horizontal padding lives inside the chip so that when a row wraps
-            // (see OptionRow) the chips hug their labels with room to spare;
-            // in an equal-width row the extra padding is invisible.
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, showNote ? 8 : 6)
-            .background(
-                ZStack {
-                    // Tinted base -- NOT its own VisualEffectBlur. Every chip
-                    // here sits directly on a parent glassCard (the card's
-                    // settings section), which already provides a live
-                    // backdrop blur; stacking a second, independent
-                    // NSVisualEffectView per chip (several per card: format +
-                    // quality + mode) multiplied the number of live blur
-                    // layers the compositor had to recompute on every resize
-                    // frame for a visual difference this opaque a tint (0.93)
-                    // made negligible. The parent's blur shows through this
-                    // tint exactly as before.
-                    Color.black.opacity(DesignTokens.Glass.blackTint)
-                    // One selected-state treatment everywhere: a soft tint
-                    // wash, not a solid fill and not a plain outline-only
-                    // look -- previously icon-chips used a flat opacity fill
-                    // while plain chips used a gradient wash, two different
-                    // "selected" languages for the same chip concept.
-                    //
-                    // The two states are separate layers with explicit
-                    // transitions: the rest wash swaps instantly and the tint
-                    // gradient grows/shrinks (chipFill). Left implicit, SwiftUI
-                    // cross-faded them, passing through a washed-out grey.
-                    if isSelected {
-                        LinearGradient(colors: [tint.opacity(0.22), tint.opacity(0.12)],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing)
-                            .transition(.chipFill())
-                    } else {
-                        Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Interactive.fillRest)
-                            .transition(.identity)
-                    }
-                    DitherNoise(opacity: 0.035)
-                }
-            )
-            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                    .stroke(
-                        isSelected
-                            ? tint.opacity(pulsing ? 0 : Self.restingStroke)
-                            : Color.white.opacity(hovering ? DesignTokens.Interactive.strokeHover + 0.025 : DesignTokens.Interactive.strokeRest),
-                        lineWidth: (isSelected || hovering) ? 1.0 : 0.5
-                    )
-                    // Selected chips carry a steady ambient glow -- lit from
-                    // within even when idle, like Flighty/Siri-style liquid
-                    // glass. It is STILL at rest and only pulses while the
-                    // pointer is over the chip: a repeatForever animation on
-                    // something that sits on screen keeps SwiftUI re-running
-                    // layout and redraw for the whole window every frame, which
-                    // cost ~45% of a core with a single card open.
-                    .shadow(color: isSelected ? tint.opacity(pulsing ? 0 : Self.restingGlow) : .clear, radius: isSelected ? 6 : 0)
-                    .overlay {
-                        if pulsing {
-                            PulsingRing(shape: .roundedRect(DesignTokens.Radius.small), color: tint, lineWidth: 1.0,
-                                        stroke: Self.restingStroke...DesignTokens.Interactive.strokeGlow,
-                                        glow: Self.restingGlow...DesignTokens.Interactive.glowShadowHover, glowRadius: 6, duration: 0.65)
-                        }
-                    }
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { h in hovering = h }
-        .animation(.easeOut(duration: 0.12), value: hovering)
-        .animation(.spring(response: 0.2), value: isSelected)
-        .help(!note.isEmpty && !showNote ? note : "")
-    }
-
-    /// The steady selected-state rim and glow -- the midpoint of what the old
-    /// resting pulse swung between, so a selected chip reads the same at a glance.
-    private static let restingStroke: Double = 0.8
-    private static let restingGlow: Double = 0.4
 }
 
 // MARK: - Glass Button

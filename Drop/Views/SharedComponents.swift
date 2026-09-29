@@ -2042,10 +2042,6 @@ private struct SegmentButton: View {
     var body: some View {
         let T = DesignTokens.Interactive.self
         let selected = option.isSelected
-        // The selected segment's glow breathes while the pointer is over it: a Core Animation
-        // ring, not a SwiftUI repeatForever, which cost ~26% of a core for as long as the
-        // pointer stayed there (see PulsingRing).
-        let pulsing = hovering && selected
         Button(action: option.action) {
             VStack(spacing: 1) {
                 // .firstTextBaseline -- see MetaCell's identical fix.
@@ -2087,23 +2083,18 @@ private struct SegmentButton: View {
             )
             .overlay(
                 Capsule().stroke(
-                    selected ? option.tint.opacity(pulsing ? 0 : Self.restingStroke)
+                    selected ? option.tint.opacity(Self.restingStroke)
                         : (standalone ? Color.white.opacity(hovering ? T.strokeHover : T.strokeRest) : Color.clear),
                     lineWidth: selected ? 1.0 : 0.5
                 )
             )
-            // The selected glow is steady; it pulses only under the pointer
-            // (a repeatForever animation on something sitting on screen keeps
-            // the whole window redrawing every frame -- see SelectorChip).
-            .shadow(color: selected ? option.tint.opacity(pulsing ? 0 : Self.restingGlow) : .clear,
+            // A plain, constant glow -- no pulse, even under the pointer. Card
+            // settings pills don't breathe anymore (see reportsFacadeFieldShape's
+            // sibling change this same session, and the metadata capsule's own
+            // earlier precedent: "remove the pulsing glow entirely for the cards,
+            // all we need is the light rim which works great").
+            .shadow(color: selected ? option.tint.opacity(Self.restingGlow) : .clear,
                     radius: selected ? 6 : 0)
-            .overlay {
-                if pulsing {
-                    PulsingRing(shape: .capsule, color: option.tint, lineWidth: 1.0,
-                                stroke: Self.restingStroke...T.strokeGlow, glow: Self.restingGlow...T.glowShadowHover,
-                                glowRadius: 6, duration: 0.65)
-                }
-            }
         }
         .buttonStyle(.plain)
         .onHover { h in hovering = h }

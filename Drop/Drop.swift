@@ -6779,13 +6779,14 @@ struct ContentView: View {
             // the underlying pipeline's own per-batch bookkeeping, it's
             // just no longer surfaced on this control.
             let _pasteLabel: String = !readyToDownload ? "Setup Needed" : (_isRetry ? "Invalid" : (_isDuplicate ? "Already Analyzed" : (_isClipboardInvalid ? "Invalid Link" : "Analyze Link")))
-            let _pasteIcon: String  = !readyToDownload ? "lock.fill" : (_isRetry || _isClipboardInvalid ? "exclamationmark.triangle" : (_isDuplicate ? "checkmark.circle" : "magnifyingglass"))
-            // Back to black/white per request -- keep red only for the
-            // actual invalid/retry error state. Duplicate uses the same
-            // amber/orange the app already reserves for "needs attention
-            // but not an error" (see AnalyzeResult.unknown's orange vs.
-            // the red danger tint used for genuine invalid input).
-            let _pasteTint: Color   = !readyToDownload ? Color.white.opacity(DesignTokens.Text.secondary) : ((_isRetry || _isClipboardInvalid) ? DesignTokens.Accent.danger : (_isDuplicate ? Color.orange.opacity(0.8) : Color.white))
+            // Clipboard-invalid gets the SAME neutral icon/tint as Setup Needed, not
+            // the red/triangle a genuine failed-analyze retry uses -- reported live as
+            // "too dark": red at the button's own 50% disabled opacity read as a dark,
+            // muddy maroon against the black glass, and an empty/non-link clipboard is
+            // really the same "nothing to do yet" category as Setup Needed, not an
+            // actual error, so it shouldn't reach for the same danger color at all.
+            let _pasteIcon: String  = !readyToDownload ? "lock.fill" : ((_isRetry || _isClipboardInvalid) ? "exclamationmark.triangle" : (_isDuplicate ? "checkmark.circle" : "magnifyingglass"))
+            let _pasteTint: Color   = (!readyToDownload || _isClipboardInvalid) ? Color.white.opacity(DesignTokens.Text.secondary) : (_isRetry ? DesignTokens.Accent.danger : (_isDuplicate ? Color.orange.opacity(0.8) : Color.white))
             pasteAnalyzeButton(
                 label: _pasteLabel,
                 icon: _pasteIcon,

@@ -488,19 +488,46 @@ struct CardFacade: View {
             .frame(width: CardMetrics.statusWidth - (metrics.buttonCount >= 3 ? CardMetrics.buttonSlot : 0), alignment: .trailing)
     }
 
-    /// The only pieces that stretch with the card.
+    /// A settings-row caption bar + a row of small pill segments, standing in for a
+    /// FieldCaption + SegmentedCapsule field group (DOWNLOAD AS/CONVERT AS, OUTPUT FORMAT).
+    private func fieldGroup(captionWidth: CGFloat, segments: Int) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Color.white.opacity(0.07))
+                .frame(width: captionWidth, height: 8)
+            HStack(spacing: 4) {
+                ForEach(0..<segments, id: \.self) { _ in
+                    Capsule().fill(Color.white.opacity(0.05)).frame(width: 44, height: 27)
+                }
+            }
+        }
+    }
+
+    /// The only pieces that stretch with the card. Mirrors the settings layout every card
+    /// has used since the 2026-09-26 redesign (see convertSettingsCard/downloadCard's own
+    /// comments): a top strip of two field groups side by side (each a caption + a row of
+    /// SegmentedCapsule's own small discrete pills), then one row of compact, rounded-rect
+    /// dropdown fields (FieldsTrackRow) below -- NOT the older one-row-per-setting shape
+    /// this used to draw (a single label beside one long capsule stretching the full
+    /// width), which stopped resembling the real card entirely once that redesign shipped
+    /// (reported live: "the card facades don't match the look of the cards now").
     private var settingsRows: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 12) {
             Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5)
-            ForEach(0..<3, id: \.self) { _ in
-                HStack(spacing: 12) {
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(Color.white.opacity(0.07))
-                        .frame(width: 76, height: 8)
-                        .frame(width: 100, alignment: .leading)
-                    Capsule()
+            HStack(alignment: .top, spacing: 16) {
+                fieldGroup(captionWidth: 70, segments: 2)
+                fieldGroup(captionWidth: 90, segments: 3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color.white.opacity(0.07))
+                    .frame(width: 46, height: 8)
+                ForEach(0..<2, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                         .fill(Color.white.opacity(0.05))
-                        .frame(height: 28)
+                        .frame(height: 30)
+                        .frame(maxWidth: .infinity)
                 }
             }
         }

@@ -296,6 +296,11 @@ struct CardFacadeMetrics: Equatable {
     var flat = false
     /// A flat row's move controls (the up / down pair before its thumbnail).
     var hasLeadingControls = false
+    /// How many compact dropdown fields sit in each FieldsTrackRow of the real settings
+    /// content, in order (e.g. `[1]` for Download's single-field BITRATE row, `[3]` for
+    /// Convert's CODEC+RESOLUTION+BITRATE video row) -- see PreviewCard.settingsFieldCounts's
+    /// own doc comment for why this has to be reported explicitly rather than measured.
+    var settingsFieldCounts: [Int] = []
     /// True once the card itself (not just a piece of it) has reported.
     var reported = false
 }
@@ -503,14 +508,36 @@ struct CardFacade: View {
         }
     }
 
+    /// One FieldsTrackRow's worth of placeholder: a 60pt caption bar (FieldsTrackRow's own
+    /// fixed caption width, not a guess) plus `fieldCount` compact, rounded-rect dropdown-
+    /// field placeholders sharing the remaining width evenly -- same as real DropdownFields
+    /// do when several sit in one FieldsTrackRow (each is `.frame(maxWidth: .infinity)`).
+    private func trackRow(fieldCount: Int) -> some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Color.white.opacity(0.07))
+                .frame(width: 60, height: 8)
+            ForEach(0..<max(fieldCount, 1), id: \.self) { _ in
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+                    .frame(height: 30)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
     /// The only pieces that stretch with the card. Mirrors the settings layout every card
     /// has used since the 2026-09-26 redesign (see convertSettingsCard/downloadCard's own
     /// comments): a top strip of two field groups side by side (each a caption + a row of
-    /// SegmentedCapsule's own small discrete pills), then one row of compact, rounded-rect
-    /// dropdown fields (FieldsTrackRow) below -- NOT the older one-row-per-setting shape
-    /// this used to draw (a single label beside one long capsule stretching the full
-    /// width), which stopped resembling the real card entirely once that redesign shipped
-    /// (reported live: "the card facades don't match the look of the cards now").
+    /// SegmentedCapsule's own small discrete pills), then one FieldsTrackRow (caption + N
+    /// compact rounded-rect dropdown fields) per entry in `metrics.settingsFieldCounts` --
+    /// NOT a single guessed row. An earlier version hardcoded "2 rows of 2 fields", which
+    /// was wrong for Download (always exactly 1 field) and Convert (1-3 depending on which
+    /// codec/resolution/bitrate controls that source actually offers) alike -- reported live
+    /// as still not matching after that fix ("the facades dont match the rows and fields of
+    /// the cards"). Each real call site now reports its own actual shape explicitly (see
+    /// PreviewCard.settingsFieldCounts), since this view has no way to count the real
+    /// FieldsTrackRow/DropdownField content inside the opaque `settings` closure itself.
     private var settingsRows: some View {
         VStack(alignment: .leading, spacing: 12) {
             Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5)
@@ -519,16 +546,8 @@ struct CardFacade: View {
                 fieldGroup(captionWidth: 90, segments: 3)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(Color.white.opacity(0.07))
-                    .frame(width: 46, height: 8)
-                ForEach(0..<2, id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                        .fill(Color.white.opacity(0.05))
-                        .frame(height: 30)
-                        .frame(maxWidth: .infinity)
-                }
+            ForEach(Array(metrics.settingsFieldCounts.enumerated()), id: \.offset) { _, count in
+                trackRow(fieldCount: count)
             }
         }
     }

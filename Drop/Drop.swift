@@ -6939,7 +6939,11 @@ struct ContentView: View {
             primaryControl: controls?.primary,
             secondaryControl: controls?.secondary,
             onCancel: cancelDownload,
-            showsSettings: dl == nil && !failedAnalyze
+            showsSettings: dl == nil && !failedAnalyze,
+            // The VIDEO row always has exactly 1 field (RESOLUTION); the AUDIO row also has
+            // exactly 1 (BITRATE) but only exists at all for a non-M4A format -- M4A hides
+            // the row entirely (see the settings closure below).
+            settingsFieldCounts: (p.mediaMode != .audioOnly || p.audioFormat != .m4a) ? [1] : []
         ) {
             // Same field layout as Convert's own analyze card (the 2026-09-26
             // redesign, see [[convert-analyze-lag]]): DOWNLOAD AS and FORMAT

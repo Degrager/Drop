@@ -2689,6 +2689,22 @@ struct ConvertPreviewCard: View {
     /// would just be a single, unpressable segment.
     private var showsModeRow: Bool { modeOptions.count > 1 }
 
+    /// The real per-row field count below, for CardFacade's resize placeholder (see
+    /// PreviewCard.settingsFieldCounts) -- mirrors the settings closure's own conditions
+    /// exactly: VIDEO's CODEC is always there, RESOLUTION/BITRATE join only when the source
+    /// actually offers them; AUDIO's CODEC is always there, BITRATE joins only when the
+    /// chosen codec has one (a lossless codec's row keeps its Spacer-filled width instead).
+    private var settingsFieldCounts: [Int] {
+        var counts: [Int] = []
+        if job.mediaMode.isVideo {
+            counts.append(1 + (job.availableResolutions.isEmpty ? 0 : 1) + (job.supportsVideoBitrate ? 1 : 0))
+        }
+        if job.mediaMode != .videoOnly {
+            counts.append(job.supportsAudioBitrate ? 2 : 1)
+        }
+        return counts
+    }
+
     private var convertSettingsCard: some View {
         PreviewCard(
             isSelected: job.isSelected,
@@ -2701,7 +2717,8 @@ struct ConvertPreviewCard: View {
             secondaryTitle: job.inputURL.path,
             subtitle: subtitleView, // IN / OUT lines
             headerAccessory: headerAccessory,
-            footer: footer
+            footer: footer,
+            settingsFieldCounts: settingsFieldCounts
         ) {
             // Two rows instead of one-row-per-option (the redesign approved
             // 2026-09-26): CONVERT AS and OUTPUT FORMAT share a top strip --

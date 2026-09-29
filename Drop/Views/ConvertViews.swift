@@ -2705,6 +2705,14 @@ struct ConvertPreviewCard: View {
         return counts
     }
 
+    /// Same idea as settingsFieldCounts, for the top strip's two SegmentedCapsule groups
+    /// (CONVERT AS, then OUTPUT FORMAT) -- reuses the same option-builders the real row
+    /// does, so it can't drift out of sync with them. CONVERT AS is left out entirely when
+    /// showsModeRow hides it (an audio file has only the one option).
+    private var topStripSegmentCounts: [Int] {
+        (showsModeRow ? [modeOptions.count] : []) + [formatOptions.count]
+    }
+
     private var convertSettingsCard: some View {
         PreviewCard(
             isSelected: job.isSelected,
@@ -2718,7 +2726,8 @@ struct ConvertPreviewCard: View {
             subtitle: subtitleView, // IN / OUT lines
             headerAccessory: headerAccessory,
             footer: footer,
-            settingsFieldCounts: settingsFieldCounts
+            settingsFieldCounts: settingsFieldCounts,
+            topStripSegmentCounts: topStripSegmentCounts
         ) {
             // Two rows instead of one-row-per-option (the redesign approved
             // 2026-09-26): CONVERT AS and OUTPUT FORMAT share a top strip --

@@ -301,6 +301,11 @@ struct CardFacadeMetrics: Equatable {
     /// Convert's CODEC+RESOLUTION+BITRATE video row) -- see PreviewCard.settingsFieldCounts's
     /// own doc comment for why this has to be reported explicitly rather than measured.
     var settingsFieldCounts: [Int] = []
+    /// How many SegmentedCapsule pills sit in each of the top strip's field groups, in
+    /// order (e.g. `[2, 3]` for DOWNLOAD AS's Video+Audio/Audio Only beside a 3-option
+    /// OUTPUT FORMAT) -- one entry when the first group is hidden entirely (an audio file
+    /// has only one CONVERT AS option, so Convert skips that whole group; see showsModeRow).
+    var topStripSegmentCounts: [Int] = []
     /// True once the card itself (not just a piece of it) has reported.
     var reported = false
 }
@@ -528,23 +533,29 @@ struct CardFacade: View {
 
     /// The only pieces that stretch with the card. Mirrors the settings layout every card
     /// has used since the 2026-09-26 redesign (see convertSettingsCard/downloadCard's own
-    /// comments): a top strip of two field groups side by side (each a caption + a row of
-    /// SegmentedCapsule's own small discrete pills), then one FieldsTrackRow (caption + N
-    /// compact rounded-rect dropdown fields) per entry in `metrics.settingsFieldCounts` --
-    /// NOT a single guessed row. An earlier version hardcoded "2 rows of 2 fields", which
-    /// was wrong for Download (always exactly 1 field) and Convert (1-3 depending on which
-    /// codec/resolution/bitrate controls that source actually offers) alike -- reported live
-    /// as still not matching after that fix ("the facades dont match the rows and fields of
-    /// the cards"). Each real call site now reports its own actual shape explicitly (see
-    /// PreviewCard.settingsFieldCounts), since this view has no way to count the real
-    /// FieldsTrackRow/DropdownField content inside the opaque `settings` closure itself.
+    /// comments): a top strip of field groups side by side (each a caption + a row of
+    /// SegmentedCapsule's own small discrete pills, one entry per `metrics.
+    /// topStripSegmentCounts`, last one stretching to fill), then one FieldsTrackRow
+    /// (caption + N compact rounded-rect dropdown fields) per entry in `metrics.
+    /// settingsFieldCounts` -- NOT a single guessed shape. An earlier version hardcoded
+    /// "2 groups of 2/3 segments, one row of 2 fields", which was wrong for Download
+    /// (DOWNLOAD AS is 1 or 2 depending on whether the source has video; the settings row
+    /// always has exactly 1 field) and Convert (1-3 fields depending on which codec/
+    /// resolution/bitrate controls that source actually offers) alike -- reported live as
+    /// still not matching after the first shape fix ("the facades dont match the rows and
+    /// fields of the cards"). Each real call site now reports its own actual shape
+    /// explicitly (see PreviewCard.settingsFieldCounts/topStripSegmentCounts), since this
+    /// view has no way to count the real SegmentedCapsule/FieldsTrackRow/DropdownField
+    /// content inside the opaque `settings` closure itself.
     private var settingsRows: some View {
         VStack(alignment: .leading, spacing: 12) {
             Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5)
             HStack(alignment: .top, spacing: 16) {
-                fieldGroup(captionWidth: 70, segments: 2)
-                fieldGroup(captionWidth: 90, segments: 3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(Array(metrics.topStripSegmentCounts.enumerated()), id: \.offset) { index, segments in
+                    let isLast = index == metrics.topStripSegmentCounts.count - 1
+                    fieldGroup(captionWidth: isLast ? 90 : 70, segments: segments)
+                        .frame(maxWidth: isLast ? .infinity : nil, alignment: .leading)
+                }
             }
             ForEach(Array(metrics.settingsFieldCounts.enumerated()), id: \.offset) { _, count in
                 trackRow(fieldCount: count)
@@ -752,6 +763,8 @@ struct FrozenDuringResize: ViewModifier {
             memory.metrics.hasLink = state.hasLink
             memory.metrics.flat = state.flat
             memory.metrics.hasLeadingControls = state.hasLeadingControls
+            memory.metrics.settingsFieldCounts = state.settingsFieldCounts
+            memory.metrics.topStripSegmentCounts = state.topStripSegmentCounts
             memory.metrics.reported = true
         }
         // The start is always a cut (nil while freezing): during a drag the window is already

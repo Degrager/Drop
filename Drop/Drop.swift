@@ -6943,7 +6943,15 @@ struct ContentView: View {
             // The VIDEO row always has exactly 1 field (RESOLUTION); the AUDIO row also has
             // exactly 1 (BITRATE) but only exists at all for a non-M4A format -- M4A hides
             // the row entirely (see the settings closure below).
-            settingsFieldCounts: (p.mediaMode != .audioOnly || p.audioFormat != .m4a) ? [1] : []
+            settingsFieldCounts: (p.mediaMode != .audioOnly || p.audioFormat != .m4a) ? [1] : [],
+            // DOWNLOAD AS has 2 options normally, but only 1 (Audio Only) for a source with
+            // no video track at all. OUTPUT FORMAT's real count already comes from the same
+            // options builder the real row uses, so it can't drift out of sync with it (MOV's
+            // own AV1/VP9 gating, WAV/M4A/MP3/FLAC always being 4, etc.).
+            topStripSegmentCounts: [
+                p.hasVideo ? 2 : 1,
+                p.mediaMode == .audioOnly ? downloadAudioFormatOptions(preview: preview).count : downloadVideoFormatOptions(preview: preview).count
+            ]
         ) {
             // Same field layout as Convert's own analyze card (the 2026-09-26
             // redesign, see [[convert-analyze-lag]]): DOWNLOAD AS and FORMAT

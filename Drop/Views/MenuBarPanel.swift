@@ -60,6 +60,7 @@ final class MenuBarModel: ObservableObject {
         let urls = text.components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+            .map(normalizedDropURLLine)
             .compactMap { URL(string: $0) }
         guard let first = urls.first else { return .notLinks }
         func host(_ url: URL) -> String {
@@ -96,7 +97,12 @@ final class MenuBarModel: ObservableObject {
             refuse()
             return
         }
-        NotificationCenter.default.post(name: .menuBarDownload, object: nil, userInfo: ["url": trimmed])
+        let normalized = trimmed.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map(normalizedDropURLLine)
+            .joined(separator: "\n")
+        NotificationCenter.default.post(name: .menuBarDownload, object: nil, userInfo: ["url": normalized])
         withAnimation(.easeOut(duration: 0.15)) { queued = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             withAnimation(.easeOut(duration: 0.15)) { self?.queued = false }

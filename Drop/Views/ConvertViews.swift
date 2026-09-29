@@ -1042,6 +1042,15 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     /// omits it) when copying a source whose own bitrate isn't knowable
     /// (e.g. FLAC/PCM don't report one) rather than showing a guess.
     var displayAudioBitrateLabel: String? {
+        // A codec with no bitrate concept at all (FLAC/PCM -- see
+        // supportsAudioBitrate) has no BITRATE field in the settings UI, but
+        // `encodesAudio` can still be true for one (re-encoding into FLAC from
+        // a source with a different codec, say) -- falling through to
+        // plannedAudioKbps then showed typicalBitrateKbps's rule-of-thumb
+        // estimation figure (900 for FLAC) as if it were a real bitrate,
+        // disagreeing with the settings UI showing no bitrate control at all
+        // for that same codec (reported live).
+        guard supportsAudioBitrate else { return nil }
         if encodesAudio { return "\(plannedAudioKbps)kbps" }
         return mediaInfo?.audioBitrateKbps.map { "\($0)kbps" }
     }
@@ -1484,9 +1493,16 @@ struct ConvertView: View {
     }
 
     /// The list of staged files, as a capsule in the Analyze card's top-right
-    /// corner ("2 of 3" with a chevron). Its popup is an expanded version of the
-    /// same capsule acting as an .overlay, so it floats above everything without
-    /// shifting any surrounding layout, and is never a native macOS menu.
+    /// corner ("2 of 3" with a chevron). Its popup is published up through
+    /// `.anchorPreference` to `fileSwitcherPopoverHost` instead of drawn where
+    /// this button sits -- ConvertPreviewCard's own `.liveGlassCard()` clips
+    /// its ENTIRE content to the card's rounded rect, popup included, no
+    /// matter how high its zIndex (same problem DropdownField/
+    /// DropdownBitrateField have; see DropdownPopoverPreferenceKey). Drawing
+    /// this in place used to clip the popup's own rounded-rect background
+    /// wherever it ran past the card's edge, which read as "the background
+    /// is transparent" -- whatever got clipped away just showed the card
+    /// underneath instead (reported live). Never a native macOS menu.
     private var fileSwitcher: some View {
         Button {
             withAnimation(.spring(response: 0.25)) { isFileSwitcherOpen.toggle() }
@@ -1506,33 +1522,18 @@ struct ConvertView: View {
         }
         .buttonStyle(.plain)
         .help("Choose which staged file to review")
-        .overlay(alignment: .topTrailing) {
-            if isFileSwitcherOpen {
-                ZStack(alignment: .topTrailing) {
-                    // Oversized, effectively-invisible tap catcher so clicking
-                    // anywhere else dismisses the popup -- sits behind it in this
-                    // same overlay group, never affecting layout. No `.transition`
-                    // here: blurring/scaling a 3000x3000 layer along with the
-                    // popup (an earlier version transitioned this whole ZStack
-                    // together) is what made the popup look like it was melting
-                    // transparent and stuttering shut on dismiss -- the same
-                    // dismiss-stutter class of bug already fixed once for the
-                    // Download page's dropdown popover (see dropdownPopoverOverlay).
-                    Color.black.opacity(0.001)
-                        .frame(width: 3000, height: 3000)
-                        .offset(x: 1200, y: -1200)
-                        .onTapGesture {
-                            withAnimation(.spring(response: 0.2)) { isFileSwitcherOpen = false }
-                        }
-                    fileSwitcherPopup
-                        .offset(y: 34)
-                        // Unfolds out of the capsule (top-trailing corner) with blur +
-                        // scale only -- the popup is a glass surface, so no opacity
-                        // (see FocusEffect). Only the popup itself gets this effect,
-                        // not the tap catcher above.
-                        .transition(.focus(blur: 10, scale: 0.9, anchor: .topTrailing))
-                }
-                .zIndex(20)
+        .anchorPreference(key: FileSwitcherPreferenceKey.self, value: .bounds) { anchor in
+            guard isFileSwitcherOpen else { return nil }
+            // Width/height are estimates for the host's own on-screen-keeping math
+            // (flip upward, clamp horizontally), not a pixel-perfect fit -- same
+            // convention as DropdownPopoverPreferenceKey.Entry. The popup's real
+            // width still self-caps at switcherCardWidth * 0.65 (see
+            // fileSwitcherPopup); 260 covers a typical filename when that
+            // measurement isn't in yet. ~33pt/row matches its 12pt rows + padding.
+            let width = switcherCardWidth > 0 ? switcherCardWidth * 0.65 : 260
+            let height = CGFloat(stagingJobs.count) * 33 + 8
+            return .init(anchor: anchor, width: width, height: height, content: { AnyView(fileSwitcherPopup) }) {
+                withAnimation(.spring(response: 0.2)) { isFileSwitcherOpen = false }
             }
         }
     }
@@ -2280,6 +2281,65 @@ struct ConvertView: View {
     }
 }
 
+/// The file switcher's open popup, published up through `.anchorPreference` instead of
+/// drawn where the trigger button sits (see `fileSwitcher`'s own doc comment for why: it
+/// escapes ConvertPreviewCard's `.liveGlassCard()` clip). Its own preference key, not a
+/// reuse of DropdownPopoverPreferenceKey -- the file switcher is built in ConvertView, one
+/// level up from ConvertPreviewCard's own private `openDropdownID`, which isn't reachable
+/// from here, so it can't share that one's host/single-open-together state.
+private struct FileSwitcherPreferenceKey: PreferenceKey {
+    /// `width`/`height` are estimates for the host's own on-screen-keeping math (flip
+    /// upward, clamp horizontally), not a pixel-perfect fit -- same convention as
+    /// DropdownPopoverPreferenceKey.Entry. `dismiss` lets the host's outside-click
+    /// monitor close the popup without needing a binding into ConvertView's own state.
+    struct Entry { let anchor: Anchor<CGRect>; let width: CGFloat; let height: CGFloat; let content: () -> AnyView; let dismiss: () -> Void }
+    static var defaultValue: Entry? = nil
+    static func reduce(value: inout Entry?, nextValue: () -> Entry?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+extension View {
+    /// Draws the file switcher's popup (if open) at its real on-screen position -- same
+    /// positioning/flip-upward math as `dropdownPopoverOverlay`, and the same
+    /// `OutsideClickMonitor` (observes clicks without consuming them, so the same click
+    /// that dismisses this popup can still reach whatever real control is underneath it).
+    func fileSwitcherPopoverHost() -> some View {
+        overlayPreferenceValue(FileSwitcherPreferenceKey.self) { entry in
+            GeometryReader { proxy in
+                if let entry {
+                    let rect = proxy[entry.anchor]
+                    // Right-aligned under the trigger (matches the old .topTrailing overlay),
+                    // clamped so it never runs past either edge of this host's own bounds.
+                    let x = min(max(rect.maxX - entry.width, 0), max(proxy.size.width - entry.width, 0))
+                    let cardGlobalTop = proxy.frame(in: .global).minY
+                    let cardGlobalLeft = proxy.frame(in: .global).minX
+                    let windowHeight = NSApplication.shared.windows.first(where: { !($0 is NSPanel) })?.frame.height ?? (cardGlobalTop + proxy.size.height)
+                    let bottomMargin: CGFloat = 90
+                    let opensUpward = cardGlobalTop + rect.maxY + 6 + entry.height > windowHeight - bottomMargin
+                    let y = opensUpward ? rect.minY - 6 - entry.height : rect.maxY + 6
+                    ZStack(alignment: .topLeading) {
+                        OutsideClickMonitor(
+                            // Unioned with the trigger button's OWN rect (`rect`) -- see
+                            // dropdownPopoverOverlay's identical fix for why: clicking the
+                            // trigger again to close it otherwise raced its own toggle action.
+                            excluding: CGRect(x: cardGlobalLeft + x, y: cardGlobalTop + y, width: entry.width, height: entry.height)
+                                .union(CGRect(x: cardGlobalLeft + rect.minX, y: cardGlobalTop + rect.minY, width: rect.width, height: rect.height)),
+                            windowHeight: windowHeight,
+                            action: entry.dismiss
+                        )
+                        .frame(width: 0, height: 0)
+                        entry.content()
+                            .offset(x: x, y: y)
+                            .transition(.focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top))
+                    }
+                    .zIndex(20)
+                }
+            }
+        }
+    }
+}
+
 /// One Convert Queue row: position badge + the compact card, with up/down
 /// step buttons to reorder it. Drag-to-reorder (three separate attempts --
 /// a hand-rolled DragGesture with a measured-stride proposed-index
@@ -2417,6 +2477,10 @@ struct ConvertPreviewCard: View {
         } else {
             convertSettingsCard
                 .dropdownPopoverOverlay(openID: $openDropdownID)
+                // The file switcher (headerAccessory, built by ConvertView) has its own
+                // separate host: see fileSwitcherPopoverHost's own doc comment for why
+                // it can't share dropdownPopoverOverlay/openDropdownID above.
+                .fileSwitcherPopoverHost()
         }
     }
 
@@ -2668,7 +2732,7 @@ struct ConvertPreviewCard: View {
                             // The dot on formatOptions' matching option, explained -- top
                             // right of this field group (the user asked for it moved there
                             // from beside the caption).
-                            nativeLegend(positiveLabel: "Original", showReencodeHint: false)
+                            nativeLegend(positiveLabel: "Original")
                         }
                         .frame(height: 15, alignment: .leading)
                         SegmentedCapsule(options: formatOptions)

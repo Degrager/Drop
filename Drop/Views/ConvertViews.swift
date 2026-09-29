@@ -1248,19 +1248,7 @@ struct ConvertView: View {
             .padding(.trailing, 5)
         }
         .frame(height: fieldHeight)
-        .background(
-            ZStack {
-                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                Color.black.opacity(isDragging ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint)
-                Color.white.opacity(0.55 * DesignTokens.Glass.whiteWash)
-                DitherNoise(opacity: 0.04)
-            }
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(isDragging ? Color.white.opacity(DesignTokens.Text.secondary) : Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: isDragging ? 1.5 : DropGrid.fieldBorderWidth)
-            )
-        )
+        .background(GlassFieldCapsule(isDragging: isDragging))
         // Rim glow on hover or active drag-over -- same cue as urlCard's
         // hover/focus glow, applied to this bar's outer rim so Download
         // and Convert's header bars feel identically alive.
@@ -1469,20 +1457,9 @@ struct ConvertView: View {
         // still shouldn't be free to blow out to an arbitrary width for a
         // very long name.
         .frame(maxWidth: switcherCardWidth > 0 ? switcherCardWidth * 0.65 : nil, alignment: .trailing)
-        .background(
-            ZStack {
-                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                Color.black.opacity(DesignTokens.Glass.blackTint)
-            }
-        )
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
-            .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
-        // Two stacked shadows for real depth (a tight dark contact shadow
-        // plus a soft wide one) -- a single subtle shadow read as
-        // basically invisible against the app's already-black background.
-        .shadow(color: .black.opacity(0.5), radius: 6, y: 3)
-        .shadow(color: .black.opacity(0.6), radius: 24, y: 12)
+        // Same glass chrome as every dropdown menu popover (blur + black
+        // tint, hairline rim, two stacked shadows for depth).
+        .popoverGlassChrome()
     }
 
     /// "2 of 3" -- where the file in Analyze sits among every staged file.

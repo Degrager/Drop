@@ -1,6 +1,6 @@
-<p align="center">
+<h1 align="center">
   <img src=".github/readme/logo.png" alt="Drop" height="80">
-</p>
+</h1>
 
 <p align="center">
   <a href="#requirements"><img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-0A0A0A?style=flat-square&logo=apple&logoColor=white"></a>

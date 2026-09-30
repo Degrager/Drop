@@ -341,6 +341,14 @@ struct CardFacadeMetrics: Equatable {
     struct FieldShape: Equatable {
         var rect: CGRect
         var kind: Kind = .field
+        /// For `.pill` only: the SegmentedCapsule row this segment belongs to (its
+        /// `groupID`). Every segment sharing one `group` is drawn as ONE capsule spanning
+        /// all of them, not as separate pills side by side -- the real row shares ONE
+        /// continuous capsule background (SegmentedCapsule.oneLine's own
+        /// `.background(..., in: Capsule())`); an unselected segment has no fill or
+        /// border of its own at all. Reported live: "the pill selectors are made up of
+        /// individual pills next to each other instead of one big pill."
+        var group: String? = nil
     }
     /// True once the card itself (not just a piece of it) has reported.
     var reported = false
@@ -410,6 +418,7 @@ private struct FacadeFieldShapeReporter: ViewModifier {
     @Environment(\.cardFacadeMemory) private var memory
     let id: String
     let kind: CardFacadeMetrics.Kind
+    let group: String?
 
     func body(content: Content) -> some View {
         content.background(GeometryReader { geo in
@@ -423,7 +432,7 @@ private struct FacadeFieldShapeReporter: ViewModifier {
     private func report(_ rect: CGRect) {
         // A frozen card is given no room, so what it measures then is not its real shape.
         guard let memory, !LiveResizeState.shared.freezesCards, rect.width > 1 else { return }
-        memory.metrics.fieldShapes[id] = .init(rect: rect, kind: kind)
+        memory.metrics.fieldShapes[id] = .init(rect: rect, kind: kind, group: group)
     }
 }
 
@@ -436,11 +445,13 @@ extension View {
     /// hand-counted versions. `id` must be stable and unique among this card's OTHER fields
     /// (an option's own `.id`, a field's own `id:` string) -- it's the dictionary key this
     /// field's shape is stored/removed under, independent of every other field's own
-    /// lifecycle. A no-op everywhere this isn't inside a facade-tracked card
-    /// (cardFacadeMemory is nil): every other use of these shared components (Convert's
-    /// queue reorder controls, chips elsewhere in the app, ...) pays nothing for this.
-    func reportsFacadeFieldShape(id: String, kind: CardFacadeMetrics.Kind = .field) -> some View {
-        modifier(FacadeFieldShapeReporter(id: id, kind: kind))
+    /// lifecycle. `group` only matters for `.pill`: every segment sharing one `group` draws
+    /// as one shared capsule (see CardFacadeMetrics.FieldShape.group). A no-op everywhere
+    /// this isn't inside a facade-tracked card (cardFacadeMemory is nil): every other use of
+    /// these shared components (Convert's queue reorder controls, chips elsewhere in the
+    /// app, ...) pays nothing for this.
+    func reportsFacadeFieldShape(id: String, kind: CardFacadeMetrics.Kind = .field, group: String? = nil) -> some View {
+        modifier(FacadeFieldShapeReporter(id: id, kind: kind, group: group))
     }
 }
 
@@ -599,12 +610,35 @@ struct CardFacade: View {
                 // non-uniform scale on the whole group keeps every rect's position and
                 // width proportional to the others, cheaper than recomputing each one.
                 let scale = bounds.width > 1 ? geo.size.width / bounds.width : 1
+                // Every .pill segment sharing one `group` merges into ONE capsule spanning
+                // all of them -- the real row shares one continuous capsule background
+                // (SegmentedCapsule.oneLine), not separate pills side by side. Reported
+                // live: "the pill selectors are made up of individual pills next to each
+                // other instead of one big pill." Individual pill entries are consumed
+                // here; only non-pill shapes are drawn one-by-one below.
+                let pillGroups: [String: CGRect] = metrics.fieldShapes.values
+                    .filter { $0.kind == .pill }
+                    .reduce(into: [:]) { result, shape in
+                        let key = shape.group ?? ""
+                        result[key] = result[key]?.union(shape.rect) ?? shape.rect
+                    }
                 ZStack(alignment: .topLeading) {
                     Rectangle().fill(Color.white.opacity(0.07))
                         .frame(width: bounds.width, height: 0.5)
                         .position(x: bounds.midX, y: bounds.minY - 12)
+                    ForEach(Array(pillGroups.keys), id: \.self) { key in
+                        if let rect = pillGroups[key] {
+                            // Outset to match the real row's own 3pt padding between its
+                            // segments and the shared outer capsule.
+                            let padded = rect.insetBy(dx: -3, dy: -3)
+                            Capsule()
+                                .fill(Color.white.opacity(0.05))
+                                .frame(width: padded.width, height: padded.height)
+                                .position(x: padded.midX, y: padded.midY)
+                        }
+                    }
                     ForEach(Array(metrics.fieldShapes.keys), id: \.self) { key in
-                        if let shape = metrics.fieldShapes[key] {
+                        if let shape = metrics.fieldShapes[key], shape.kind != .pill {
                             fieldPlaceholder(shape)
                         }
                     }
@@ -620,16 +654,14 @@ struct CardFacade: View {
     /// Reported live: "pills show up as individual boxes" (a real SegmentedCapsule segment
     /// is a true Capsule with no border of its own) "and they arent matching placement"
     /// (captions weren't drawn at all, so surrounding fields sat closer together than the
-    /// real layout, which always leaves room for one above each field).
+    /// real layout, which always leaves room for one above each field). `.pill` is handled
+    /// at the group level in `settingsRows` above, not per-entry here.
     @ViewBuilder
     private func fieldPlaceholder(_ shape: CardFacadeMetrics.FieldShape) -> some View {
         let rect = shape.rect
         switch shape.kind {
         case .pill:
-            Capsule()
-                .fill(Color.white.opacity(0.05))
-                .frame(width: rect.width, height: rect.height)
-                .position(x: rect.midX, y: rect.midY)
+            EmptyView()
         case .field:
             RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                 .fill(Color.white.opacity(0.05))
@@ -2067,7 +2099,7 @@ struct SegmentedCapsule: View {
         HStack(spacing: 2) {
             ForEach(options) {
                 SegmentButton(option: $0, fill: fill, standalone: false, height: rowHeight)
-                    .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)", kind: .pill)
+                    .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)", kind: .pill, group: groupID)
             }
         }
         .padding(3)
@@ -2085,7 +2117,7 @@ struct SegmentedCapsule: View {
                     FlowLayout(spacing: 6) {
                         ForEach(options) {
                             SegmentButton(option: $0, fill: false, standalone: true, height: rowHeight)
-                                .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)", kind: .pill)
+                                .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)", kind: .pill, group: groupID)
                         }
                     }
                 }

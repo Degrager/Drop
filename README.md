@@ -8,6 +8,44 @@
 
 <p align="center">Drop is a fast, native macOS app for downloading and converting online video and audio. Paste a link, pick a quality, and Drop handles the rest — powered by <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a> and <a href="https://ffmpeg.org/">ffmpeg</a>, wrapped in a clean SwiftUI interface with a dark liquid-glass design.</p>
 
+<p align="center">
+  <img src=".github/readme/hero.png" alt="Drop's Download tab in its empty state, ready for a link to be copied" width="760">
+</p>
+
+## How it works
+
+### Download
+
+Paste a YouTube, SoundCloud, or Vimeo link — Drop reads it straight from your clipboard. Pick a format, resolution, and audio quality, then download. Multiple links queue up and download independently, each with its own settings.
+
+<p align="center">
+  <img src=".github/readme/download.png" alt="Drop's Download tab showing two queued YouTube videos, one expanded with format and resolution options" width="760">
+</p>
+
+### Convert
+
+Drop a local video or audio file to re-encode it or just change containers. Codec, resolution, and bitrate default to "Same as Source" — Drop only touches what you actually change, copying streams instead of re-encoding them wherever it can.
+
+<p align="center">
+  <img src=".github/readme/convert.png" alt="Convert tab showing codec, resolution, and bitrate controls for a local file" width="760">
+</p>
+
+### Quick access from the menu bar
+
+Copy a link anywhere and click Drop's menu bar icon — it shows what's on your clipboard and lets you analyze it without switching apps or losing focus on what you're doing.
+
+<p align="center">
+  <img src=".github/readme/menubar.png" alt="Drop's menu bar quick-access panel showing a clipboard link ready to analyze" width="360">
+</p>
+
+### History
+
+Every download is logged with its original link, so redownloading or retrying a failed one is one click — no need to find and re-paste the URL.
+
+<p align="center">
+  <img src=".github/readme/history.png" alt="History tab listing past downloads with redownload and reveal actions" width="760">
+</p>
+
 ## Features
 
 - **Paste-and-go downloading** — paste any supported link (YouTube, Soundcloud, and Vimeo via yt-dlp), choose your quality and format, and download.

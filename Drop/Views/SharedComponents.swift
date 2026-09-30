@@ -2583,8 +2583,13 @@ struct DropdownField: View {
 /// Same chrome as DropdownField's closed state (caption + value in a bordered
 /// capsule), but a plain, non-interactive value -- no button, no chevron, no
 /// menu -- for a field where there genuinely is no choice to make (e.g.
-/// Video+Audio's audio codec, always AAC), so it reads as informational
-/// rather than inviting a tap that would do nothing.
+/// Video+Audio's own video codec, whatever the source has), so it reads as
+/// informational rather than inviting a tap that would do nothing. Sized to
+/// its own content (a codec name is always a few characters), not a fixed
+/// width -- a hardcoded width didn't shrink or grow with the window the way
+/// the flexible field beside it does, so at a narrower width this stayed
+/// put while its neighbor visibly got squeezed, reported live as "feels
+/// unbalanced."
 struct StaticCodecField: View {
     let caption: String
     let value: String
@@ -2595,9 +2600,10 @@ struct StaticCodecField: View {
             Text(value)
                 .font(.appMono(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 10)
                 .frame(height: 30)
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                         .fill(Color.white.opacity(DesignTokens.Field.fillRest))
@@ -2607,7 +2613,6 @@ struct StaticCodecField: View {
                         .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: DesignTokens.Field.borderWidth)
                 )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

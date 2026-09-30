@@ -150,7 +150,7 @@ struct HistoryView: View {
             if filtered.isEmpty {
                 EmptyStateView(
                     icon: "clock",
-                    title: history.entries.isEmpty ? "No downloads yet" : "No results"
+                    title: history.entries.isEmpty ? "No downloads or conversions yet" : "No results"
                 )
                 .followsSidebar()
             } else {

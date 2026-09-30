@@ -113,7 +113,19 @@ struct HistoryView: View {
             }
         }
         .frame(height: fieldHeight)
-        .background(GlassFieldCapsule())
+        .background(
+            ZStack {
+                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                Color.black.opacity(DesignTokens.Glass.blackTint)
+                Color.white.opacity(0.55 * DesignTokens.Glass.whiteWash)
+                DitherNoise(opacity: 0.04)
+            }
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth)
+            )
+        )
         // Rim glow on hover or focus (cursor in the field) -- same cue as
         // urlCard's and Convert's header bars.
         .overlay {
@@ -373,16 +385,18 @@ struct HistoryRow: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        // Same Liquid Glass material every other card in the app uses (was
-        // previously flat white-on-black with no blur -- a gap versus the
-        // rest of the design language). A slightly lighter tint on hover
-        // keeps the same "lift" cue GlassCard's white wash used to give,
-        // now expressed as a tint shift since Liquid Glass has no wash.
+        // Same black-frosted glass material every other card in the app
+        // uses (was previously flat white-on-black with no blur -- a gap
+        // versus the rest of the design language). Mirrors GlassCard's
+        // exact layer order: blur base, black tint, white wash, hover lift.
         .background(
-            GlassBase(
-                tint: hovering ? DesignTokens.Glass.blackTint * 0.8 : DesignTokens.Glass.blackTint,
-                shape: RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
-            )
+            ZStack {
+                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                Color.black.opacity(DesignTokens.Glass.blackTint)
+                Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Glass.whiteWash)
+                DitherNoise(opacity: 0.04)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous))
         )
         .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
             .stroke(Color.white.opacity(hovering ? DesignTokens.Interactive.strokeHover : DesignTokens.Interactive.strokeRest), lineWidth: 0.5))

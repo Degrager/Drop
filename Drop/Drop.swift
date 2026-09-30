@@ -2970,12 +2970,12 @@ extension Font {
 
 /// One effect drives every transition in the app: scale + blur, with
 /// opacity available but used sparingly. Never put opacity on a glass
-/// surface (`glassCard`): fading a glass-backed view dilutes its black tint
-/// while the raw material underneath stays lit, so the card turns into a
-/// flat grey slab mid-transition. Blur and scale don't have that problem --
-/// they leave the tint alone -- so glass surfaces transition with those two
-/// only, and opacity is reserved for loose content (chips, text) sitting on
-/// top of a surface.
+/// surface (`glassCard`): fading a `VisualEffectBlur`-backed view dilutes its
+/// 0.93 black tint while the raw material underneath stays lit, so the card
+/// turns into a flat grey slab mid-transition. Blur and scale don't have that
+/// problem -- they leave the tint alone -- so glass surfaces transition with
+/// those two only, and opacity is reserved for loose content (chips, text)
+/// sitting on top of a surface.
 struct FocusEffect: ViewModifier {
     var blur: CGFloat
     var scale: CGFloat
@@ -3126,7 +3126,7 @@ extension AnyTransition {
 
     /// Sidebar collapse/expand: every row vanishes AT ONCE (blur + shrink
     /// toward nothing, no opacity -- these rows are GlassInteractive pills
-    /// with their own glass fill, and fading opacity on a glass surface
+    /// with their own VisualEffectBlur, and fading opacity on a glass surface
     /// dilutes its tint and flashes it grey, see FocusEffect/glassPop), then
     /// pops back in one by one, growing from near-zero scale with a springy
     /// overshoot and staggered top-to-bottom by `index` -- the TOP row
@@ -3237,15 +3237,16 @@ enum DesignTokens {
     // true black frosted glass at rest, not dark grey -- the tint depth is
     // what visually separates "alive glass" from a flat translucent panel.
     enum Glass {
-        // 0.93 was tuned for the old hand-rolled VisualEffectBlur stack,
-        // where a heavy tint was needed to read as "black glass" at all.
-        // Under real Liquid Glass that same heavy tint just masks the
-        // material's own refraction/specular behavior -- reported live as
-        // "still black" on every surface except cards (which had already
-        // been lightened to 0.35 for a separate, earlier ask). Matching
-        // that same value here instead of re-tuning a second number.
-        static let blackTint: Double = 0.35
-        static let blackTintDisabled: Double = 0.15
+        static let material: NSVisualEffectView.Material = .underWindowBackground
+        // Resting black-frosted tint. Raised again from 0.82 -- against the
+        // window-wide base tint of 0.74, an 0.08 gap read as barely any
+        // separation at all, so cards blended into the background instead
+        // of standing out as a distinct layer. 0.93 gives real contrast
+        // while the VisualEffectBlur underneath still keeps it from ever
+        // looking like a flat, opaque black rectangle.
+        static let blackTint: Double = 0.93
+        static let blackTintDisabled: Double = 0.4
+        static let whiteWash: Double = 0.02      // faint white wash to avoid flat black
     }
 
     // Interactive state opacities -- fill/stroke/glow at rest, hover, press.
@@ -3325,6 +3326,38 @@ enum DesignTokens {
     }
 }
 
+struct VisualEffectBlur: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode
+    var state: NSVisualEffectView.State = .active
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material     = material
+        v.blendingMode = blendingMode
+        v.state        = state
+        // A freshly-inserted NSVisualEffectView needs a display pass before
+        // its vibrancy/material fully settles -- AppKit briefly shows an
+        // uninitialized, unclipped light/gray render on the very first
+        // frame. When SwiftUI cross-fades a card in via `.transition
+        // (.opacity)`, that fade is driven by the layer's own opacity
+        // animation, which starts running before this first display pass
+        // completes -- so new cards visibly flash gray-then-black instead
+        // of cross-fading straight to the intended black-frosted look.
+        // Disabling implicit layer animations on this view removes the
+        // extra animated opacity pass AppKit would otherwise add on top of
+        // SwiftUI's own transition, so the material renders in its final
+        // state on the very first frame it's visible.
+        v.wantsLayer = true
+        v.layer?.actions = ["opacity": NSNull(), "hidden": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        return v
+    }
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material     = material
+        nsView.blendingMode = blendingMode
+        nsView.state        = state
+    }
+}
+
 /// Frosted glass card modifier
 // MARK: - Shared Glass Interactive Base
 //
@@ -3397,14 +3430,6 @@ struct GlassInteractive<Content: View>: View {
     // stronger line to read as a distinct control at all. nil preserves
     // existing behavior for every current caller.
     var restStrokeOverride: Double? = nil
-    // Interchangeable characteristic: overrides the selected-fill's
-    // insertion/removal scale (chipFill's own 0.9 default). Tuned for
-    // chip-scale elements, where a 10% scale delta is a few points --
-    // on a full-width sidebar tab (~200pt) that same 10% is ~20pt, so
-    // the fill visibly starts narrower than the pill and catches up,
-    // reported live as "a weird glow ... then it gets wider". nil
-    // preserves 0.9 for every existing caller.
-    var fillScaleOverride: CGFloat? = nil
     let action: () -> Void
     @ViewBuilder let content: () -> Content
 
@@ -3438,7 +3463,9 @@ struct GlassInteractive<Content: View>: View {
                             // (e.g. urlCard's outer capsule) already paints
                             // this; stacking it again doubles the tint and
                             // reads as a visible second pill.
-                            GlassBase(tint: disabled ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint, shape: clipShape)
+                            VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                            Color.black.opacity(disabled ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint)
+                            DitherNoise(opacity: 0.035)
                         }
                         // Keyed on isActive so selecting/deselecting swaps the fill
                         // layer (chipFill) instead of lerping tint AND alpha together,
@@ -3446,7 +3473,7 @@ struct GlassInteractive<Content: View>: View {
                         // change alpha on the same layer, so they still animate in place.
                         tint.opacity(fillOpacity)
                             .id(isActive)
-                            .transition(.chipFill(scale: fillScaleOverride ?? 0.9))
+                            .transition(.chipFill(scale: 0.9))
                     }
                     .clipShape(clipShape)
                 )
@@ -3509,6 +3536,53 @@ struct GlassInteractive<Content: View>: View {
         case .roundedRect(let r):
             return AnyShape(RoundedRectangle(cornerRadius: r, style: .continuous))
         }
+    }
+}
+
+/// Very low-opacity procedural noise, tiled across the view it's applied
+/// to. Breaks up 8-bit banding on large, near-black gradients (the app
+/// background, glass card fills) where subtle color ramps would otherwise
+/// show visible steps between shades. The noise tile is generated once
+/// and repeated -- see the static `tile` below for why.
+struct DitherNoise: View {
+    var opacity: Double = 0.02
+
+    // Fixed-size noise tile, generated ONCE per process (not per card, not
+    // per frame). The old implementation ran a Canvas closure that redrew
+    // every ~2.5pt cell from scratch on every geometry change -- with
+    // several cards on screen each doing tens of thousands of individual
+    // fill() calls, live-resizing the window recomputed all of them on
+    // every frame, which is what caused the resize/scale lag. A small
+    // static tile repeated via Image(_:).resizable(resizingMode: .tile)
+    // costs nothing on resize since the pixel data itself never changes --
+    // only the tile's on-screen repeat count does, which is nearly free.
+    private static let tileSize = 64
+    private static let tile: CGImage = {
+        let size = tileSize
+        var rng = SystemRandomNumberGenerator()
+        var pixels = [UInt8](repeating: 0, count: size * size * 4)
+        for i in 0..<(size * size) {
+            let v = Double.random(in: 0...1, using: &rng)
+            let shade: UInt8 = v > 0.5 ? 255 : 0
+            let a: UInt8 = UInt8((v > 0.5 ? v - 0.5 : (0.5 - v)) * 255 * 2)
+            let o = i * 4
+            pixels[o] = shade; pixels[o + 1] = shade; pixels[o + 2] = shade; pixels[o + 3] = a
+        }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        let ctx = CGContext(
+            data: &pixels, width: size, height: size, bitsPerComponent: 8,
+            bytesPerRow: size * 4, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        return ctx.makeImage()!
+    }()
+
+    var body: some View {
+        Image(decorative: Self.tile, scale: 2, orientation: .up)
+            .resizable(resizingMode: .tile)
+            .opacity(opacity)
+            .blendMode(.overlay)
+            .allowsHitTesting(false)
     }
 }
 
@@ -3624,9 +3698,9 @@ final class WindowBackdropView: NSView {
 
 /// Zero-mean dither for the window background: each pixel of a small tile is
 /// white or black at 0-2/255 alpha, so it nudges the gradient's 8-bit steps by
-/// a level either way without shifting its average brightness (an overlay-
-/// blended tile that only ever lightens would lift what it sits on by
-/// several levels, washing the backdrop out past the concept's colours).
+/// a level either way without shifting its average brightness (DitherNoise's
+/// overlay-blended tile lifts what it sits on by several levels, which would
+/// have washed the backdrop out past the concept's colours).
 struct WindowDither: View {
     private static let tile: CGImage = {
         let size = 64
@@ -3655,60 +3729,29 @@ struct WindowDither: View {
     }
 }
 
-/// The unclipped blur+tint+wash+grain stack behind every hand-rolled glass
-/// surface in the app (cards, buttons, capsule fields, popovers). Callers
-/// clip to whatever shape they need and add their own stroke/shadow -- this
-/// is just the tinted fill. Real system Liquid Glass (`.glassEffect()`),
-/// not the old hand-rolled VisualEffectBlur + flat-tint + wash + grain
-/// stack -- reported live as "its justa gradient": a manual tint/wash layer
-/// over a blur has no actual dynamic refraction, so lowering its opacity
-/// alone never reads as genuine glass. Liquid Glass owns its own clip, so
-/// `shape` is baked in here rather than applied by the caller afterward.
-/// Requires macOS 26+ (raised from 14 for this). Every hand-rolled glass
-/// surface in the app (cards, buttons, capsule fields, popovers, the
-/// history row) now goes through this one primitive, so a future material
-/// change only has to happen here.
-struct GlassBase<S: Shape>: View {
-    var tint: Double = DesignTokens.Glass.blackTint
-    var shape: S
-
-    var body: some View {
-        Color.clear
-            .glassEffect(.regular.tint(.black.opacity(tint)), in: shape)
-    }
-}
-
-/// The frosted fill of a card, clipped to its rounded shape -- shared by
-/// GlassCard and LiveGlassCard. `tint` lets a caller read lighter than the
-/// standard black glass (see GlassCard's innerCard, a nested surface that
-/// wants to read as visually distinct from its own black-glass parent).
+/// The frosted fill of a card (blur, black tint, wash, grain), clipped to its
+/// rounded shape -- shared by GlassCard and LiveGlassCard.
 struct GlassFill: View {
     var cornerRadius: CGFloat
-    var tint: Double = DesignTokens.Glass.blackTint
+    var opacity: Double
 
     var body: some View {
-        GlassBase(tint: tint, shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    }
-}
-
-/// The same frosted fill as GlassFill/GlassCard, clipped to a capsule and
-/// ringed with the standard field border -- the exact recipe the Download
-/// paste field, Convert's drop-zone bar, History's search bar, and the Log
-/// header all used to hand-roll independently. `isDragging` dims the tint
-/// and brightens the border for the drag-over cue (Download/Convert only;
-/// History and Log simply never pass it).
-struct GlassFieldCapsule: View {
-    var isDragging: Bool = false
-
-    var body: some View {
-        GlassBase(tint: isDragging ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint, shape: Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(
-                        isDragging ? Color.white.opacity(DesignTokens.Text.secondary) : Color.white.opacity(DropGrid.fieldBorderOpacity),
-                        lineWidth: isDragging ? 1.5 : DropGrid.fieldBorderWidth
-                    )
-            )
+        ZStack {
+            // .underWindowBackground reads dark/neutral by default,
+            // unlike .hudWindow which leans light -- the right base
+            // for a true black-frosted-glass look.
+            VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+            // Heavy black tint on top so the material reads as black
+            // smoked glass, not grey.
+            Color.black.opacity(DesignTokens.Glass.blackTint)
+            Color.white.opacity(opacity * DesignTokens.Glass.whiteWash)
+            // Fine grain across the frosted-glass fill -- breaks up
+            // 8-bit banding on the near-black surface and gives the
+            // card a textured, physical "frosted" quality instead of
+            // a flat tinted panel.
+            DitherNoise(opacity: 0.04)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
@@ -3720,6 +3763,7 @@ struct GlassFieldCapsule: View {
 /// outline widens first and the contents take the new width at the end.
 struct LiveGlassCard: ViewModifier {
     var cornerRadius: CGFloat = DesignTokens.Radius.large
+    var opacity: Double = 0.55
     var isActive: Bool = false
     @Environment(\.sidebarLiveInset) private var live
     @Environment(\.cardContentInset) private var pinned
@@ -3727,7 +3771,7 @@ struct LiveGlassCard: ViewModifier {
     func body(content: Content) -> some View {
         content
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .modifier(LiveOutline(live: live, pinned: pinned, cornerRadius: cornerRadius, isActive: isActive))
+            .modifier(LiveOutline(live: live, pinned: pinned, cornerRadius: cornerRadius, opacity: opacity, isActive: isActive))
     }
 }
 
@@ -3737,6 +3781,7 @@ private struct LiveOutline: ViewModifier, Animatable {
     var live: CGFloat
     var pinned: CGFloat
     var cornerRadius: CGFloat
+    var opacity: Double
     var isActive: Bool
     var animatableData: CGFloat {
         get { live }
@@ -3748,7 +3793,7 @@ private struct LiveOutline: ViewModifier, Animatable {
         content
             .background(alignment: .topLeading) {
                 GeometryReader { geo in
-                    GlassFill(cornerRadius: cornerRadius)
+                    GlassFill(cornerRadius: cornerRadius, opacity: opacity)
                         // Same specular rim as every card, drawn by Core Animation.
                         .overlay(GlassRim(cornerRadius: cornerRadius).allowsHitTesting(false))
                         .frame(width: geo.size.width + overhang, height: geo.size.height)
@@ -3769,14 +3814,14 @@ private struct LiveOutline: ViewModifier, Animatable {
 }
 
 extension View {
-    func liveGlassCard(cornerRadius: CGFloat = DesignTokens.Radius.large, isActive: Bool = false) -> some View {
-        modifier(LiveGlassCard(cornerRadius: cornerRadius, isActive: isActive))
+    func liveGlassCard(cornerRadius: CGFloat = DesignTokens.Radius.large, opacity: Double = 0.55, isActive: Bool = false) -> some View {
+        modifier(LiveGlassCard(cornerRadius: cornerRadius, opacity: opacity, isActive: isActive))
     }
 }
 
 struct GlassCard: ViewModifier {
     var cornerRadius: CGFloat = DesignTokens.Radius.large
-    var tint: Double = DesignTokens.Glass.blackTint
+    var opacity: Double = 0.55
     // When true, a Tron-style light beam travels around the card's rim --
     // reserved for active/in-progress states (e.g. a link being analyzed),
     // not a resting decoration. Cards are calm and still until something is
@@ -3785,7 +3830,7 @@ struct GlassCard: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(GlassFill(cornerRadius: cornerRadius, tint: tint))
+            .background(GlassFill(cornerRadius: cornerRadius, opacity: opacity))
             .overlay(
                 // Static, quiet rim running the full perimeter: bright at the
                 // top-leading corner, dimmest at the bottom-trailing one -- a
@@ -4888,8 +4933,8 @@ struct GlassDivider: View {
 }
 
 extension View {
-    func glassCard(cornerRadius: CGFloat = DesignTokens.Radius.large, tint: Double = DesignTokens.Glass.blackTint, isActive: Bool = false) -> some View {
-        modifier(GlassCard(cornerRadius: cornerRadius, tint: tint, isActive: isActive))
+    func glassCard(cornerRadius: CGFloat = DesignTokens.Radius.large, opacity: Double = 0.55, isActive: Bool = false) -> some View {
+        modifier(GlassCard(cornerRadius: cornerRadius, opacity: opacity, isActive: isActive))
     }
 }
 
@@ -6776,11 +6821,22 @@ struct ContentView: View {
         .frame(height: fieldHeight)
         .background(
             // Same black-frosted-glass material as every card and the
-            // sidebar, just clipped to a Capsule instead of GlassCard's
+            // sidebar (VisualEffectBlur + black tint + white wash + grain),
+            // just clipped to a Capsule instead of GlassCard's
             // RoundedRectangle -- the field used to be a flat
             // Color.white.opacity(0.05) fill, a visibly different/lighter
             // material than the rest of the app's glass surfaces.
-            GlassFieldCapsule(isDragging: isDragging)
+            ZStack {
+                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                Color.black.opacity(isDragging ? DesignTokens.Glass.blackTintDisabled : DesignTokens.Glass.blackTint)
+                Color.white.opacity(0.55 * DesignTokens.Glass.whiteWash)
+                DitherNoise(opacity: 0.04)
+            }
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(isDragging ? Color.white.opacity(DesignTokens.Text.secondary) : Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: isDragging ? 1.5 : DropGrid.fieldBorderWidth)
+            )
         )
         // Waiting-for-a-click cue lives on the OUTER bar capsule (field +
         // embedded button together) so the pulse ring traces the entire

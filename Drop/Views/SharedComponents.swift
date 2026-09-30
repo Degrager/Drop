@@ -890,7 +890,19 @@ struct LogView: View {
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity)
         .frame(height: fieldHeight, alignment: .center)
-        .background(GlassFieldCapsule())
+        .background(
+            ZStack {
+                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                Color.black.opacity(DesignTokens.Glass.blackTint)
+                Color.white.opacity(0.55 * DesignTokens.Glass.whiteWash)
+                DitherNoise(opacity: 0.04)
+            }
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(DropGrid.fieldBorderOpacity), lineWidth: DropGrid.fieldBorderWidth)
+            )
+        )
         // Fills the tab's content column exactly (the whole Log panel is
         // pinned to it -- see ContentView), matching every other tab's
         // header bar.
@@ -1098,12 +1110,6 @@ struct SidebarTabItem: View {
             isActive: isSelected,
             activeFillOverride: (rest: 0.05, active: 0.14, hover: 0.09, press: 0.17),
             restStrokeOverride: 0.34,
-            // chipFill's default 0.9 scale was tuned for chip-scale elements --
-            // on a full-width pill this wide, that same 10% delta is visibly
-            // tens of points, so the selected fill starts noticeably narrower
-            // than the pill and grows to meet it. 0.98 keeps the same soft
-            // pop at a scale that doesn't read as its own separate shape.
-            fillScaleOverride: 0.98,
             action: action
         ) {
             HStack(spacing: 7) {
@@ -2266,23 +2272,15 @@ private struct DropdownMenuRow: View {
 private struct DropdownMenuChrome<Content: View>: View {
     @ViewBuilder let content: () -> Content
     var body: some View {
-        content().popoverGlassChrome()
-    }
-}
-
-/// The glass chrome shared by every floating popover surface in the app
-/// (dropdown menus above, Convert's file-switcher popup) -- blur + black
-/// tint, a hairline rim, two stacked shadows for depth against the black
-/// card behind it. Pulled out as its own modifier (rather than only living
-/// inside DropdownMenuChrome) so surfaces that build their popup content
-/// directly, instead of through DropdownMenuChrome's wrapper, can still
-/// share the exact same recipe instead of re-declaring it.
-extension View {
-    func popoverGlassChrome(cornerRadius: CGFloat = DesignTokens.Radius.large) -> some View {
-        self
-            .background(GlassBase(shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)))
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        content()
+            .background(
+                ZStack {
+                    VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                    Color.black.opacity(DesignTokens.Glass.blackTint)
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
                 .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
             .shadow(color: .black.opacity(0.5), radius: 6, y: 3)
             .shadow(color: .black.opacity(0.6), radius: 24, y: 12)
@@ -2755,6 +2753,6 @@ extension View {
     /// section has always used, so utility zones read as separate from the
     /// black content cards around them.
     func innerCard(cornerRadius: CGFloat = DesignTokens.Radius.medium) -> some View {
-        glassCard(cornerRadius: cornerRadius, tint: DesignTokens.Glass.blackTint * 0.8)
+        glassCard(cornerRadius: cornerRadius, opacity: 0.35)
     }
 }

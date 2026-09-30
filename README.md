@@ -1,10 +1,12 @@
-# Drop
+<h1 align="center">Drop</h1>
 
-[![macOS 14+](https://img.shields.io/badge/macOS-14%2B-0A0A0A?style=flat-square&logo=apple&logoColor=white)](#system-requirements)
-[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-0A0A0A?style=flat-square)](#system-requirements)
-[![Swift](https://img.shields.io/badge/Swift-SwiftUI-0A0A0A?style=flat-square&logo=swift&logoColor=white)](#how-it-works)
+<p align="center">
+  <a href="#system-requirements"><img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-0A0A0A?style=flat-square&logo=apple&logoColor=white"></a>
+  <a href="#system-requirements"><img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-0A0A0A?style=flat-square"></a>
+  <a href="#how-it-works"><img alt="Swift" src="https://img.shields.io/badge/Swift-SwiftUI-0A0A0A?style=flat-square&logo=swift&logoColor=white"></a>
+</p>
 
-Drop is a fast, native macOS app for downloading and converting online video and audio. Paste a link, pick a quality, and Drop handles the rest — powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [ffmpeg](https://ffmpeg.org/), wrapped in a clean SwiftUI interface with a dark liquid-glass design.
+<p align="center">Drop is a fast, native macOS app for downloading and converting online video and audio. Paste a link, pick a quality, and Drop handles the rest — powered by <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a> and <a href="https://ffmpeg.org/">ffmpeg</a>, wrapped in a clean SwiftUI interface with a dark liquid-glass design.</p>
 
 ## Features
 

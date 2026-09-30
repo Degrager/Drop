@@ -336,6 +336,14 @@ struct CardFacadeMetrics: Equatable {
         case field
         /// One segment of a SegmentedCapsule -- a true pill/capsule shape.
         case pill
+        /// An invisible layout-only placeholder (e.g. a `Color.clear` standing in a field's
+        /// unused half of a row) -- draws nothing, but still claims its share of a row's
+        /// growth the way its real, blank `.frame(maxWidth: .infinity)` sibling would.
+        /// Without this, a row split between one real flexible field and one blank flexible
+        /// placeholder reported the real field alone as that row's only stretching item, so
+        /// it silently absorbed the placeholder's share too and grew twice as wide as it
+        /// should -- reported live as "the right side of the facades doesn't scale properly."
+        case spacer
     }
 
     struct FieldShape: Equatable {
@@ -645,7 +653,15 @@ struct CardFacade: View {
     private var settingsRows: some View {
         GeometryReader { geo in
             if let bounds = metrics.fieldShapes.values.reduce(into: CGRect?.none, { result, shape in result = result?.union(shape.rect) ?? shape.rect }) {
-                let delta = bounds.width > 1 ? geo.size.width - bounds.width : 0
+                // `bounds` is measured inside the card's own horizontal padding on both
+                // sides (bounds.minX IS that left inset), but `geo` is the card's full,
+                // unpadded width -- comparing them directly overcounts both insets as
+                // growth every time (reported live as the facade overshooting the card's
+                // real right edge, most visibly on a row that already spans the full
+                // width). Subtracting the same inset from both sides of `geo` first makes
+                // the two widths comparable.
+                let availableWidth = geo.size.width - 2 * bounds.minX
+                let delta = bounds.width > 1 ? availableWidth - bounds.width : 0
                 // Every .pill segment sharing one `group` merges into ONE capsule spanning
                 // all of them -- the real row shares one continuous capsule background
                 // (SegmentedCapsule.oneLine), not separate pills side by side.
@@ -657,7 +673,7 @@ struct CardFacade: View {
                     }
                 let items: [FacadeItem] = metrics.fieldShapes.values
                     .filter { $0.kind != .pill }
-                    .map { .init(rect: $0.rect, kind: $0.kind, stretches: $0.kind == .field) }
+                    .map { .init(rect: $0.rect, kind: $0.kind, stretches: $0.kind == .field || $0.kind == .spacer) }
                     + pillGroups.values.map { value in
                         // Outset to match the real row's own 3pt padding between its
                         // segments and the shared outer capsule.
@@ -724,6 +740,8 @@ struct CardFacade: View {
                 .fill(Color.white.opacity(0.07))
                 .frame(width: rect.width, height: 6)
                 .position(x: rect.midX, y: rect.midY)
+        case .spacer:
+            EmptyView()
         }
     }
 

@@ -7084,9 +7084,13 @@ struct ContentView: View {
                                     // Kept at the same half-width RESOLUTION had while the
                                     // (since-removed) CODEC field sat here -- an empty
                                     // placeholder, not a real field, so the row's proportions
-                                    // don't change back to full-width.
+                                    // don't change back to full-width. Still reported to the
+                                    // facade (as a .spacer, drawing nothing) so its growth
+                                    // share isn't silently piled onto RESOLUTION instead --
+                                    // see CardFacadeMetrics.Kind.spacer.
                                     Color.clear
                                         .frame(maxWidth: .infinity)
+                                        .reportsFacadeFieldShape(id: "download.video.spacer.\(p.id)", kind: .spacer)
                                 }
                             }
                         } else if p.audioFormat != .m4a {

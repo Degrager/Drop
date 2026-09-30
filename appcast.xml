@@ -39,7 +39,7 @@
 - Fixed the metadata capsule briefly resizing oddly when switching audio format or tabs.
 - Fixed the audio bitrate shown for FLAC and M4A not matching the real setting.
 - Fixed the placeholder shown while resizing not matching a card's real layout.]]></description>
-            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.4.dmg" length="5103993" type="application/octet-stream" sparkle:edSignature="YgasaEteZda7nGgBpujYXovz9MC0aPrOSq7HIVT4u6Xri6v8cQK+fx4utcWH6os2yrKxIGdPFWQ6lNokS8vPDg=="/>
+            <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.4/Drop-1.4.dmg" length="5103993" type="application/octet-stream" sparkle:edSignature="YgasaEteZda7nGgBpujYXovz9MC0aPrOSq7HIVT4u6Xri6v8cQK+fx4utcWH6os2yrKxIGdPFWQ6lNokS8vPDg=="/>
         </item>
     </channel>
 </rss>

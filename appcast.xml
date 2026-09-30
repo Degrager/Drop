@@ -3,6 +3,19 @@
     <channel>
         <title>Drop</title>
         <item>
+            <title>1.4.1</title>
+            <pubDate>Wed, 30 Sep 2026 15:20:47 -0700</pubDate>
+            <sparkle:version>1.4.1</sparkle:version>
+            <sparkle:shortVersionString>1.4.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[Fixed Update Error across recent updates]]></description>
+            <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.4.1/Drop-1.4.1.dmg" length="5104385" type="application/octet-stream" sparkle:edSignature="KoC2TOsVQCaYnkWtQwfiABCyraAIIXR1CYg72d12nC7dw7jj8M1i7EGxmrs8tG5NpTut1M2SED+wa2kmlAIIBA=="/>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.4.1/Drop1.4.1-1.4.delta" sparkle:deltaFrom="1.4" length="79402" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="FpwfS/wtdsfWPx/J2wiVDFfUeiNDPX5NgXjyGY4ZydN7/j8njDvH2wyEXUV8i+9Mq8IveE3Y3oJQ+CwUHsCQDQ=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.4</title>
             <pubDate>Wed, 30 Sep 2026 15:10:08 -0700</pubDate>
             <sparkle:version>1.4</sparkle:version>
@@ -39,7 +52,7 @@
 - Fixed the metadata capsule briefly resizing oddly when switching audio format or tabs.
 - Fixed the audio bitrate shown for FLAC and M4A not matching the real setting.
 - Fixed the placeholder shown while resizing not matching a card's real layout.]]></description>
-            <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.4/Drop-1.4.dmg" length="5103993" type="application/octet-stream" sparkle:edSignature="YgasaEteZda7nGgBpujYXovz9MC0aPrOSq7HIVT4u6Xri6v8cQK+fx4utcWH6os2yrKxIGdPFWQ6lNokS8vPDg=="/>
+            <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.4.1/Drop-1.4.dmg" length="5103993" type="application/octet-stream" sparkle:edSignature="YgasaEteZda7nGgBpujYXovz9MC0aPrOSq7HIVT4u6Xri6v8cQK+fx4utcWH6os2yrKxIGdPFWQ6lNokS8vPDg=="/>
         </item>
     </channel>
 </rss>

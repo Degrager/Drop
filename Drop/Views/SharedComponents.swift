@@ -349,6 +349,17 @@ struct CardFacadeMetrics: Equatable {
         /// border of its own at all. Reported live: "the pill selectors are made up of
         /// individual pills next to each other instead of one big pill."
         var group: String? = nil
+        /// For `.pill` only: the real SegmentedCapsule's own `fill` value -- `true` means
+        /// its segments share the row's full available width (the row genuinely stretches
+        /// with the card, e.g. Download's OUTPUT FORMAT); `false` means segments hug their
+        /// own labels regardless of available room (e.g. DOWNLOAD AS, CONVERT AS -- never
+        /// wider than their content, no matter how wide the card gets). `.field` entries
+        /// always stretch (DropdownField/DropdownBitrateField fill their own slot
+        /// internally, unconditionally); `.text` entries never do (a caption is always its
+        /// own natural size). Reported live: "facade blocks should be an exact match in
+        /// design and placement to the actual elements" -- treating every entry as equally
+        /// flexible was wrong the moment a row mixed a fixed and a flexible sibling.
+        var pillFills: Bool = true
     }
     /// True once the card itself (not just a piece of it) has reported.
     var reported = false
@@ -419,6 +430,7 @@ private struct FacadeFieldShapeReporter: ViewModifier {
     let id: String
     let kind: CardFacadeMetrics.Kind
     let group: String?
+    let pillFills: Bool
 
     func body(content: Content) -> some View {
         content.background(GeometryReader { geo in
@@ -432,7 +444,7 @@ private struct FacadeFieldShapeReporter: ViewModifier {
     private func report(_ rect: CGRect) {
         // A frozen card is given no room, so what it measures then is not its real shape.
         guard let memory, !LiveResizeState.shared.freezesCards, rect.width > 1 else { return }
-        memory.metrics.fieldShapes[id] = .init(rect: rect, kind: kind, group: group)
+        memory.metrics.fieldShapes[id] = .init(rect: rect, kind: kind, group: group, pillFills: pillFills)
     }
 }
 
@@ -450,8 +462,8 @@ extension View {
     /// this isn't inside a facade-tracked card (cardFacadeMemory is nil): every other use of
     /// these shared components (Convert's queue reorder controls, chips elsewhere in the
     /// app, ...) pays nothing for this.
-    func reportsFacadeFieldShape(id: String, kind: CardFacadeMetrics.Kind = .field, group: String? = nil) -> some View {
-        modifier(FacadeFieldShapeReporter(id: id, kind: kind, group: group))
+    func reportsFacadeFieldShape(id: String, kind: CardFacadeMetrics.Kind = .field, group: String? = nil, pillFills: Bool = true) -> some View {
+        modifier(FacadeFieldShapeReporter(id: id, kind: kind, group: group, pillFills: pillFills))
     }
 }
 
@@ -599,98 +611,119 @@ struct CardFacade: View {
     /// for every new card layout and still guessed at individual field widths -- reported
     /// live as still not matching ("the width of the fields in the facade dont match the
     /// width and the layout of the fields in the actual card").
+    /// One item the row-distribution algorithm below treats as a single unit: either a
+    /// non-pill field shape, or a whole pill GROUP already merged into one capsule rect
+    /// (see `settingsRows`). `stretches` says whether HStack would actually give this
+    /// item more room as its row's own available width grows -- `.field` always does
+    /// (DropdownField/DropdownBitrateField fill their own slot internally); `.text`
+    /// never does (a caption is its own natural size); `.pill` depends on the real
+    /// SegmentedCapsule's own `fill` value (CardFacadeMetrics.FieldShape.pillFills).
+    private struct FacadeItem {
+        var rect: CGRect
+        var kind: CardFacadeMetrics.Kind
+        var stretches: Bool
+    }
+
+    /// Every visible piece of the settings content, positioned to an EXACT match of where
+    /// the real layout would put it at the card's CURRENT (possibly resized) width --
+    /// not an approximation. A single blanket scale/stretch treated every field as
+    /// equally flexible, which is wrong the moment a row mixes a fixed sibling (DOWNLOAD
+    /// AS, CONVERT AS -- SegmentedCapsule's own `fill: false`) with a flexible one
+    /// (OUTPUT FORMAT, RESOLUTION) side by side: only the flexible one should actually
+    /// grow or shrink. Reported live, in order: "the width of the fields in the facade
+    /// dont match... the actual card", "pills show up as individual boxes... arent
+    /// matching placement", "the facades dont resize with the window", "the facades dont
+    /// line up with the actual fields", and finally "facade blocks should be an exact
+    /// match in design and placement to the actual elements" -- this replaces every
+    /// earlier approximation (a blanket scaleEffect, a plain offset) with the real thing:
+    /// items are clustered into rows by Y-overlap (two items in the same visual row, by
+    /// construction, share overlapping Y-ranges), each row's own available-width DELTA is
+    /// split only among that row's stretching items, and every other item keeps its exact
+    /// original width, shifting only by however much its stretching neighbors ahead of it
+    /// (in reading order) have already grown -- precisely how HStack itself distributes
+    /// space among fixed and flexible siblings.
     private var settingsRows: some View {
         GeometryReader { geo in
             if let bounds = metrics.fieldShapes.values.reduce(into: CGRect?.none, { result, shape in result = result?.union(shape.rect) ?? shape.rect }) {
-                // Field shapes are fixed rects measured at whatever width the real content
-                // last reported at -- while frozen, the card's own width still tracks the
-                // live window/sidebar (see FreezeLayout), so without this the placeholder
-                // rows stayed pinned at their old size instead of stretching with it
-                // (reported live as "the facades dont resize with the window"). A single
-                // non-uniform scale on the whole group keeps every rect's position and
-                // width proportional to the others, cheaper than recomputing each one.
-                let scale = bounds.width > 1 ? geo.size.width / bounds.width : 1
+                let delta = bounds.width > 1 ? geo.size.width - bounds.width : 0
                 // Every .pill segment sharing one `group` merges into ONE capsule spanning
                 // all of them -- the real row shares one continuous capsule background
-                // (SegmentedCapsule.oneLine), not separate pills side by side. Reported
-                // live: "the pill selectors are made up of individual pills next to each
-                // other instead of one big pill." Individual pill entries are consumed
-                // here; only non-pill shapes are drawn one-by-one below.
-                let pillGroups: [String: CGRect] = metrics.fieldShapes.values
+                // (SegmentedCapsule.oneLine), not separate pills side by side.
+                let pillGroups: [String: (rect: CGRect, fills: Bool)] = metrics.fieldShapes.values
                     .filter { $0.kind == .pill }
                     .reduce(into: [:]) { result, shape in
                         let key = shape.group ?? ""
-                        result[key] = result[key]?.union(shape.rect) ?? shape.rect
+                        result[key] = (result[key]?.rect.union(shape.rect) ?? shape.rect, shape.pillFills)
                     }
-                // Every shape below is positioned RELATIVE TO bounds' own origin (not the
-                // card's), and the ZStack is given bounds' own exact size -- so
-                // `anchor: .topLeading` on the scaleEffect unambiguously means bounds'
-                // own top-left corner. Positioning at the raw, card-relative coordinates
-                // (as before) left the ZStack's own inferred size/origin undefined by
-                // SwiftUI (.position() doesn't affect a view's reported layout size), so
-                // the scale's real anchor point was wherever SwiftUI happened to infer --
-                // not bounds' corner -- which shifted every field sideways by a growing
-                // amount as the window resized. Reported live: "the facades dont line up
-                // with the actual fields." The final .offset restores the true on-screen
-                // position with a CONSTANT (never-scaled) shift, matching how the real
-                // content's own leading margin stays fixed while only the fields
-                // themselves grow or shrink.
-                ZStack(alignment: .topLeading) {
-                    Rectangle().fill(Color.white.opacity(0.07))
-                        .frame(width: bounds.width, height: 0.5)
-                        .position(x: bounds.width / 2, y: -12)
-                    ForEach(Array(pillGroups.keys), id: \.self) { key in
-                        if let rect = pillGroups[key] {
-                            // Outset to match the real row's own 3pt padding between its
-                            // segments and the shared outer capsule.
-                            let padded = rect.insetBy(dx: -3, dy: -3)
-                            Capsule()
-                                .fill(Color.white.opacity(0.05))
-                                .frame(width: padded.width, height: padded.height)
-                                .position(x: padded.midX - bounds.minX, y: padded.midY - bounds.minY)
+                let items: [FacadeItem] = metrics.fieldShapes.values
+                    .filter { $0.kind != .pill }
+                    .map { .init(rect: $0.rect, kind: $0.kind, stretches: $0.kind == .field) }
+                    + pillGroups.values.map { value in
+                        // Outset to match the real row's own 3pt padding between its
+                        // segments and the shared outer capsule.
+                        .init(rect: value.rect.insetBy(dx: -3, dy: -3), kind: .pill, stretches: value.fills)
+                    }
+                // Cluster into visual rows by Y-overlap, then within each row distribute
+                // that row's own share of `delta` only among its stretching items, in X
+                // order, so a fixed item shifts by however much stretching neighbors
+                // BEFORE it already grew, but never changes its own width.
+                let rows: [[FacadeItem]] = items
+                    .sorted { $0.rect.minY < $1.rect.minY }
+                    .reduce(into: []) { rows, item in
+                        if let last = rows.indices.last, rows[last].contains(where: { $0.rect.minY < item.rect.maxY && item.rect.minY < $0.rect.maxY }) {
+                            rows[last].append(item)
+                        } else {
+                            rows.append([item])
                         }
                     }
-                    ForEach(Array(metrics.fieldShapes.keys), id: \.self) { key in
-                        if let shape = metrics.fieldShapes[key], shape.kind != .pill {
-                            fieldPlaceholder(shape, relativeTo: bounds.origin)
-                        }
+                let placed: [(rect: CGRect, kind: CardFacadeMetrics.Kind)] = rows.flatMap { row -> [(rect: CGRect, kind: CardFacadeMetrics.Kind)] in
+                    let sortedRow = row.sorted { $0.rect.minX < $1.rect.minX }
+                    let flexCount = sortedRow.filter(\.stretches).count
+                    let growth = flexCount > 0 ? delta / CGFloat(flexCount) : 0
+                    var shift: CGFloat = 0
+                    return sortedRow.map { item in
+                        let newRect = CGRect(x: item.rect.minX - bounds.minX + shift, y: item.rect.minY - bounds.minY,
+                                              width: max(0, item.rect.width + (item.stretches ? growth : 0)), height: item.rect.height)
+                        if item.stretches { shift += growth }
+                        return (newRect, item.kind)
                     }
                 }
-                .frame(width: bounds.width, height: bounds.height)
-                .scaleEffect(x: scale, y: 1, anchor: .topLeading)
+                ZStack(alignment: .topLeading) {
+                    Rectangle().fill(Color.white.opacity(0.07))
+                        .frame(width: geo.size.width, height: 0.5)
+                        .position(x: geo.size.width / 2, y: -12)
+                    ForEach(Array(placed.enumerated()), id: \.offset) { _, entry in
+                        facadeShape(kind: entry.kind, rect: entry.rect)
+                    }
+                }
                 .offset(x: bounds.minX, y: bounds.minY)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// One placeholder, shaped to match what it's standing in for -- previously every kind
-    /// drew as the same small-cornered rounded rect regardless of what it really was.
-    /// Reported live: "pills show up as individual boxes" (a real SegmentedCapsule segment
-    /// is a true Capsule with no border of its own) "and they arent matching placement"
-    /// (captions weren't drawn at all, so surrounding fields sat closer together than the
-    /// real layout, which always leaves room for one above each field). `.pill` is handled
-    /// at the group level in `settingsRows` above, not per-entry here.
+    /// One placeholder, shaped to match what it's standing in for and drawn at its own
+    /// already-final rect (see `settingsRows`'s row-distribution algorithm above).
     @ViewBuilder
-    private func fieldPlaceholder(_ shape: CardFacadeMetrics.FieldShape, relativeTo origin: CGPoint) -> some View {
-        let rect = shape.rect
-        let midX = rect.midX - origin.x
-        let midY = rect.midY - origin.y
-        switch shape.kind {
+    private func facadeShape(kind: CardFacadeMetrics.Kind, rect: CGRect) -> some View {
+        switch kind {
         case .pill:
-            EmptyView()
+            Capsule()
+                .fill(Color.white.opacity(0.05))
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
         case .field:
             RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                 .fill(Color.white.opacity(0.05))
                 .frame(width: rect.width, height: rect.height)
-                .position(x: midX, y: midY)
+                .position(x: rect.midX, y: rect.midY)
         case .text:
             // A thin bar, not a box -- text reads as a line, not a filled block. Vertically
             // centered in the caption's own measured height rather than filling it.
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Color.white.opacity(0.07))
                 .frame(width: rect.width, height: 6)
-                .position(x: midX, y: midY)
+                .position(x: rect.midX, y: rect.midY)
         }
     }
 
@@ -2116,7 +2149,7 @@ struct SegmentedCapsule: View {
         HStack(spacing: 2) {
             ForEach(options) {
                 SegmentButton(option: $0, fill: fill, standalone: false, height: rowHeight)
-                    .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)", kind: .pill, group: groupID)
+                    .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)", kind: .pill, group: groupID, pillFills: fill)
             }
         }
         .padding(3)
@@ -2134,7 +2167,7 @@ struct SegmentedCapsule: View {
                     FlowLayout(spacing: 6) {
                         ForEach(options) {
                             SegmentButton(option: $0, fill: false, standalone: true, height: rowHeight)
-                                .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)", kind: .pill, group: groupID)
+                                .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)", kind: .pill, group: groupID, pillFills: fill)
                         }
                     }
                 }

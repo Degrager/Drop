@@ -2364,7 +2364,11 @@ extension View {
                     let windowHeight = NSApplication.shared.windows.first(where: { !($0 is NSPanel) })?.frame.height ?? (cardGlobalTop + proxy.size.height)
                     // Reserves room for the bottom bar/window chrome below the content
                     // area -- approximate on purpose (see the Entry.height doc comment).
-                    let bottomMargin: CGFloat = 90
+                    // 90 undershot Download's real bar height (~130pt with the folder-
+                    // path row + Download button, measured live) by enough that a
+                    // second queued card's dropdown still opened downward straight
+                    // under it instead of flipping up.
+                    let bottomMargin: CGFloat = 145
                     let opensUpward = cardGlobalTop + rect.maxY + 6 + entry.height > windowHeight - bottomMargin
                     let y = opensUpward ? rect.minY - 6 - entry.height : rect.maxY + 6
                     ZStack(alignment: .topLeading) {

@@ -7068,8 +7068,8 @@ struct ContentView: View {
                 ZStack(alignment: .top) {
                     Group {
                         if p.mediaMode != .audioOnly {
-                            HStack(alignment: .bottom, spacing: 16) {
-                                FieldsTrackRow(icon: "video", label: "VIDEO") {
+                            FieldsTrackRow(icon: "video", label: "VIDEO") {
+                                HStack(alignment: .bottom, spacing: 12) {
                                     // Suffixed with the card's own id: openDropdownID is one
                                     // value shared by every download card (see its declaration),
                                     // so two cards' otherwise-identical field ids would each
@@ -7078,18 +7078,15 @@ struct ContentView: View {
                                     DropdownField(id: "download.video.resolution.\(p.id)", caption: "RESOLUTION",
                                                   options: downloadVideoQualityOptions(preview: preview),
                                                   openID: $openDropdownID)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    // The video codec is whatever the source actually has --
+                                    // there's no real choice here (video isn't re-encoded for
+                                    // a Video+Audio download), but it was previously invisible
+                                    // in this mode entirely. Locked field, not a real
+                                    // DropdownField, since there's nothing to actually pick.
+                                    StaticCodecField(caption: "CODEC", value: p.sourceVideoCodec ?? "—")
+                                        .frame(width: 100, alignment: .leading)
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                // Video+Audio always muxes AAC audio -- there's no real
-                                // choice here (unlike Audio Only, where OUTPUT FORMAT
-                                // above already covers the real codec choice), but the
-                                // codec was previously invisible in this mode entirely.
-                                // Shown as a locked field rather than a real DropdownField
-                                // since there's nothing to actually pick.
-                                FieldsTrackRow(icon: "waveform", label: "AUDIO") {
-                                    StaticCodecField(caption: "CODEC", value: "AAC")
-                                }
-                                .frame(width: 120, alignment: .leading)
                             }
                         } else if p.audioFormat != .m4a {
                             // M4A has no selectable quality/bitrate -- it's a fixed passthrough

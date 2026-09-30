@@ -7085,7 +7085,6 @@ struct ContentView: View {
                                     // in this mode entirely. Locked field, not a real
                                     // DropdownField, since there's nothing to actually pick.
                                     StaticCodecField(caption: "CODEC", value: p.sourceVideoCodec ?? "—")
-                                        .frame(width: 100, alignment: .leading)
                                 }
                             }
                         } else if p.audioFormat != .m4a {

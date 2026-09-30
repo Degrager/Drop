@@ -1137,17 +1137,6 @@ struct ConvertView: View {
 
     private var selectedStagingJob: ConvertJob? { stagingJobs.first { $0.id == selectedStagingID } }
 
-    /// "current/total" position of the file currently shown in Analyze
-    /// among every staged file (e.g. "2/3") -- nil when there's nothing to
-    /// count (0 or 1 staged file), matching the old count-only label's
-    /// visibility rule.
-    private var stagingProgressLabel: String? {
-        guard stagingJobs.count > 1,
-              let selectedStagingID,
-              let idx = stagingJobs.firstIndex(where: { $0.id == selectedStagingID }) else { return nil }
-        return "\(idx + 1)/\(stagingJobs.count)"
-    }
-
     /// Every queue row always shows its own checkbox now (no separate Select
     /// Mode toggle) -- "selected" just means "will be included the next time
     /// Convert is pressed."

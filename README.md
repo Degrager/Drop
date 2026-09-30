@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/readme/icon.png" alt="Drop's app icon" width="96">
+</p>
+
 <h1 align="center">Drop</h1>
 
 <p align="center">

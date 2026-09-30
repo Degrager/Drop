@@ -1,8 +1,8 @@
 <h1 align="center">Drop</h1>
 
 <p align="center">
-  <a href="#system-requirements"><img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-0A0A0A?style=flat-square&logo=apple&logoColor=white"></a>
-  <a href="#system-requirements"><img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-0A0A0A?style=flat-square"></a>
+  <a href="#requirements"><img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-0A0A0A?style=flat-square&logo=apple&logoColor=white"></a>
+  <a href="#requirements"><img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-0A0A0A?style=flat-square"></a>
   <a href="#how-it-works"><img alt="Swift" src="https://img.shields.io/badge/Swift-SwiftUI-0A0A0A?style=flat-square&logo=swift&logoColor=white"></a>
 </p>
 

@@ -298,16 +298,20 @@ struct PreviewCard<Settings: View>: View {
         var buttons: Int
     }
 
-    /// The room the status slot takes: what the progress column needs, less the Reveal button
-    /// that shares the trailing side once a download is done.
-    private var statusSlotWidth: CGFloat {
-        CardMetrics.statusWidth - (secondaryControl != nil ? CardMetrics.buttonSlot : 0)
-    }
-
     /// Buttons on the header's trailing edge, for the resize facade.
     private var buttonCount: Int {
         if isAnalyzing { return 1 }
         return (secondaryControl != nil ? 1 : 0) + (primaryTrailingControl != nil ? 1 : 0) + 1
+    }
+
+    /// The room the status slot takes: what the progress column needs, less whatever of the
+    /// trailing buttons is persistent -- secondaryControl when this card has one, and
+    /// primaryTrailingControl whenever it's CAPABLE of appearing (not only once it actually has:
+    /// see primaryTrailingControlCapable's own doc comment).
+    private var statusSlotWidth: CGFloat {
+        CardMetrics.statusWidth
+            - (secondaryControl != nil ? CardMetrics.buttonSlot : 0)
+            - (primaryTrailingControlCapable ? CardMetrics.buttonSlot : 0)
     }
 
     // MARK: Shared header
@@ -488,6 +492,16 @@ struct PreviewCard<Settings: View>: View {
                 // gets more or less room. That width is a spacer that never animates; the two
                 // views swap inside it (as an overlay, so the outgoing one takes no room while it
                 // fades) and stay right-aligned against the buttons.
+                //
+                // statusSlotWidth is deliberately STATIC across the analyzing -> analyzed
+                // transition (see its own doc comment for why): a view mid-removal-transition
+                // doesn't get re-laid-out frame by frame, it just animates from the position it
+                // had the instant its `if` branch went false. Reserving room from primaryTrailingControl's
+                // CAPABILITY rather than its live presence means this box's width -- and so the
+                // outgoing "Analyzing" text's trailing anchor -- never has to move at the exact
+                // moment the options button appears, which is what let the two overlap (reported
+                // live as "the progress indicator... gets overlapped by the options icon button
+                // when going from analyzing to analyzed").
                 Color.clear
                     .frame(width: statusSlotWidth, height: 1)
                     .animation(nil, value: statusSlotWidth)
@@ -521,6 +535,15 @@ struct PreviewCard<Settings: View>: View {
                            help: isExpanded.wrappedValue ? "Hide Options" : "Show Options") {
             withAnimation(.easeOut(duration: 0.22)) { isExpanded.wrappedValue.toggle() }
         }
+    }
+
+    /// Same question as `primaryTrailingControl`, minus its `!isAnalyzing` gate -- whether this
+    /// card is EVER going to show that button, regardless of whether it's showing one right now.
+    /// `statusSlotWidth` reserves room from this instead of `primaryTrailingControl`'s live value
+    /// specifically so that width never has to change the instant analyzing finishes (see its own
+    /// doc comment for why that matters).
+    private var primaryTrailingControlCapable: Bool {
+        primaryControl != nil || (collapseButtonInHeader && isExpanded != nil && !collapseLocked)
     }
 
     private func controlButton(_ control: CardControl) -> some View {

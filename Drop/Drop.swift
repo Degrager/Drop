@@ -2439,7 +2439,6 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                                     // backward within one download attempt.
                                     let clamped = max(effective, lastDisplayedFraction)
                                     lastDisplayedFraction = clamped
-                                    let pctLabel = "\(Int((clamped * 100).rounded()))%"
                                     // Carry the rest of the line (speed/ETA, after the
                                     // first "%") alongside the bar so that info isn't lost --
                                     // "of 8.23MiB at 1.20MiB/s ETA 00:04" stays visible.
@@ -2489,20 +2488,22 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                                                     // been shown, keep displaying it (percentage still
                                                     // updates live) instead of collapsing back to
                                                     // percent-only on a single stale/"Unknown" tick.
+                                                    // The percentage itself is its own element now (see
+                                                    // progressIndicator), not folded into this text.
                                                     if hasRealETA {
-                                                        $0.etaText = "\(pctLabel)  \u{B7}  \(eta) left"
+                                                        $0.etaText = "\(eta) left"
                                                     } else if let prevETA = $0.lastKnownETA {
-                                                        $0.etaText = "\(pctLabel)  \u{B7}  \(prevETA) left"
+                                                        $0.etaText = "\(prevETA) left"
                                                     } else {
-                                                        $0.etaText = pctLabel
+                                                        $0.etaText = ""
                                                     }
                                                     if hasRealETA { $0.lastKnownETA = eta }
                                                 }
                                             } else {
-                                                self.withDownload(downloadID) { $0.etaText = pctLabel }
+                                                self.withDownload(downloadID) { $0.etaText = "" }
                                             }
                                         } else {
-                                            self.withDownload(downloadID) { $0.etaText = pctLabel }
+                                            self.withDownload(downloadID) { $0.etaText = "" }
                                         }
                                     }
                                 }
@@ -7042,6 +7043,7 @@ struct ContentView: View {
             },
             capsule: capsule,
             titleKnown: titleKnown,
+            queuedStatus: (!analyzing && !failedAnalyze && (dl == nil || dl?.status == .pending)) ? queuedProgressColumn() : nil,
             inlineStatus: analyzing ? analyzeProgressColumn() : dl.flatMap { downloadProgressColumn($0) },
             statusLabel: dl.flatMap { downloadOutcomeLabel($0) },
             primaryControl: controls?.primary,
@@ -7264,65 +7266,97 @@ struct ContentView: View {
 
     // MARK: Download — what the one card shows once a download exists
 
-    /// The header's progress-indicator slot while a card is still being analyzed -- same shape
-    /// and position as downloadProgressColumn's own "Waiting" state (label + a slim bar), so
-    /// Analyzing reads as the first step of the same continuous progression a card moves
-    /// through (Analyzing -> Waiting -> Downloading -> Done) instead of a message that lived
-    /// somewhere else entirely (the IN/OUT metadata capsule, which now stays blank until real
-    /// metadata exists -- see PersistentCapsule). There is no real percentage to report during
-    /// analyze, so the bar is an indeterminate shimmer, matching Waiting's own bar for the same
-    /// reason (a download not yet started has nothing to measure progress against either).
+    /// Shared shape for the header's progress-indicator slot, used by every state a card moves
+    /// through (Analyzing, Queued, Downloading, Done, Failed, Cancelled). Built from three parts:
+    /// a status (an icon + label -- every state has exactly one), a progress bar, and a
+    /// percentage beside that bar -- only Downloading turns the last two on, since it's the only
+    /// state with real progress to report. One shared builder instead of each state hand-rolling
+    /// its own layout, so they can never quietly drift apart (reported live: the progress
+    /// indicator should be "made up of 3 elements, the status, progress bar, and percentage").
+    /// The percentage sits beside the BAR, not beside the label -- putting all three on the
+    /// label's own row left it competing with icon + percentage for the same narrow
+    /// CardMetrics.statusWidth, truncating status text that used to fit (reported live: "i dont
+    /// like that status text is getting cut off and it has to be shortened"). The status row is
+    /// left-aligned within the box (reported live: "the label text should be left aligned") --
+    /// trailing alignment made the icon itself jump left/right as the label's own length changed
+    /// from state to state; anchoring to the left instead keeps the icon in one fixed spot and
+    /// only the label's trailing edge moves.
+    private func progressIndicator(icon: String, label: String, color: Color, iconColor: Color? = nil,
+                                    percentage: String? = nil, bar: AnyView? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).foregroundColor(iconColor ?? color)
+                Text(label).foregroundColor(color).lineLimit(1)
+            }
+            .font(.appMono(size: 10, weight: .semibold))
+            if let bar {
+                HStack(spacing: 6) {
+                    bar
+                    if let percentage {
+                        Text(percentage)
+                            .font(.appMono(size: 10, weight: .semibold))
+                            .foregroundColor(color)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+            }
+        }
+    }
+
+    /// The header's progress-indicator slot while a card is still being analyzed -- status only
+    /// (see progressIndicator), same position as every other state so Analyzing reads as the
+    /// first step of one continuous progression (Analyzing -> Queued -> Downloading -> Done)
+    /// instead of a message that lived somewhere else entirely (the IN/OUT metadata capsule,
+    /// which now stays blank until real metadata exists -- see PersistentCapsule).
     private func analyzeProgressColumn() -> AnyView {
         AnyView(
-            VStack(alignment: .trailing, spacing: 5) {
-                HStack(spacing: 5) {
-                    Image(systemName: "hourglass").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                    Text("Analyzing").foregroundColor(.white).lineLimit(1)
-                }
-                .font(.appMono(size: 10, weight: .semibold))
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(DesignTokens.Interactive.fillRest)).frame(height: 4)
-                        ShimmerBar(width: geo.size.width, color: .white, glow: false, duration: 1.8)
-                    }
-                }
-                .frame(height: 4)
-            }
-            .frame(width: CardMetrics.statusWidth, alignment: .trailing)
+            progressIndicator(icon: "hourglass", label: "Analyzing", color: .white,
+                               iconColor: .white.opacity(DesignTokens.Text.secondary))
+                .frame(width: CardMetrics.statusWidth, alignment: .trailing)
         )
     }
 
-    /// The progress column on the right of a downloading card, like a Convert queue row's: the
-    /// status (percentage and time left while it runs) over a slim bar. Only while the download
-    /// is in flight; what it ends as is its own label (downloadOutcomeLabel), not this column
-    /// changing shape.
+    /// The progress column on the right of a downloading card: status, a percentage beside it,
+    /// and a slim bar below -- the only state that turns on all three parts (see
+    /// progressIndicator), since it's the only one with real progress to report. Only while the
+    /// download is actually in flight; a still-`.pending` download shows queuedProgressColumn
+    /// instead (see its own doc comment), and what a download ends as is its own label
+    /// (downloadOutcomeLabel), not this column changing shape. The status label is whatever's
+    /// actually happening (speed, or a real ETA once known, or "Downloading" before either is) --
+    /// the percentage is always its own element, never folded into that text.
     private func downloadProgressColumn(_ dl: Download) -> AnyView? {
-        guard dl.status == .pending || dl.status == .downloading else { return nil }
-        let label: String = {
-            if dl.status == .pending { return "Waiting" }
-            if !dl.etaText.isEmpty { return dl.etaText }
-            return dl.activityText.isEmpty ? "Downloading" : dl.activityText
-        }()
+        guard dl.status == .downloading else { return nil }
+        let label = dl.etaText.isEmpty ? (dl.activityText.isEmpty ? "Downloading" : dl.activityText) : dl.etaText
+        // Same threshold as downloadProgressBar's own switch from shimmer to a real fill --
+        // progress starts at a bare 0 the instant a download begins (not nil), so matching on
+        // non-nil alone showed a premature, meaningless "0%" before any real data arrived.
+        let percentage = dl.progress.flatMap { $0 > 0 ? "\(Int(($0 * 100).rounded()))%" : nil }
         return AnyView(
-            VStack(alignment: .trailing, spacing: 5) {
-                HStack(spacing: 5) {
-                    if dl.status == .pending {
-                        Image(systemName: "clock").foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                    } else {
-                        Image(systemName: "arrow.down.circle").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                    }
-                    Text(label)
-                        .foregroundColor(dl.status == .pending ? .white.opacity(DesignTokens.Text.tertiary) : .white)
-                        .lineLimit(1)
-                }
-                .font(.appMono(size: 10, weight: .semibold))
-                downloadProgressBar(dl)
-            }
-            .frame(width: CardMetrics.statusWidth, alignment: .trailing)
+            progressIndicator(icon: "arrow.down.circle", label: label, color: .white,
+                               iconColor: .white.opacity(DesignTokens.Text.secondary),
+                               percentage: percentage,
+                               bar: AnyView(downloadProgressBar(dl).frame(maxWidth: .infinity)))
+                .frame(width: CardMetrics.statusWidth, alignment: .trailing)
         )
     }
 
-    /// How a download ended (Done, Failed, Cancelled), a plain label to the left of the buttons.
+    /// A download not yet transferring -- status only (see progressIndicator), same reasoning as
+    /// every non-Downloading state: there's nothing yet to measure progress against. Sits to the
+    /// LEFT, right after the title, instead of sharing downloadProgressColumn's spot beside the
+    /// buttons, and moves into that box the instant a real download starts (reported live: "move
+    /// it over to the left and have it say queued, and then move it back when it starts
+    /// downloading"). Shown for BOTH "analyzed and ready, nothing submitted yet" and "submitted
+    /// but waiting behind another download" (downloads run one at a time, see
+    /// DownloadManager.maxConcurrentDownloads) -- from the user's own perspective these read as
+    /// the same thing (reported live: "ready and queued should be the same state... the queued
+    /// indicator should be during the ready state").
+    private func queuedProgressColumn() -> AnyView {
+        AnyView(progressIndicator(icon: "clock", label: "Queued", color: .white.opacity(DesignTokens.Text.tertiary)))
+    }
+
+    /// How a download ended (Done, Failed, Cancelled) -- status only (see progressIndicator), a
+    /// plain label to the left of the buttons.
     private func downloadOutcomeLabel(_ dl: Download) -> AnyView? {
         let icon: String, label: String, color: Color
         switch dl.status {
@@ -7331,24 +7365,17 @@ struct ContentView: View {
         case .cancelled: (icon, label, color) = ("slash.circle.fill", "Cancelled", .orange)
         case .pending, .downloading: return nil
         }
-        return AnyView(
-            HStack(spacing: 5) {
-                Image(systemName: icon).foregroundColor(color)
-                Text(label).foregroundColor(color).lineLimit(1)
-            }
-            .font(.appMono(size: 10, weight: .semibold))
-        )
+        return AnyView(progressIndicator(icon: icon, label: label, color: color))
     }
 
-    /// Filled and animated once a percentage is known, a shimmer before that (dim while waiting
-    /// to start, green once it is transferring).
+    /// Filled and animated once a percentage is known, a shimmer before that (only while it is
+    /// actually transferring -- a still-`.pending` download has no bar at all, see
+    /// queuedProgressColumn).
     private func downloadProgressBar(_ dl: Download) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(DesignTokens.Interactive.fillRest)).frame(height: 4)
-                if dl.status == .pending {
-                    ShimmerBar(width: geo.size.width, color: .white, glow: false, duration: 1.8)
-                } else if let pct = dl.progress, pct > 0 {
+                if let pct = dl.progress, pct > 0 {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(LinearGradient(colors: [Color.green.opacity(0.6), Color.green.opacity(1.0)],
                                              startPoint: .leading, endPoint: .trailing))

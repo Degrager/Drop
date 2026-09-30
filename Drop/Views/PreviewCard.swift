@@ -132,6 +132,12 @@ struct PreviewCard<Settings: View>: View {
     /// link is analyzed. Until then the title bar waits at a default length; when it is true the
     /// bar first takes the title's length and only then gives way to the title.
     var titleKnown: Bool = true
+    /// A status that hasn't reached the active slot yet (a download still waiting its turn) --
+    /// sits right after the title/capsule group instead of sharing inlineStatus's spot beside the
+    /// buttons, so "waiting in line" reads as a different place than "in progress." Moves into
+    /// inlineStatus's position the instant the caller's real status advances (e.g. a download
+    /// starting transferring).
+    var queuedStatus: AnyView? = nil
     /// A status column between the text and the buttons on the header's trailing side (a
     /// download's progress while it runs).
     var inlineStatus: AnyView? = nil
@@ -285,7 +291,8 @@ struct PreviewCard<Settings: View>: View {
         // Every state change (analyzing -> ready -> downloading -> finished) animates in place:
         // the same card, its contents adjusting.
         .animation(.easeInOut(duration: 0.35), value: StateKey(
-            analyzing: isAnalyzing, settings: showsSettings, status: inlineStatus != nil, label: statusLabel != nil, buttons: buttonCount
+            analyzing: isAnalyzing, settings: showsSettings, queued: queuedStatus != nil,
+            status: inlineStatus != nil, label: statusLabel != nil, buttons: buttonCount
         ))
         .transition(.glassPopInOnly)
     }
@@ -293,6 +300,7 @@ struct PreviewCard<Settings: View>: View {
     private struct StateKey: Equatable {
         var analyzing: Bool
         var settings: Bool
+        var queued: Bool
         var status: Bool
         var label: Bool
         var buttons: Int
@@ -480,6 +488,10 @@ struct PreviewCard<Settings: View>: View {
                 }
 
                 if !narrow { capsuleSlot }
+            }
+
+            if let queuedStatus {
+                queuedStatus.transition(.blurIn)
             }
 
             Spacer()

@@ -3,58 +3,43 @@
     <channel>
         <title>Drop</title>
         <item>
-            <title>1.3</title>
-            <pubDate>Sat, 26 Sep 2026 18:28:11 -0700</pubDate>
-            <sparkle:version>1.3</sparkle:version>
-            <sparkle:shortVersionString>1.3</sparkle:shortVersionString>
+            <title>1.4</title>
+            <pubDate>Wed, 30 Sep 2026 15:10:08 -0700</pubDate>
+            <sparkle:version>1.4</sparkle:version>
+            <sparkle:shortVersionString>1.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[Updated Menu Bar, CPU Usage Fix, UI Clean Up, and other bug fixes...
+            <description><![CDATA[Card Layout Changes, Performance Improvements, and more bug fixes...
 
 ## What's New
-- Redesigned menu bar panel: it shows the link on your clipboard before you paste, and Check for Updates and Quit are one click away.
+- Added resolution and bitrate controls to Convert.
+- Added source details to Same as Source options in Convert.
+- Redesigned the Download and Convert card: fewer rows, dropdown fields for codec and bitrate.
+- Convert shows an estimated Auto bitrate when the source file doesn't report one.
+- Convert resolution options now show their common name, like 4K Ultra HD.
+- Re-added MOV as a Download format, for sources that can actually use it.
 
 ## Changed
-- Removed the moving light beam from the Check for Updates button.
-- A job's outcome (Done, Failed, Cancelled) is its own label beside the buttons on Download and Convert, and the title no longer moves when it finishes.
-- Convert shows sizes in the same units as Finder, and a finished row shows its real size instead of the estimate.
+- Edit is now hidden in the Convert queue while a conversion is running.
+- Every icon button now shows a label on hover, and fixed a few non-square ones.
+- Cleaned up the View menu: added Toggle Sidebar, removed unused tab-bar items.
+- The options button now shows a settings icon, and every button shows its name on hover.
 
 ## Fixes
-- Fixed Check for Updates in the menu bar, which never actually checked.
-- Fixed high CPU usage during idle with a link on screen.
-- Estimated download sizes are accurate]]></description>
-            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.3.dmg" length="3698240" type="application/octet-stream" sparkle:edSignature="5h+Cyb2ExsNlpEyhx8f+tRzcbAzh7yy0EO3ujl15BOYIdy7OuFrIOUJOecg0ST/NB49Ydf9zHuXY0BJm3I6/DA=="/>
-            <sparkle:deltas>
-                <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop1.3-1.2.delta" sparkle:deltaFrom="1.2" length="484242" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="xf84M/n7iuJ1ugr3SQ5dDwLvC2O+0DsPy5euT32DRWSHmwC2LI9NNNhniW6/ARMI6OiDRBNIOYnvDE1fwkY8AA=="/>
-            </sparkle:deltas>
-        </item>
-        <item>
-            <title>1.2</title>
-            <pubDate>Fri, 25 Sep 2026 22:45:13 -0700</pubDate>
-            <sparkle:version>1.2</sparkle:version>
-            <sparkle:shortVersionString>1.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[Performance Improvements, Cleaner Design, Bug Fixes and More...
-
-## What's New
-- History entries can be removed one at a time, and History and Log rows are more compact, with History metadata in the same capsule as the cards.
-- Sidebar: choose a collapse animation in View > Sidebar Animation, plus tab counters and labels that type in.
-
-## Changed
-- Reworked Convert: Add to Queue moved to the bottom of the analyze card, simpler queue rows with Cancel on the one converting, files convert one at a time, and AV1, VP9 and Opus removed from the pickers.
-- Performance: faster launch, near-zero idle CPU with a card open, and smoother file imports.
-- New window and layout: opens at 1050×800 centered, pages share one content column (max 850pt), the sidebar auto-collapses below 1000pt, and there's a new gradient background.
-- Redesigned cards: metadata in one capsule showing full resolution (like 3840×2160), titles in the app font, simpler option rows with tighter spacing, compact collapsed cards, and smaller Select / Collapse All / Clear All buttons.
-- Redesigned bottom bars: one card with a folder capsule, icon buttons for Browse, Reveal and Auto-open, and no SAVE TO label.
-- Redesigned the sidebar update block: tool pills like the tabs, one status badge on Check for Updates, and Up to Date returns to Check for Updates after a few seconds.
-- Smoother sidebar collapse and expand: no slowdown with cards on screen, and the bars, hints and icons move with it instead of jumping.
-
-## Fixes
-- Fixed several Convert bugs: WAV sources failing to convert, Same as Source getting stuck, H.265 files not playing in QuickTime and Final Cut, and MP3 from surround sources.
-- Fixed a brief popup flashing next to the paste field at launch.
-- Fixed chips overlapping in narrow windows and Convert making the window grow taller.]]></description>
-            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.2.dmg" length="3693234" type="application/octet-stream" sparkle:edSignature="rWk/leOXdNV4Qe9zrkcqV6eTuO0XJm12cPOnpZhPjKbMJ84RcDmU8z5aAIVQtHSRbshj5TouaxZVof0Aod75BQ=="/>
+- Improved window resizing performance
+- Fixed the metadata capsule briefly showing two states at once while a file finishes analyzing.
+- Fixed Convert dropdown menus that could run past the window edge and stuttered when closing.
+- Fixed SoundCloud links not showing an estimated download size.
+- A running download now shows one Cancel button instead of two overlapping ones.
+- Fixed automatic retries after a blocked download repeating the exact same failed request.
+- Check for Updates now switches to Checking instantly and can't be clicked mid-result.
+- Fixed long links truncating in the middle instead of at the end.
+- Fixed dropdown menus needing two clicks to act on anything else while open.
+- Fixed a transparent background on Convert's file switcher popup.
+- Fixed the metadata capsule briefly resizing oddly when switching audio format or tabs.
+- Fixed the audio bitrate shown for FLAC and M4A not matching the real setting.
+- Fixed the placeholder shown while resizing not matching a card's real layout.]]></description>
+            <enclosure url="https://raw.githubusercontent.com/Degrager/Drop/main/Drop-1.4.dmg" length="5103993" type="application/octet-stream" sparkle:edSignature="YgasaEteZda7nGgBpujYXovz9MC0aPrOSq7HIVT4u6Xri6v8cQK+fx4utcWH6os2yrKxIGdPFWQ6lNokS8vPDg=="/>
         </item>
     </channel>
 </rss>

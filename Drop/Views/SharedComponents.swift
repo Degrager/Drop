@@ -2580,43 +2580,6 @@ struct DropdownField: View {
     }
 }
 
-/// Same chrome as DropdownField's closed state (caption + value in a bordered
-/// capsule), but a plain, non-interactive value -- no button, no chevron, no
-/// menu -- for a field where there genuinely is no choice to make (e.g.
-/// Video+Audio's own video codec, whatever the source has), so it reads as
-/// informational rather than inviting a tap that would do nothing. Sized to
-/// its own row, given the same maxWidth: .infinity treatment as the
-/// DropdownField beside it -- an equal, even split between the two, that
-/// scales together as the window resizes (a fixed width didn't scale at
-/// all, and a content-hugging width gave the two fields very unequal
-/// shares -- reported live as wanting them equal, not just responsive).
-struct StaticCodecField: View {
-    let caption: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            FieldCaption(icon: nil, text: caption)
-            Text(value)
-                .font(.appMono(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                .lineLimit(1)
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                        .fill(Color.white.opacity(DesignTokens.Field.fillRest))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                        .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: DesignTokens.Field.borderWidth)
-                )
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 /// Same shell as DropdownField, but its menu is a SteppedSlider instead of a
 /// list -- for VIDEO BITRATE / AUDIO BITRATE, where "a handful of discrete
 /// options" is better shown as a slider than a scrolling list of numbers.

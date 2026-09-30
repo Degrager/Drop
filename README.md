@@ -1,6 +1,6 @@
 <h1 align="center">
   <img src=".github/readme/icon.png" alt="Drop's app icon" width="72" valign="middle">
-  <span style="font-size: 2.5em;">Drop</span>
+  Drop
 </h1>
 
 <p align="center">

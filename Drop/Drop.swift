@@ -4325,6 +4325,14 @@ struct EmptyStateView: View {
 struct HoverIconButton: View {
     let icon: String
     var size: CGFloat = 13
+    /// The button's own visible box -- defaults to `size + 12`, the original
+    /// fixed relationship every existing call site still expects. Pass this
+    /// explicitly to make the box match a taller neighbor (e.g. a folder
+    /// capsule) WITHOUT scaling the glyph and hover caption up too, which
+    /// bumping `size` alone would do (reported live: "the symbol inside
+    /// should be the same height as it was... the hover labels should be
+    /// the same size they were before").
+    var boxSize: CGFloat? = nil
     var color: Color = .white
     var activeColor: Color? = nil
     var isActive: Bool = false
@@ -4384,7 +4392,7 @@ struct HoverIconButton: View {
                 // square remove button, though both use the identical .roundedRect shape and
                 // radius. Every icon now centers in the same size box regardless of its own
                 // proportions.
-                .frame(width: size + 12, height: size + 12)
+                .frame(width: boxSize ?? size + 12, height: boxSize ?? size + 12)
         }
         // Only the hover caption needs the width, and only `expandable` buttons
         // have one -- every other button skipped a GeometryReader + @State

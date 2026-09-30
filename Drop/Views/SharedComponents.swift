@@ -2908,12 +2908,13 @@ struct FolderActionButtons: View {
 
     var body: some View {
         HStack(spacing: DropGrid.rowSpacing) {
-            // HoverIconButton's own box is always `size + 12` -- 20 is the value that
-            // makes it exactly DropGrid.controlHeight (32), matching the folder capsule
-            // beside it. The outer .frame below only centers a SMALLER box inside 32pt
-            // of invisible space, which still leaves the visible glass chrome shorter
-            // than the capsule (reported live: "same height as the directory bar").
-            HoverIconButton(icon: "folder", size: 20, help: "Choose folder", expandable: true) {
+            // boxSize makes the visible glass chrome exactly DropGrid.controlHeight,
+            // matching the folder capsule beside it -- the outer .frame below only
+            // reserves that much LAYOUT space, it doesn't touch the glass box HoverIconButton
+            // draws internally, which is why the box needs its own explicit override
+            // (reported live: "same height as the directory bar"). `size` stays 13 so the
+            // glyph and hover caption keep their original size instead of scaling up too.
+            HoverIconButton(icon: "folder", size: 13, boxSize: DropGrid.controlHeight, help: "Choose folder", expandable: true) {
                 let panel = NSOpenPanel()
                 panel.canChooseFiles = false
                 panel.canChooseDirectories = true
@@ -2923,7 +2924,7 @@ struct FolderActionButtons: View {
                 panel.directoryURL = URL(fileURLWithPath: path)
                 if panel.runModal() == .OK, let url = panel.url { onChoose(url.path) }
             }
-            HoverIconButton(icon: "arrow.up.forward.app", size: 20, help: "Reveal in Finder", expandable: true) {
+            HoverIconButton(icon: "arrow.up.forward.app", size: 13, boxSize: DropGrid.controlHeight, help: "Reveal in Finder", expandable: true) {
                 NSWorkspace.shared.open(URL(fileURLWithPath: path))
             }
         }

@@ -128,8 +128,10 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
     /// on, plain when off. Its hover caption says what it does and whether it is
     /// on.
     private var autoOpenToggle: some View {
+        // boxSize matches the folder capsule's height on the same row (see
+        // FolderActionButtons' own boxSize note) without scaling the glyph up too.
         HoverIconButton(
-            icon: "folder.badge.gearshape", size: 13,
+            icon: "folder.badge.gearshape", size: 13, boxSize: DropGrid.controlHeight,
             activeColor: DesignTokens.Accent.primary,
             isActive: config.autoOpenFolder,
             help: config.autoOpenFolder ? "Auto-open folder: On" : "Auto-open folder: Off",

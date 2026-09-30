@@ -6058,6 +6058,11 @@ struct ContentView: View {
     /// the window to fit if it's currently too narrow (see
     /// DropAppDelegate.sidebarCollapsedDidChange), so there's no "too narrow
     /// to expand" state to fall back to the bare logo for anymore.
+    /// Drives the collapsed-only downward caption below -- separate from
+    /// HoverIconButton's own hover state, which stays disabled while
+    /// collapsed (see sidebarToggleSlot's doc comment).
+    @State private var sidebarToggleHoveringCollapsed = false
+
     private var sidebarToggleSlot: some View {
         HoverIconButton(
             icon: "sidebar.left", size: 16,
@@ -6067,13 +6072,21 @@ struct ContentView: View {
             // pops out rightward, see captionExpandsFrom below) ran
             // straight into that text.
             help: isCompactSidebar ? "Expand" : "Collapse",
-            // Collapsed, this caption has nowhere to pop out TO -- the rail
-            // is exactly as wide as the button's own slot -- so it got
-            // clipped by the sidebar's own glassCard (reported live). The
-            // plain system tooltip from `.help` above still works there
-            // (AppKit draws it outside SwiftUI's clip entirely), so the
-            // custom caption only takes over once expanded, where there's
-            // real room for it.
+            // Collapsed, this caption has nowhere to pop out TO sideways --
+            // the rail is exactly as wide as the button's own slot -- so it
+            // got clipped by the sidebar's own glassCard (reported live).
+            // Expanded, there's real room, so the built-in rightward
+            // caption (captionExpandsFrom below, zIndex'd above the "Drop"
+            // wordmark it overlaps) still handles it. Collapsed, the
+            // `.overlay` below takes over instead, with its own small
+            // caption that expands DOWNWARD -- entirely within this
+            // button's own 72pt-wide column, never needing to escape the
+            // sidebar's clip sideways at all. (A first attempt escaped it
+            // via anchorPreference/overlayPreferenceValue, mirroring the
+            // app's existing dropdown-popover pattern -- crashed on every
+            // launch, twice, regardless of where it was attached in the
+            // tree; a Swift runtime metadata-recursion fault, not worth
+            // chasing further for one small caption.)
             expandable: !isCompactSidebar,
             captionExpandsFrom: .leading
         ) {
@@ -6087,6 +6100,34 @@ struct ContentView: View {
         // sidebarLabel is declared right after this in the header HStack
         // and plain sibling paint order draws later declarations on top.
         .zIndex(1)
+        .overlay(alignment: .top) {
+            if isCompactSidebar, sidebarToggleHoveringCollapsed {
+                Text("Expand")
+                    .font(.appMono(size: 10, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.7))
+                    .clipShape(Capsule())
+                    .allowsHitTesting(false)
+                    // The button's own box is size+12 = 28pt tall (see
+                    // HoverIconButton); pushes the caption 6pt below it.
+                    .offset(y: 34)
+                    .transition(.asymmetric(
+                        insertion: .focus(blur: 5, scale: 0.9, opacity: 0.3, anchor: .top)
+                            .animation(.spring(response: 0.25, dampingFraction: 0.85)),
+                        removal: .identity
+                    ))
+            }
+        }
+        .onHover { hovering in
+            guard isCompactSidebar else { return }
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                sidebarToggleHoveringCollapsed = hovering
+            }
+        }
     }
 
     private var sidebarLogo: some View {

@@ -9,58 +9,13 @@
     {
       "layers" : [
         {
-          "fill-specializations" : [
-            {
-              "appearance" : "tinted",
-              "value" : {
-                "solid" : "display-p3:0.00000,0.00000,0.00000,1.00000"
-              }
-            }
-          ],
-          "glass" : true,
-          "image-name" : "Image.png",
-          "name" : "Image",
-          "position" : {
-            "scale" : 0.62,
-            "translation-in-points" : [
-              0,
-              0
-            ]
-          }
-        },
-        {
           "image-name" : "drop.png",
           "name" : "drop",
           "position" : {
-            "scale" : 0.62,
+            "scale" : 0.53,
             "translation-in-points" : [
               0,
               0
-            ]
-          }
-        },
-        {
-          "fill-specializations" : [
-            {
-              "appearance" : "tinted",
-              "value" : {
-                "solid" : "display-p3:0.00000,0.00000,0.00000,1.00000"
-              }
-            }
-          ],
-          "image-name" : "Image 2.png",
-          "name" : "Image 2",
-          "opacity-specializations" : [
-            {
-              "appearance" : "tinted",
-              "value" : 1
-            }
-          ],
-          "position" : {
-            "scale" : 0.34,
-            "translation-in-points" : [
-              0,
-              39
             ]
           }
         },
@@ -68,10 +23,10 @@
           "image-name" : "arrow.down.png",
           "name" : "arrow.down",
           "position" : {
-            "scale" : 0.34,
+            "scale" : 0.27,
             "translation-in-points" : [
               0,
-              39
+              57
             ]
           }
         }

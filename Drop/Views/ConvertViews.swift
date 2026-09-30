@@ -2715,6 +2715,7 @@ struct ConvertPreviewCard: View {
                     if showsModeRow {
                         VStack(alignment: .leading, spacing: 6) {
                             FieldCaption(icon: "switch.2", text: "CONVERT AS")
+                                .reportsFacadeFieldShape(id: "convertAs.caption", kind: .text)
                                 // Both caption rows are pinned to the SAME height (see the
                                 // matching frame below) -- CONVERT AS's is a bare FieldCaption,
                                 // OUTPUT FORMAT's now also carries the legend beside it, and
@@ -2728,6 +2729,7 @@ struct ConvertPreviewCard: View {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 10) {
                             FieldCaption(icon: "doc.badge.arrow.up", text: "OUTPUT FORMAT")
+                                .reportsFacadeFieldShape(id: "outputFormat.caption", kind: .text)
                             Spacer(minLength: 10)
                             // The dot on formatOptions' matching option, explained -- top
                             // right of this field group (the user asked for it moved there
@@ -2740,7 +2742,7 @@ struct ConvertPreviewCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if job.mediaMode.isVideo {
-                    FieldsTrackRow(icon: "video", label: "VIDEO") {
+                    FieldsTrackRow(icon: "video", label: "VIDEO", captionID: "video.caption") {
                         DropdownField(id: "video.codec", caption: "CODEC", options: videoCodecOptions, openID: $openDropdownID)
                         // Only offered when the source is bigger than a standard size to go down to.
                         if !job.availableResolutions.isEmpty {
@@ -2757,7 +2759,7 @@ struct ConvertPreviewCard: View {
                 // Hidden entirely for video-only mode (no audio track in the
                 // output at all).
                 if job.mediaMode != .videoOnly {
-                    FieldsTrackRow(icon: "waveform", label: "AUDIO") {
+                    FieldsTrackRow(icon: "waveform", label: "AUDIO", captionID: "audio.caption") {
                         DropdownField(id: "audio.codec", caption: "CODEC", options: audioCodecOptions, openID: $openDropdownID)
                         if job.supportsAudioBitrate {
                             DropdownBitrateField(id: "audio.bitrate", caption: "BITRATE", steps: audioBitrateSteps, selected: audioBitrateSelection,

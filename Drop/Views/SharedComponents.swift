@@ -303,7 +303,7 @@ struct CardFacadeMetrics: Equatable {
     var flat = false
     /// A flat row's move controls (the up / down pair before its thumbnail).
     var hasLeadingControls = false
-    /// Every visible "field" in the settings content -- a SegmentedCapsule pill, a
+    /// Every visible "field" in the settings content -- a caption, a SegmentedCapsule pill, a
     /// DropdownField/DropdownBitrateField box -- measured ONCE from the real layout (see
     /// `reportsFacadeFieldShape`) and replayed by CardFacade as plain grey shapes at these
     /// exact positions/sizes while frozen. Two hand-authored, counted versions of this came
@@ -321,7 +321,27 @@ struct CardFacadeMetrics: Equatable {
     /// coordinate space established in FrozenDuringResize), which is also where CardFacade
     /// itself is placed, so a measured rect and the shape drawn from it always land in the
     /// same spot.
-    var fieldShapes: [String: CGRect] = [:]
+    var fieldShapes: [String: FieldShape] = [:]
+
+    /// What kind of element a reported shape stands in for -- every entry used to be drawn
+    /// identically regardless of what it really was, so a row caption, a DropdownField box,
+    /// and a SegmentedCapsule pill all came out as the same small-cornered grey rectangle.
+    /// Reported live: "pills show up as individual boxes" (the real pill is a true Capsule,
+    /// with no border of its own -- its group shares ONE capsule background, see
+    /// SegmentedCapsule.oneLine) and text captions weren't drawn at all.
+    enum Kind {
+        /// A FieldCaption label ("RESOLUTION", "DOWNLOAD AS", ...) -- a thin bar, not a box.
+        case text
+        /// A DropdownField/DropdownBitrateField's own box -- the standard rounded rect.
+        case field
+        /// One segment of a SegmentedCapsule -- a true pill/capsule shape.
+        case pill
+    }
+
+    struct FieldShape: Equatable {
+        var rect: CGRect
+        var kind: Kind = .field
+    }
     /// True once the card itself (not just a piece of it) has reported.
     var reported = false
 }
@@ -389,6 +409,7 @@ let cardFacadeFieldsSpace = "cardFacadeFields"
 private struct FacadeFieldShapeReporter: ViewModifier {
     @Environment(\.cardFacadeMemory) private var memory
     let id: String
+    let kind: CardFacadeMetrics.Kind
 
     func body(content: Content) -> some View {
         content.background(GeometryReader { geo in
@@ -402,23 +423,24 @@ private struct FacadeFieldShapeReporter: ViewModifier {
     private func report(_ rect: CGRect) {
         // A frozen card is given no room, so what it measures then is not its real shape.
         guard let memory, !LiveResizeState.shared.freezesCards, rect.width > 1 else { return }
-        memory.metrics.fieldShapes[id] = rect
+        memory.metrics.fieldShapes[id] = .init(rect: rect, kind: kind)
     }
 }
 
 extension View {
-    /// Marks this view as one visible "field" (a SegmentedCapsule pill, a DropdownField/
-    /// DropdownBitrateField box) whose measured frame CardFacade's resize placeholder
-    /// should redraw as a plain grey shape while frozen -- see CardFacadeMetrics.
-    /// fieldShapes's own doc comment for why this replaces two earlier, hand-counted
-    /// versions. `id` must be stable and unique among this card's OTHER fields (an
-    /// option's own `.id`, a field's own `id:` string) -- it's the dictionary key this
+    /// Marks this view as one visible piece of the settings content -- a FieldCaption label,
+    /// a SegmentedCapsule pill, a DropdownField/DropdownBitrateField box -- whose measured
+    /// frame CardFacade's resize placeholder should redraw as a plain grey shape while frozen
+    /// (`kind` decides which real shape it's drawn as -- see CardFacadeMetrics.Kind) -- see
+    /// CardFacadeMetrics.fieldShapes's own doc comment for why this replaces two earlier,
+    /// hand-counted versions. `id` must be stable and unique among this card's OTHER fields
+    /// (an option's own `.id`, a field's own `id:` string) -- it's the dictionary key this
     /// field's shape is stored/removed under, independent of every other field's own
     /// lifecycle. A no-op everywhere this isn't inside a facade-tracked card
     /// (cardFacadeMemory is nil): every other use of these shared components (Convert's
     /// queue reorder controls, chips elsewhere in the app, ...) pays nothing for this.
-    func reportsFacadeFieldShape(id: String) -> some View {
-        modifier(FacadeFieldShapeReporter(id: id))
+    func reportsFacadeFieldShape(id: String, kind: CardFacadeMetrics.Kind = .field) -> some View {
+        modifier(FacadeFieldShapeReporter(id: id, kind: kind))
     }
 }
 
@@ -568,7 +590,7 @@ struct CardFacade: View {
     /// width and the layout of the fields in the actual card").
     private var settingsRows: some View {
         GeometryReader { geo in
-            if let bounds = metrics.fieldShapes.values.reduce(into: CGRect?.none, { result, rect in result = result?.union(rect) ?? rect }) {
+            if let bounds = metrics.fieldShapes.values.reduce(into: CGRect?.none, { result, shape in result = result?.union(shape.rect) ?? shape.rect }) {
                 // Field shapes are fixed rects measured at whatever width the real content
                 // last reported at -- while frozen, the card's own width still tracks the
                 // live window/sidebar (see FreezeLayout), so without this the placeholder
@@ -582,11 +604,8 @@ struct CardFacade: View {
                         .frame(width: bounds.width, height: 0.5)
                         .position(x: bounds.midX, y: bounds.minY - 12)
                     ForEach(Array(metrics.fieldShapes.keys), id: \.self) { key in
-                        if let rect = metrics.fieldShapes[key] {
-                            RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                                .fill(Color.white.opacity(0.05))
-                                .frame(width: rect.width, height: rect.height)
-                                .position(x: rect.midX, y: rect.midY)
+                        if let shape = metrics.fieldShapes[key] {
+                            fieldPlaceholder(shape)
                         }
                     }
                 }
@@ -594,6 +613,36 @@ struct CardFacade: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// One placeholder, shaped to match what it's standing in for -- previously every kind
+    /// drew as the same small-cornered rounded rect regardless of what it really was.
+    /// Reported live: "pills show up as individual boxes" (a real SegmentedCapsule segment
+    /// is a true Capsule with no border of its own) "and they arent matching placement"
+    /// (captions weren't drawn at all, so surrounding fields sat closer together than the
+    /// real layout, which always leaves room for one above each field).
+    @ViewBuilder
+    private func fieldPlaceholder(_ shape: CardFacadeMetrics.FieldShape) -> some View {
+        let rect = shape.rect
+        switch shape.kind {
+        case .pill:
+            Capsule()
+                .fill(Color.white.opacity(0.05))
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+        case .field:
+            RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+        case .text:
+            // A thin bar, not a box -- text reads as a line, not a filled block. Vertically
+            // centered in the caption's own measured height rather than filling it.
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Color.white.opacity(0.07))
+                .frame(width: rect.width, height: 6)
+                .position(x: rect.midX, y: rect.midY)
+        }
     }
 
     // MARK: A Convert queue row
@@ -2018,7 +2067,7 @@ struct SegmentedCapsule: View {
         HStack(spacing: 2) {
             ForEach(options) {
                 SegmentButton(option: $0, fill: fill, standalone: false, height: rowHeight)
-                    .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)")
+                    .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)", kind: .pill)
             }
         }
         .padding(3)
@@ -2036,7 +2085,7 @@ struct SegmentedCapsule: View {
                     FlowLayout(spacing: 6) {
                         ForEach(options) {
                             SegmentButton(option: $0, fill: false, standalone: true, height: rowHeight)
-                                .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)")
+                                .reportsFacadeFieldShape(id: "\(groupID)_\($0.id)", kind: .pill)
                         }
                     }
                 }
@@ -2517,7 +2566,7 @@ struct DropdownField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            FieldCaption(icon: nil, text: caption)
+            FieldCaption(icon: nil, text: caption).reportsFacadeFieldShape(id: "\(id)_caption", kind: .text)
             Button {
                 withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
             } label: {
@@ -2556,7 +2605,7 @@ struct DropdownField: View {
                 )
             }
             .buttonStyle(.plain)
-            .reportsFacadeFieldShape(id: id)
+            .reportsFacadeFieldShape(id: id, kind: .field)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .anchorPreference(key: DropdownPopoverPreferenceKey.self, value: .bounds) { anchor in
@@ -2611,7 +2660,7 @@ struct DropdownBitrateField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            FieldCaption(icon: nil, text: caption)
+            FieldCaption(icon: nil, text: caption).reportsFacadeFieldShape(id: "\(id)_caption", kind: .text)
             Button {
                 withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
             } label: {
@@ -2647,7 +2696,7 @@ struct DropdownBitrateField: View {
                 )
             }
             .buttonStyle(.plain)
-            .reportsFacadeFieldShape(id: id)
+            .reportsFacadeFieldShape(id: id, kind: .field)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .anchorPreference(key: DropdownPopoverPreferenceKey.self, value: .bounds) { anchor in
@@ -2693,6 +2742,10 @@ struct DropdownBitrateField: View {
 struct FieldsTrackRow<Content: View>: View {
     let icon: String
     let label: String
+    /// Stable id for this row's own icon+label caption's facade shape -- distinct from
+    /// whatever field(s) `content()` reports on its own, and unique among this card's other
+    /// captions (see reportsFacadeFieldShape).
+    let captionID: String
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -2700,6 +2753,7 @@ struct FieldsTrackRow<Content: View>: View {
             FieldCaption(icon: icon, text: label)
                 .frame(width: 60, alignment: .leading)
                 .padding(.bottom, 7)
+                .reportsFacadeFieldShape(id: captionID, kind: .text)
             content()
         }
     }

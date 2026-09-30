@@ -692,17 +692,41 @@ struct CardFacade: View {
                             rows.append([item])
                         }
                     }
-                let placed: [(rect: CGRect, kind: CardFacadeMetrics.Kind)] = rows.flatMap { row -> [(rect: CGRect, kind: CardFacadeMetrics.Kind)] in
+                // Each entry also keeps its own pre-shift local X (rect.minX - bounds.minX)
+                // so a `.text` caption -- placed in its OWN row, directly above the field it
+                // labels rather than beside it -- can be re-anchored to that field below.
+                let placedRaw: [(rect: CGRect, kind: CardFacadeMetrics.Kind, originalLocalX: CGFloat)] = rows.flatMap { row in
                     let sortedRow = row.sorted { $0.rect.minX < $1.rect.minX }
                     let flexCount = sortedRow.filter(\.stretches).count
                     let growth = flexCount > 0 ? delta / CGFloat(flexCount) : 0
                     var shift: CGFloat = 0
                     return sortedRow.map { item in
-                        let newRect = CGRect(x: item.rect.minX - bounds.minX + shift, y: item.rect.minY - bounds.minY,
+                        let originalLocalX = item.rect.minX - bounds.minX
+                        let newRect = CGRect(x: originalLocalX + shift, y: item.rect.minY - bounds.minY,
                                               width: max(0, item.rect.width + (item.stretches ? growth : 0)), height: item.rect.height)
                         if item.stretches { shift += growth }
-                        return (newRect, item.kind)
+                        return (newRect, item.kind, originalLocalX)
                     }
+                }
+                // A DropdownField/DropdownBitrateField's caption and its own box are both
+                // `.leading`-aligned siblings in ONE VStack (same for a pill group's caption),
+                // so they start at (almost) the same original X -- but a row like Convert's
+                // VIDEO (CODEC + RESOLUTION + BITRATE side by side) puts every field's caption
+                // in ONE row-cluster above ALL of them, with no stretching item of its own
+                // (captions never stretch), so that row's shift stayed 0 for every caption in
+                // it regardless of how far its own field had already shifted below -- reported
+                // live as "the label facades... dont move when resizing." Fix: re-anchor every
+                // `.text` item to whichever non-text item started at (nearly) the same original
+                // local X, inheriting that item's shift (never its growth -- a caption's own
+                // width never changes).
+                let nonTextPlaced = placedRaw.filter { $0.kind != .text }
+                let placed: [(rect: CGRect, kind: CardFacadeMetrics.Kind)] = placedRaw.map { entry in
+                    guard entry.kind == .text,
+                          let partner = nonTextPlaced.min(by: { abs($0.originalLocalX - entry.originalLocalX) < abs($1.originalLocalX - entry.originalLocalX) }),
+                          abs(partner.originalLocalX - entry.originalLocalX) < 1.5
+                    else { return (entry.rect, entry.kind) }
+                    let inheritedShift = partner.rect.minX - partner.originalLocalX
+                    return (CGRect(x: entry.originalLocalX + inheritedShift, y: entry.rect.minY, width: entry.rect.width, height: entry.rect.height), entry.kind)
                 }
                 ZStack(alignment: .topLeading) {
                     Rectangle().fill(Color.white.opacity(0.07))

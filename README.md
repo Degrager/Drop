@@ -10,7 +10,7 @@
   <a href="#how-it-works"><img alt="Swift" src="https://img.shields.io/badge/Swift-SwiftUI-0A0A0A?style=flat-square&logo=swift&logoColor=white"></a>
 </p>
 
-<p align="center">Drop is a fast, native macOS app for downloading and converting online video and audio. Paste a link, pick a quality, and Drop handles the rest — powered by <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a> and <a href="https://ffmpeg.org/">ffmpeg</a>, wrapped in a clean SwiftUI interface with a dark liquid-glass design.</p>
+<p align="center">Drop is a fast, native macOS app for downloading and converting online video and audio. Paste a link, pick a format and quality, Drop handles the rest — powered by <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a> and <a href="https://ffmpeg.org/">ffmpeg</a>, wrapped in a clean SwiftUI interface with a dark glass design.</p>
 
 <p align="center">
   <img src=".github/readme/hero.png" alt="Drop's Download tab in its empty state, ready for a link to be copied" width="760">

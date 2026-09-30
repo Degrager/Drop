@@ -7069,14 +7069,23 @@ struct ContentView: View {
                     Group {
                         if p.mediaMode != .audioOnly {
                             FieldsTrackRow(icon: "video", label: "VIDEO") {
-                                // Suffixed with the card's own id: openDropdownID is one
-                                // value shared by every download card (see its declaration),
-                                // so two cards' otherwise-identical field ids would each
-                                // register as "open" together the instant either one opened,
-                                // since both would match the same shared string.
-                                DropdownField(id: "download.video.resolution.\(p.id)", caption: "RESOLUTION",
-                                              options: downloadVideoQualityOptions(preview: preview),
-                                              openID: $openDropdownID)
+                                HStack(alignment: .bottom, spacing: 12) {
+                                    // Suffixed with the card's own id: openDropdownID is one
+                                    // value shared by every download card (see its declaration),
+                                    // so two cards' otherwise-identical field ids would each
+                                    // register as "open" together the instant either one opened,
+                                    // since both would match the same shared string.
+                                    DropdownField(id: "download.video.resolution.\(p.id)", caption: "RESOLUTION",
+                                                  options: downloadVideoQualityOptions(preview: preview),
+                                                  openID: $openDropdownID)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    // Kept at the same half-width RESOLUTION had while the
+                                    // (since-removed) CODEC field sat here -- an empty
+                                    // placeholder, not a real field, so the row's proportions
+                                    // don't change back to full-width.
+                                    Color.clear
+                                        .frame(maxWidth: .infinity)
+                                }
                             }
                         } else if p.audioFormat != .m4a {
                             // M4A has no selectable quality/bitrate -- it's a fixed passthrough

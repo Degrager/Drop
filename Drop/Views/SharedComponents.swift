@@ -2058,9 +2058,14 @@ private struct SegmentButton: View {
                             .font(.appMono(size: 11, weight: .semibold))
                     }
                     if let native = option.nativeBadge {
-                        Circle()
-                            .fill(native ? DesignTokens.Accent.success : DesignTokens.Accent.warning)
-                            .frame(width: 5, height: 5)
+                        // A rendered SF Symbol (via .font) has real baseline metrics and
+                        // aligns correctly under .firstTextBaseline, same as the optional
+                        // icon above -- a raw Circle() shape doesn't, so it fell back to
+                        // aligning by its bottom edge, reading as sitting low against the
+                        // label instead of level with it.
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 6))
+                            .foregroundColor(native ? DesignTokens.Accent.success : DesignTokens.Accent.warning)
                     }
                     Text(option.label)
                         .font(.appMono(size: 11.5, weight: .semibold))
@@ -2568,6 +2573,37 @@ struct DropdownField: View {
             .padding(4)
         }
         .frame(width: Self.menuWidth)
+    }
+}
+
+/// Same chrome as DropdownField's closed state (caption + value in a bordered
+/// capsule), but a plain, non-interactive value -- no button, no chevron, no
+/// menu -- for a field where there genuinely is no choice to make (e.g.
+/// Video+Audio's audio codec, always AAC), so it reads as informational
+/// rather than inviting a tap that would do nothing.
+struct StaticCodecField: View {
+    let caption: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            FieldCaption(icon: nil, text: caption)
+            Text(value)
+                .font(.appMono(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                        .fill(Color.white.opacity(DesignTokens.Field.fillRest))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                        .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: DesignTokens.Field.borderWidth)
+                )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

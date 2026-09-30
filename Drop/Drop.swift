@@ -3238,14 +3238,16 @@ enum DesignTokens {
     // what visually separates "alive glass" from a flat translucent panel.
     enum Glass {
         static let material: NSVisualEffectView.Material = .underWindowBackground
-        // Resting black-frosted tint. Raised again from 0.82 -- against the
-        // window-wide base tint of 0.74, an 0.08 gap read as barely any
-        // separation at all, so cards blended into the background instead
-        // of standing out as a distinct layer. 0.93 gives real contrast
-        // while the VisualEffectBlur underneath still keeps it from ever
-        // looking like a flat, opaque black rectangle.
-        static let blackTint: Double = 0.93
-        static let blackTintDisabled: Double = 0.4
+        // Lowered from 0.93 -- reported live as reading too black/flat,
+        // both before the Liquid Glass detour and again after reverting
+        // back to this system. Liquid Glass itself had to be abandoned (a
+        // mini-LED display's local dimming crushed it to black at any
+        // tint tried), but the underlying "too dark" complaint about THIS
+        // system stands on its own and doesn't depend on that material --
+        // lower opacity here reduces how much of the screen reads as
+        // near-black regardless of which material is doing the blurring.
+        static let blackTint: Double = 0.72
+        static let blackTintDisabled: Double = 0.31
         static let whiteWash: Double = 0.02      // faint white wash to avoid flat black
     }
 
@@ -3651,6 +3653,11 @@ final class GlassRimView: NSView {
 /// top-left and falling off to near-black at the far corner. A Core Animation
 /// gradient layer (like GlassRim), so it is composited on the GPU and simply
 /// resizes with the window instead of being re-shaded on the CPU every frame.
+/// Sits on top of its own VisualEffectBlur (see ContentView.body) with semi-
+/// transparent colors instead of the old fully-opaque ones, so the same real
+/// blur-of-whatever's-behind-the-window that cards and the sidebar already
+/// show carries through to the base background too, instead of stopping at
+/// a flat painted gradient.
 struct WindowBackdrop: NSViewRepresentable {
     func makeNSView(context: Context) -> WindowBackdropView { WindowBackdropView() }
     func updateNSView(_ nsView: WindowBackdropView, context: Context) {}
@@ -3670,9 +3677,9 @@ final class WindowBackdropView: NSView {
         gradient.startPoint = CGPoint(x: 0.18, y: 1)
         gradient.endPoint = CGPoint(x: 0.18 + 1.2, y: 1 - 0.9)
         gradient.colors = [
-            NSColor(srgbRed: 0x1b / 255, green: 0x1b / 255, blue: 0x1b / 255, alpha: 1).cgColor,
-            NSColor(srgbRed: 0x10 / 255, green: 0x10 / 255, blue: 0x10 / 255, alpha: 1).cgColor,
-            NSColor(srgbRed: 0x0c / 255, green: 0x0c / 255, blue: 0x0c / 255, alpha: 1).cgColor,
+            NSColor(srgbRed: 0x1b / 255, green: 0x1b / 255, blue: 0x1b / 255, alpha: 0.75).cgColor,
+            NSColor(srgbRed: 0x10 / 255, green: 0x10 / 255, blue: 0x10 / 255, alpha: 0.75).cgColor,
+            NSColor(srgbRed: 0x0c / 255, green: 0x0c / 255, blue: 0x0c / 255, alpha: 0.75).cgColor,
         ]
         gradient.locations = [0, 0.6, 1]
         layer?.addSublayer(gradient)
@@ -4324,15 +4331,22 @@ struct HoverIconButton: View {
     var disabled: Bool = false
     var help: String = ""
     /// When true, hovering reveals `help` as a caption next to the icon
-    /// (expanding leftward, icon stays anchored) instead of relying on the
-    /// tooltip alone -- one flag per call site, reusing `help`'s text
-    /// rather than needing a second string typed out again. false
-    /// (default) is icon-only, unchanged from before this existed.
+    /// (expanding per `captionExpandsFrom`, icon stays anchored) instead of
+    /// relying on the tooltip alone -- one flag per call site, reusing
+    /// `help`'s text rather than needing a second string typed out again.
+    /// false (default) is icon-only, unchanged from before this existed.
     var expandable: Bool = false
     /// Defaults to the original rounded-rect chrome every existing call
     /// site already expects -- pass .circle for a fully round button
     /// instead, e.g. the queue row's up/down move controls.
     var shape: GlassInteractiveShape = .roundedRect(DesignTokens.Radius.small)
+    /// The caption expands leftward by default (every existing expandable
+    /// button sits near a row's trailing/right edge, so growing left is
+    /// the only direction with room). Pass .leading for a button that
+    /// sits near a LEFT edge instead (e.g. the sidebar's own collapse
+    /// toggle, at the window's far-left) so the caption grows rightward
+    /// and never runs off the window edge.
+    var captionExpandsFrom: HorizontalEdge = .trailing
     let action: () -> Void
 
     @State private var isHovering = false
@@ -4394,7 +4408,7 @@ struct HoverIconButton: View {
         // at the boundary. Overlaying the caption (and disabling its own
         // hit-testing) means the button's interactive bounds never change
         // size at all; only paint extends past them.
-        .overlay(alignment: .trailing) {
+        .overlay(alignment: captionExpandsFrom == .trailing ? .trailing : .leading) {
             if expandable, isHovering, !help.isEmpty {
                 Text(help)
                     .font(.appMono(size: max(9, size * 0.8), weight: .medium))
@@ -4405,7 +4419,7 @@ struct HoverIconButton: View {
                     .padding(.vertical, 4)
                     .background(Color.black.opacity(0.7))
                     .clipShape(Capsule())
-                    .offset(x: -(buttonWidth + 6))
+                    .offset(x: captionExpandsFrom == .trailing ? -(buttonWidth + 6) : (buttonWidth + 6))
                     .allowsHitTesting(false)
                     // Insertion-only, like glassPopInOnly/blurInOnly (see AnyTransition's own
                     // "if/else branches" comment): a SYMMETRIC transition here left the caption
@@ -4418,7 +4432,7 @@ struct HoverIconButton: View {
                     // half-blurred, half-scaled frame on screen indefinitely. Removal is now
                     // instant; the fade-in still gets the pleasant animation.
                     .transition(.asymmetric(
-                        insertion: .focus(blur: 5, scale: 0.9, opacity: 0.3, anchor: .trailing)
+                        insertion: .focus(blur: 5, scale: 0.9, opacity: 0.3, anchor: captionExpandsFrom == .trailing ? .trailing : .leading)
                             .animation(.spring(response: 0.25, dampingFraction: 0.85)),
                         removal: .identity
                     ))
@@ -5341,7 +5355,6 @@ struct ContentView: View {
     /// "resizing/sidebar animations feel laggy."
     @State private var clipboardPulseActive = false
     @State private var clipboardPulseGeneration = 0
-    @State private var isUrlCardHovering = false
     @State private var isAnalyzing       = false
     @State private var hasInvalidURLs    = false
     // True right after a Paste & Analyze attempt whose URL(s) are already
@@ -5578,6 +5591,13 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
+            // Real blur-of-whatever's-behind-the-window, same material cards
+            // and the sidebar use -- WindowBackdrop's gradient now paints
+            // semi-transparent colors on top of this instead of a fully
+            // opaque fill, so the base background gets the same genuine
+            // translucency every other glass surface in the app already has.
+            VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                .ignoresSafeArea()
             // Window-wide base: the concept's soft radial glow (see
             // WindowBackdrop) -- a touch lighter than the flat black frosting it
             // replaces. The tiny dither tile breaks up 8-bit banding across
@@ -6032,8 +6052,14 @@ struct ContentView: View {
     /// to expand" state to fall back to the bare logo for anymore.
     private var sidebarToggleSlot: some View {
         HoverIconButton(
-            icon: "sidebar.left", size: 13,
-            help: isCompactSidebar ? "Expand sidebar" : "Collapse sidebar", expandable: true
+            icon: "sidebar.left", size: 16,
+            // Short caption -- the sidebar's expanded state also shows the
+            // "Drop" wordmark immediately to this button's right, so a
+            // longer "Collapse sidebar"/"Expand sidebar" caption (which
+            // pops out rightward, see captionExpandsFrom below) ran
+            // straight into that text.
+            help: isCompactSidebar ? "Expand" : "Collapse", expandable: true,
+            captionExpandsFrom: .leading
         ) {
             sidebarCollapsedByUser.toggle()
         }
@@ -6853,13 +6879,6 @@ struct ContentView: View {
                 WaitingPulseGlow()
             }
         }
-        // Rim glow on hover -- same cue as every other interactive control's
-        // hover state, just applied to this bar's own outer rim instead of a
-        // button's. No more focus state to also gate on (see above).
-        .overlay {
-            HoverGlowRim(isActive: isUrlCardHovering)
-        }
-        .onHover { isUrlCardHovering = $0 }
         // Same content column as everything beneath it (it used to be a
         // separate fixed 864pt cap, which left it narrower than the cards on
         // big windows and wider than them on small ones).
@@ -7038,15 +7057,8 @@ struct ContentView: View {
                         SegmentedCapsule(options: downloadModeOptions(preview: preview), fill: false, groupID: "downloadAs")
                     }
                     VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 10) {
-                            FieldCaption(icon: p.mediaMode == .audioOnly ? "waveform" : "video", text: "OUTPUT FORMAT")
-                            Spacer(minLength: 10)
-                            // Every video container is a plain remux -- every option is
-                            // "Original," so there's no Re-encodes counterpart to explain,
-                            // unlike audio where only M4A qualifies.
-                            nativeLegend(positiveLabel: "Original")
-                        }
-                        .frame(height: 15, alignment: .leading)
+                        FieldCaption(icon: p.mediaMode == .audioOnly ? "waveform" : "video", text: "OUTPUT FORMAT")
+                            .frame(height: 15, alignment: .leading)
                         SegmentedCapsule(options: p.mediaMode == .audioOnly
                             ? downloadAudioFormatOptions(preview: preview)
                             : downloadVideoFormatOptions(preview: preview), groupID: "outputFormat")
@@ -7056,15 +7068,28 @@ struct ContentView: View {
                 ZStack(alignment: .top) {
                     Group {
                         if p.mediaMode != .audioOnly {
-                            FieldsTrackRow(icon: "video", label: "VIDEO") {
-                                // Suffixed with the card's own id: openDropdownID is one
-                                // value shared by every download card (see its declaration),
-                                // so two cards' otherwise-identical field ids would each
-                                // register as "open" together the instant either one opened,
-                                // since both would match the same shared string.
-                                DropdownField(id: "download.video.resolution.\(p.id)", caption: "RESOLUTION",
-                                              options: downloadVideoQualityOptions(preview: preview),
-                                              openID: $openDropdownID)
+                            HStack(alignment: .bottom, spacing: 16) {
+                                FieldsTrackRow(icon: "video", label: "VIDEO") {
+                                    // Suffixed with the card's own id: openDropdownID is one
+                                    // value shared by every download card (see its declaration),
+                                    // so two cards' otherwise-identical field ids would each
+                                    // register as "open" together the instant either one opened,
+                                    // since both would match the same shared string.
+                                    DropdownField(id: "download.video.resolution.\(p.id)", caption: "RESOLUTION",
+                                                  options: downloadVideoQualityOptions(preview: preview),
+                                                  openID: $openDropdownID)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                // Video+Audio always muxes AAC audio -- there's no real
+                                // choice here (unlike Audio Only, where OUTPUT FORMAT
+                                // above already covers the real codec choice), but the
+                                // codec was previously invisible in this mode entirely.
+                                // Shown as a locked field rather than a real DropdownField
+                                // since there's nothing to actually pick.
+                                FieldsTrackRow(icon: "waveform", label: "AUDIO") {
+                                    StaticCodecField(caption: "CODEC", value: "AAC")
+                                }
+                                .frame(width: 120, alignment: .leading)
                             }
                         } else if p.audioFormat != .m4a {
                             // M4A has no selectable quality/bitrate -- it's a fixed passthrough
@@ -7125,11 +7150,7 @@ struct ContentView: View {
         let p = preview.wrappedValue
         return VideoFormat.allCases.filter { $0.isAvailable(forSourceVideoCodec: p.sourceVideoCodec) }.map { f in
             SegmentOption(
-                // Every container here is a plain remux (VideoFormat.isNative is
-                // unconditionally true), so every chip gets the same dot -- unlike audio,
-                // where only M4A qualifies, but shown for the same reason: the dot means
-                // "no quality loss," and that's true of every video option too.
-                id: f.rawValue, label: f.label, nativeBadge: f.isNative, help: f.note,
+                id: f.rawValue, label: f.label, help: f.note,
                 isSelected: p.videoFormat == f, tint: DesignTokens.Accent.primary
             ) {
                 preview.videoFormat.wrappedValue = f
@@ -7159,7 +7180,7 @@ struct ContentView: View {
         let p = preview.wrappedValue
         return AudioFormat.allCases.map { f in
             SegmentOption(
-                id: f.rawValue, label: f.label, nativeBadge: f.isNative, help: f.note,
+                id: f.rawValue, label: f.label, help: f.note,
                 isSelected: p.audioFormat == f, tint: DesignTokens.Accent.success
             ) {
                 preview.qualityByFormat.wrappedValue[p.audioFormat.rawValue] = p.audioQuality

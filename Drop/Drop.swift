@@ -1228,7 +1228,6 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     // button's "Up to Date" state alongside dropUpdater's own equivalent
     // flag for the Sparkle-based check.
     @Published var justCheckedUpToDate = false
-    private var depPollTimer: Timer?
     private let gatekeeperAlertKey = "gatekeeperAlertShown"
 
     /// Writable location for self-updated binaries. The app bundle itself is
@@ -6087,12 +6086,6 @@ struct ContentView: View {
         // sidebarLabel is declared right after this in the header HStack
         // and plain sibling paint order draws later declarations on top.
         .zIndex(1)
-    }
-
-    private var sidebarLogo: some View {
-        Image(systemName: "arrow.down.circle.fill")
-            .font(.appMono(size: 14, weight: .semibold))
-            .foregroundColor(DesignTokens.Accent.primary)
     }
 
     private var sidebarLabel: some View { SidebarBrandLabel() }

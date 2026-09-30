@@ -622,10 +622,23 @@ struct CardFacade: View {
                         let key = shape.group ?? ""
                         result[key] = result[key]?.union(shape.rect) ?? shape.rect
                     }
+                // Every shape below is positioned RELATIVE TO bounds' own origin (not the
+                // card's), and the ZStack is given bounds' own exact size -- so
+                // `anchor: .topLeading` on the scaleEffect unambiguously means bounds'
+                // own top-left corner. Positioning at the raw, card-relative coordinates
+                // (as before) left the ZStack's own inferred size/origin undefined by
+                // SwiftUI (.position() doesn't affect a view's reported layout size), so
+                // the scale's real anchor point was wherever SwiftUI happened to infer --
+                // not bounds' corner -- which shifted every field sideways by a growing
+                // amount as the window resized. Reported live: "the facades dont line up
+                // with the actual fields." The final .offset restores the true on-screen
+                // position with a CONSTANT (never-scaled) shift, matching how the real
+                // content's own leading margin stays fixed while only the fields
+                // themselves grow or shrink.
                 ZStack(alignment: .topLeading) {
                     Rectangle().fill(Color.white.opacity(0.07))
                         .frame(width: bounds.width, height: 0.5)
-                        .position(x: bounds.midX, y: bounds.minY - 12)
+                        .position(x: bounds.width / 2, y: -12)
                     ForEach(Array(pillGroups.keys), id: \.self) { key in
                         if let rect = pillGroups[key] {
                             // Outset to match the real row's own 3pt padding between its
@@ -634,16 +647,18 @@ struct CardFacade: View {
                             Capsule()
                                 .fill(Color.white.opacity(0.05))
                                 .frame(width: padded.width, height: padded.height)
-                                .position(x: padded.midX, y: padded.midY)
+                                .position(x: padded.midX - bounds.minX, y: padded.midY - bounds.minY)
                         }
                     }
                     ForEach(Array(metrics.fieldShapes.keys), id: \.self) { key in
                         if let shape = metrics.fieldShapes[key], shape.kind != .pill {
-                            fieldPlaceholder(shape)
+                            fieldPlaceholder(shape, relativeTo: bounds.origin)
                         }
                     }
                 }
+                .frame(width: bounds.width, height: bounds.height)
                 .scaleEffect(x: scale, y: 1, anchor: .topLeading)
+                .offset(x: bounds.minX, y: bounds.minY)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -657,8 +672,10 @@ struct CardFacade: View {
     /// real layout, which always leaves room for one above each field). `.pill` is handled
     /// at the group level in `settingsRows` above, not per-entry here.
     @ViewBuilder
-    private func fieldPlaceholder(_ shape: CardFacadeMetrics.FieldShape) -> some View {
+    private func fieldPlaceholder(_ shape: CardFacadeMetrics.FieldShape, relativeTo origin: CGPoint) -> some View {
         let rect = shape.rect
+        let midX = rect.midX - origin.x
+        let midY = rect.midY - origin.y
         switch shape.kind {
         case .pill:
             EmptyView()
@@ -666,14 +683,14 @@ struct CardFacade: View {
             RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                 .fill(Color.white.opacity(0.05))
                 .frame(width: rect.width, height: rect.height)
-                .position(x: rect.midX, y: rect.midY)
+                .position(x: midX, y: midY)
         case .text:
             // A thin bar, not a box -- text reads as a line, not a filled block. Vertically
             // centered in the caption's own measured height rather than filling it.
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Color.white.opacity(0.07))
                 .frame(width: rect.width, height: 6)
-                .position(x: rect.midX, y: rect.midY)
+                .position(x: midX, y: midY)
         }
     }
 

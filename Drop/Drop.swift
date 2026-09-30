@@ -6066,13 +6066,27 @@ struct ContentView: View {
             // longer "Collapse sidebar"/"Expand sidebar" caption (which
             // pops out rightward, see captionExpandsFrom below) ran
             // straight into that text.
-            help: isCompactSidebar ? "Expand" : "Collapse", expandable: true,
+            help: isCompactSidebar ? "Expand" : "Collapse",
+            // Collapsed, this caption has nowhere to pop out TO -- the rail
+            // is exactly as wide as the button's own slot -- so it got
+            // clipped by the sidebar's own glassCard (reported live). The
+            // plain system tooltip from `.help` above still works there
+            // (AppKit draws it outside SwiftUI's clip entirely), so the
+            // custom caption only takes over once expanded, where there's
+            // real room for it.
+            expandable: !isCompactSidebar,
             captionExpandsFrom: .leading
         ) {
             sidebarCollapsedByUser.toggle()
         }
         .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
         .frame(width: WindowLayout.compactSidebarWidth)
+        // The caption pops out rightward past this slot's own bounds, right
+        // where the "Drop" wordmark sits once expanded -- reported live as
+        // rendering BEHIND that label instead of in front of it, since
+        // sidebarLabel is declared right after this in the header HStack
+        // and plain sibling paint order draws later declarations on top.
+        .zIndex(1)
     }
 
     private var sidebarLogo: some View {

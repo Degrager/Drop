@@ -567,19 +567,30 @@ struct CardFacade: View {
     /// live as still not matching ("the width of the fields in the facade dont match the
     /// width and the layout of the fields in the actual card").
     private var settingsRows: some View {
-        ZStack(alignment: .topLeading) {
+        GeometryReader { geo in
             if let bounds = metrics.fieldShapes.values.reduce(into: CGRect?.none, { result, rect in result = result?.union(rect) ?? rect }) {
-                Rectangle().fill(Color.white.opacity(0.07))
-                    .frame(width: bounds.width, height: 0.5)
-                    .position(x: bounds.midX, y: bounds.minY - 12)
-            }
-            ForEach(Array(metrics.fieldShapes.keys), id: \.self) { key in
-                if let rect = metrics.fieldShapes[key] {
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                        .fill(Color.white.opacity(0.05))
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
+                // Field shapes are fixed rects measured at whatever width the real content
+                // last reported at -- while frozen, the card's own width still tracks the
+                // live window/sidebar (see FreezeLayout), so without this the placeholder
+                // rows stayed pinned at their old size instead of stretching with it
+                // (reported live as "the facades dont resize with the window"). A single
+                // non-uniform scale on the whole group keeps every rect's position and
+                // width proportional to the others, cheaper than recomputing each one.
+                let scale = bounds.width > 1 ? geo.size.width / bounds.width : 1
+                ZStack(alignment: .topLeading) {
+                    Rectangle().fill(Color.white.opacity(0.07))
+                        .frame(width: bounds.width, height: 0.5)
+                        .position(x: bounds.midX, y: bounds.minY - 12)
+                    ForEach(Array(metrics.fieldShapes.keys), id: \.self) { key in
+                        if let rect = metrics.fieldShapes[key] {
+                            RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                                .fill(Color.white.opacity(0.05))
+                                .frame(width: rect.width, height: rect.height)
+                                .position(x: rect.midX, y: rect.midY)
+                        }
+                    }
                 }
+                .scaleEffect(x: scale, y: 1, anchor: .topLeading)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

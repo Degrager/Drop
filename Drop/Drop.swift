@@ -7054,11 +7054,13 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         FieldCaption(icon: "switch.2", text: "DOWNLOAD AS")
                             .frame(height: 15, alignment: .leading)
+                            .reportsFacadeFieldShape(id: "download.downloadAs.caption.\(p.id)", kind: .text)
                         SegmentedCapsule(options: downloadModeOptions(preview: preview), fill: false, groupID: "downloadAs")
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         FieldCaption(icon: p.mediaMode == .audioOnly ? "waveform" : "video", text: "OUTPUT FORMAT")
                             .frame(height: 15, alignment: .leading)
+                            .reportsFacadeFieldShape(id: "download.outputFormat.caption.\(p.id)", kind: .text)
                         SegmentedCapsule(options: p.mediaMode == .audioOnly
                             ? downloadAudioFormatOptions(preview: preview)
                             : downloadVideoFormatOptions(preview: preview), groupID: "outputFormat")
@@ -7068,7 +7070,7 @@ struct ContentView: View {
                 ZStack(alignment: .top) {
                     Group {
                         if p.mediaMode != .audioOnly {
-                            FieldsTrackRow(icon: "video", label: "VIDEO") {
+                            FieldsTrackRow(icon: "video", label: "VIDEO", captionID: "download.video.caption.\(p.id)") {
                                 HStack(alignment: .bottom, spacing: 12) {
                                     // Suffixed with the card's own id: openDropdownID is one
                                     // value shared by every download card (see its declaration),
@@ -7092,7 +7094,7 @@ struct ContentView: View {
                             // format, so there's no real choice to present, and the row is
                             // hidden entirely (mirrors Convert's handling of a lossless codec
                             // hiding its own bitrate field).
-                            FieldsTrackRow(icon: "waveform", label: "AUDIO") {
+                            FieldsTrackRow(icon: "waveform", label: "AUDIO", captionID: "download.audio.caption.\(p.id)") {
                                 DropdownField(id: "download.audio.bitrate.\(p.id)", caption: "BITRATE",
                                               options: downloadAudioQualityOptions(preview: preview),
                                               openID: $openDropdownID)

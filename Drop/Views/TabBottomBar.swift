@@ -161,51 +161,87 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                     VStack(alignment: .leading, spacing: compactHeight ? 8 : 10) {
                         let extra = extraControls()
                         if showExtraControls && !(extra is EmptyView) {
-                            extra
-                            GlassDivider()
+                            // Own transition, separate from the Main Card's glassBar
+                            // below -- without this, the queue's mount/unmount had no
+                            // explicit transition of its own and fell back to
+                            // SwiftUI's default (a plain opacity fade sharing
+                            // whatever animation context the surrounding VStack
+                            // reflow was already in), which is what let it visually
+                            // bleed through the rest of the bar instead of animating
+                            // on its own.
+                            Group {
+                                extra
+                                GlassDivider()
+                            }
+                            .transition(.glassBar(anchor: .top))
+                            // Padded out before clipping, then pulled back in by the
+                            // same amount after -- widens the clip boundary past the
+                            // toolbar buttons' own tight bounds (room for their hover
+                            // scale/glow) without changing this section's actual
+                            // layout footprint. Plain .clipped() on the tight bounds
+                            // cut the collapse chevron's hover highlight off flat on
+                            // its left edge -- reported live, directly confirmed by
+                            // zooming in on it.
+                            .padding(8)
+                            .clipped()
+                            .padding(-8)
                         }
 
-                        // In a narrow column the toggle and the folder field can't share
-                        // one row without the field collapsing, so they stack.
-                        if narrow {
-                            VStack(alignment: .leading, spacing: 8) {
-                                leftControls()
-                                    .frame(height: DropGrid.controlHeight)
-                                HStack(spacing: DropGrid.rowSpacing) {
-                                    batchDirectoryControl()
-                                    autoOpenToggle
-                                }
-                                if showClearAll {
-                                    GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                        // Directory row (destination field, Browse/Reveal, Auto-Open,
+                        // Clear All) -- its own isolated section, same as the queue
+                        // above it: one container, its own transition between the
+                        // narrow/wide layouts, clipped to its own bounds so nothing
+                        // from the queue above (or anything else) can bleed into it.
+                        Group {
+                            // In a narrow column the toggle and the folder field can't share
+                            // one row without the field collapsing, so they stack.
+                            if narrow {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    leftControls()
                                         .frame(height: DropGrid.controlHeight)
+                                    HStack(spacing: DropGrid.rowSpacing) {
+                                        batchDirectoryControl()
+                                        autoOpenToggle
+                                    }
+                                    if showClearAll {
+                                        GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                                            .frame(height: DropGrid.controlHeight)
+                                    }
                                 }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        } else {
-                            // The destination (folder, Browse, Reveal), a divider,
-                            // then the Auto-Open Folder icon button. All controls in
-                            // the row share DropGrid.controlHeight so nothing sits a
-                            // pixel off from its neighbor.
-                            HStack(alignment: .center, spacing: DropGrid.rowSpacing + 4) {
-                                leftControls()
-                                    .frame(height: DropGrid.controlHeight)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                // The destination (folder, Browse, Reveal), a divider,
+                                // then the Auto-Open Folder icon button. All controls in
+                                // the row share DropGrid.controlHeight so nothing sits a
+                                // pixel off from its neighbor.
+                                HStack(alignment: .center, spacing: DropGrid.rowSpacing + 4) {
+                                    leftControls()
+                                        .frame(height: DropGrid.controlHeight)
 
-                                batchDirectoryControl()
-                                    .layoutPriority(1)
+                                    batchDirectoryControl()
+                                        .layoutPriority(1)
 
-                                Rectangle()
-                                    .fill(Color.white.opacity(0.14))
-                                    .frame(width: 0.75, height: DropGrid.controlHeight - 8)
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.14))
+                                        .frame(width: 0.75, height: DropGrid.controlHeight - 8)
 
-                                autoOpenToggle
+                                    autoOpenToggle
 
-                                if showClearAll {
-                                    Spacer(minLength: 0)
-                                    GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
-                                        .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
+                                    if showClearAll {
+                                        Spacer(minLength: 0)
+                                        GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                                            .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
+                                    }
                                 }
                             }
                         }
+                        .transition(.opacity)
+                        // Same padded-out/pulled-back-in clip as the queue above --
+                        // Browse/Reveal/Auto-Open's hover highlight was getting the
+                        // same flat cut at the tight bounds. Reported live.
+                        .padding(8)
+                        .clipped()
+                        .padding(-8)
                     }
                     .padding(8)
                     .innerCard()
@@ -294,6 +330,15 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                                 RimBeam(cornerRadius: DesignTokens.Radius.medium)
                             }
                         }
+                        // Own transition for the button's own mount/unmount (when
+                        // showPrimaryAction itself toggles -- Download's tab does
+                        // this, Convert's doesn't). Previously unset, falling back
+                        // to SwiftUI's default plain-opacity fade -- the same
+                        // unscoped pattern already fixed for the queue above. Not
+                        // clipped like the queue/directory row: the hover glow/
+                        // shadow is meant to extend past the button's own edge, and
+                        // clipping would cut that off.
+                        .transition(.glassBar(anchor: .bottom))
                     }
 
                 }

@@ -1910,12 +1910,18 @@ struct ConvertView: View {
                 // on the very first item (hasQueue false->true mounts this Group fresh);
                 // adding a 2nd+ item to an already-open queue was already clean, since
                 // the Group doesn't remount then. Reported live: "the queued items
-                // [should] appear from within the bounds of the queue." Removal stays
-                // .identity (unchanged, see the instant-disappear note above).
-                .transition(.asymmetric(
-                    insertion: .opacity.animation(.easeOut(duration: 0.2)),
-                    removal: .identity
-                ))
+                // [should] appear from within the bounds of the queue."
+                //
+                // Symmetric now -- removal used to be .identity (instant) as a
+                // workaround for the ghosting bug, but that fought against a plain
+                // Collapse click (isQueueExpanded -> false with the queue still
+                // populated): the inner/main card should resize smoothly around the
+                // shrinking queue, not snap. The actual ghosting fix lives
+                // separately, in bottomBarHasItems's delayed collapse (see its own
+                // doc comment) -- that's what keeps the bar from collapsing out
+                // from under this row's fade, so instant removal here was likely
+                // redundant once that landed.
+                .transition(.opacity.animation(.easeOut(duration: 0.2)))
             }
             HStack(spacing: 8) {
                 if hasQueue {

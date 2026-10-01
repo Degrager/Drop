@@ -149,6 +149,15 @@ struct PreviewCard<Settings: View>: View {
     var primaryControl: CardControl? = nil
     /// A control to the left of the primary one (Reveal in Finder, once a download is done).
     var secondaryControl: CardControl? = nil
+    /// True whenever this card's secondaryControl is capable of eventually appearing (a real
+    /// download exists, even before it has reached .done) -- used instead of secondaryControl's
+    /// own live presence so statusSlotWidth (below) doesn't change size at the exact moment
+    /// Reveal in Finder appears. Mirrors primaryTrailingControlCapable's own reasoning: a status
+    /// box that shrinks in lockstep with the button showing up is what caused the progress
+    /// indicator and the newly-appeared buttons to overlap at the downloading -> done transition
+    /// (reported live), the same bug class primaryTrailingControlCapable already exists to avoid
+    /// for the analyzing -> analyzed transition.
+    var secondaryControlCapable: Bool = false
     /// When set, the red Remove button becomes an orange Cancel running this (a download that
     /// is still in flight) -- same one-button swap as CompletedCard.removeOrCancelButton, so a
     /// running job never shows two buttons (Cancel and Remove) at once for the same action.
@@ -313,12 +322,12 @@ struct PreviewCard<Settings: View>: View {
     }
 
     /// The room the status slot takes: what the progress column needs, less whatever of the
-    /// trailing buttons is persistent -- secondaryControl when this card has one, and
-    /// primaryTrailingControl whenever it's CAPABLE of appearing (not only once it actually has:
-    /// see primaryTrailingControlCapable's own doc comment).
+    /// trailing buttons is persistent -- secondaryControl and primaryTrailingControl, both
+    /// counted from their CAPABILITY to appear, not only once they actually have (see
+    /// secondaryControlCapable's and primaryTrailingControlCapable's own doc comments).
     private var statusSlotWidth: CGFloat {
         CardMetrics.statusWidth
-            - (secondaryControl != nil ? CardMetrics.buttonSlot : 0)
+            - (secondaryControlCapable ? CardMetrics.buttonSlot : 0)
             - (primaryTrailingControlCapable ? CardMetrics.buttonSlot : 0)
     }
 

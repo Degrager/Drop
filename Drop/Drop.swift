@@ -98,7 +98,17 @@ class Config: ObservableObject {
         // launch — never restored from a previous session's selection.
         format           = AudioFormat.allCases.first!
         quality          = AudioQuality(rawValue:  UserDefaults.standard.string(forKey: qualityKey) ?? "") ?? .q320
-        browser          = BrowserSource(rawValue: UserDefaults.standard.string(forKey: browserKey) ?? "") ?? .none
+        // nil (not just an empty string) means the key was never written —
+        // i.e. this user has never had an explicit cookie source, including
+        // the .setCookieNone fix path, which always writes a real value
+        // ("none") rather than clearing the key. Only that true first-run
+        // case gets auto-detected; any persisted value, even "none", is
+        // respected as-is so a user/fix choice is never silently overridden.
+        if let storedBrowser = UserDefaults.standard.string(forKey: browserKey) {
+            browser = BrowserSource(rawValue: storedBrowser) ?? .none
+        } else {
+            browser = BrowserSource.autoDetected()
+        }
         mediaMode        = MediaMode.allCases.first!
         videoFormat      = VideoFormat.allCases.first!
         // Resolution always defaults to the highest tier (first in list); actual per-video ceiling
@@ -426,22 +436,26 @@ enum VideoQuality: String, CaseIterable, Identifiable {
         case .q480:  return "bestvideo[height<=480]+bestaudio"
         }
     }
-    /// Format selector constrained to a target container's natively-compatible codecs, with
-    /// automatic fallback to the best available stream if no compatible codec exists at this
-    /// quality. MP4 reliably supports only H.264/AVC video across QuickTime/AVFoundation — both
-    /// VP9-in-MP4 and AV1-in-MP4 are excluded (AV1 decode only exists on M3+ chips, and even
-    /// there QuickTime has been reported to refuse AV1 MP4s). Crucially, this only excludes vcodec, it
-    /// does NOT hard-require avc1 — at higher resolutions (e.g. 4K) many sources have no avc1
-    /// stream at all, and a hard avc1 filter would silently cap the download at a lower resolution
-    /// (the avc1-restricted alternative still 'succeeds' at 1080p instead of failing over to 4K).
-    /// MKV and WebM support VP9/AV1/Opus natively, so no constraint is needed there.
+    /// Format selector for MP4 output. Previously excluded vcodec=vp9/av01 outright to stay
+    /// within QuickTime/AVFoundation's native H.264 support -- but YouTube simply has no H.264
+    /// stream above 1080p (its 2160p+ streams are VP9/AV1 only), so excluding them was
+    /// functionally identical to a hard avc1 requirement at any quality above 1080p: yt-dlp's `/`
+    /// fallback only advances on a *zero-match* selector, not a "better stream exists" one, so it
+    /// silently settled for the best remaining H.264 stream (1080p) and reported success rather
+    /// than falling through to the real 4K/8K stream (confirmed via a real download log: itag 299,
+    /// YouTube's 1080p60 avc1 stream, selected for a 4K request). No codec constraint is needed
+    /// here anymore -- reencodeToH264IfNeeded already transcodes a VP9/AV1 MP4 download to H.264
+    /// afterward (hardware-accelerated, VMAF-verified near-parity with the source), so the
+    /// selector can just fetch the real best stream and let that existing step handle
+    /// MP4/QuickTime compatibility. MKV and WebM hold VP9/AV1/Opus natively and never reach this
+    /// branch at all (see the `guard` below).
     func formatSelector(for container: VideoFormat) -> String {
         guard container == .mp4 else { return formatSelector }
         let h = maxHeight
         // Prefer the best native M4A/AAC audio (highest bitrate available, Resolve-safe, no
         // re-encode needed for MP4). Only fall back to unrestricted bestaudio if the source has
         // no AAC track at all — rare, but keeps the download from failing outright.
-        return "bestvideo[height<=\(h)][vcodec!*=vp9][vcodec!*=av01]+bestaudio[ext=m4a]/bestvideo[height<=\(h)][vcodec!*=vp9][vcodec!*=av01]+bestaudio/bestvideo[height<=\(h)]+bestaudio"
+        return "bestvideo[height<=\(h)]+bestaudio[ext=m4a]/bestvideo[height<=\(h)]+bestaudio"
     }
     /// Highest quality that fits within sourceMaxHeight (no upscaling)
     static func highest(for sourceH: Int) -> VideoQuality {
@@ -465,6 +479,43 @@ enum BrowserSource: String, CaseIterable, Identifiable {
     var cookieArgs: [String] {
         guard self != .none else { return [] }
         return ["--cookies-from-browser", rawValue]
+    }
+
+    private var bundleIdentifier: String? {
+        switch self {
+        case .none:   return nil
+        case .safari: return "com.apple.Safari"
+        case .chrome: return "com.google.Chrome"
+        case .firefox: return "org.mozilla.firefox"
+        case .brave:  return "com.brave.Browser"
+        case .edge:   return "com.microsoft.edgemac"
+        }
+    }
+
+    /// True if this browser is actually installed on the Mac (checked via
+    /// LaunchServices, not just a hardcoded assumption) -- a cookie source
+    /// yt-dlp can't find a jar for is worse than no cookie source at all,
+    /// since it turns a quiet quality cap into a hard download failure.
+    var isInstalled: Bool {
+        guard let id = bundleIdentifier else { return false }
+        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil
+    }
+
+    /// Picks a cookie source automatically so authenticated-only formats
+    /// (notably YouTube's 4K+ streams, which its anonymous format list
+    /// omits entirely for many videos -- see sourceMaxHeight detection in
+    /// analyzeURL) are available without the user ever opening a settings
+    /// screen. Safari is tried last on purpose: its cookie DB requires
+    /// Full Disk Access and is frequently reported locked by macOS (see
+    /// the existing .setCookieNone fix path above, which exists
+    /// specifically for that failure) -- Chromium-family browsers store
+    /// cookies in a far more reliably-readable format. Falls through to
+    /// .none (anonymous) only if nothing supported is installed.
+    static func autoDetected() -> BrowserSource {
+        for candidate: BrowserSource in [.chrome, .edge, .brave, .firefox, .safari] where candidate.isInstalled {
+            return candidate
+        }
+        return .none
     }
 }
 
@@ -8012,6 +8063,15 @@ struct ContentView: View {
                     "--write-info-json",
                     "-o", infoJSONCachePath
                 ]
+                // Authenticated requests see a materially larger format list than
+                // anonymous ones -- YouTube in particular omits its true 4K+
+                // streams from the anonymous list for many videos, which without
+                // this was capping sourceMaxHeight (and therefore the quality
+                // picker itself) at 1080p even when a signed-in browser session
+                // could see higher. The download call already applied this same
+                // cookie source (see ytArgs below); analyze never did, so the two
+                // steps were silently looking at two different format lists.
+                analyzeArgs += self.config.browser.cookieArgs
                 // Reuse a fresh cached info-json (written by a prior analyze of
                 // this exact URL within the TTL window) instead of re-resolving
                 // from the network -- this is what makes re-pasting an already-

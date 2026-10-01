@@ -1194,6 +1194,22 @@ struct ConvertView: View {
     private var hasQueue: Bool { !queue.isEmpty }
     private var hasJobs: Bool { hasStaging || hasQueue }
 
+    /// Mirrors hasJobs for TabBottomBar's own hasItems, but delayed on the false
+    /// transition only. hasJobs itself still drives queueDrawer's row list/toolbar
+    /// directly (they disappear the instant their item is gone -- correct, there's
+    /// no content left in them to fade) and the Spacer + EmptyStateView above this
+    /// bar, which reflow into whatever space the bar's removal frees up (see
+    /// layoutPriority(hasStaging ? 0 : 1) in body). Without this delay, that reflow
+    /// and the bar's own 0.14s glassBar blur-fade-out ran in the SAME instant, so the
+    /// "Drop files to convert" hint visibly slid through the still-fading bar as it
+    /// re-centered into the space the bar hadn't finished vacating yet -- reported
+    /// live, the last queued item "lingering" after Clear Queue or a single remove.
+    /// This keeps the fade itself (glassBar, unchanged) but sequences the two: the
+    /// bar fades out first, the layout only collapses into the space once that's
+    /// essentially done. Appearing is never delayed, only disappearing waits.
+    @State private var bottomBarHasItems = false
+    private static let bottomBarRemovalDelay: TimeInterval = 0.16
+
     private var selectedStagingJob: ConvertJob? { stagingJobs.first { $0.id == selectedStagingID } }
 
     /// Every queue row always shows its own checkbox now (no separate Select
@@ -1392,6 +1408,21 @@ struct ConvertView: View {
                     .layoutPriority(hasStaging ? 0 : 1)
             }
         }
+        .onAppear { bottomBarHasItems = hasJobs }
+        .onChange(of: hasJobs) { _, newValue in
+            if newValue {
+                bottomBarHasItems = true
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.bottomBarRemovalDelay) {
+                    // Re-checks hasJobs itself (not just blindly setting false) in
+                    // case something was queued again during the delay -- that should
+                    // stay visible, not get yanked away by a stale timer.
+                    if !hasJobs {
+                        withAnimation(.spring(response: 0.3)) { bottomBarHasItems = false }
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -1400,7 +1431,7 @@ struct ConvertView: View {
             // destination for every job) plus the Convert Queue drawer.
             TabBottomBar(
                 config: config,
-                hasItems: hasJobs,
+                hasItems: bottomBarHasItems,
                 // Always shown now -- never hidden just because the queue
                 // is empty. It reads "No Items in Queue" (greyed,
                 // disabled) instead of disappearing, and swaps into "Cancel

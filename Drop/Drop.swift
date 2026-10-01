@@ -113,7 +113,11 @@ class Config: ObservableObject {
         } else {
             browser = BrowserSource.autoDetected()
         }
-        reencodeCodec    = ReencodeCodec(rawValue: UserDefaults.standard.string(forKey: reencodeCodecKey) ?? "") ?? .h264
+        // Defaults to Off (not H.264) the first time this has ever run -- the user's explicit
+        // choice ("if never been selected before it should default to off"). Any later card's
+        // selection overwrites this (see downloadReencodeCodecOptions), so this only matters on
+        // a true first use.
+        reencodeCodec    = ReencodeCodec(rawValue: UserDefaults.standard.string(forKey: reencodeCodecKey) ?? "") ?? .off
         mediaMode        = MediaMode.allCases.first!
         videoFormat      = VideoFormat.allCases.first!
         // Resolution always defaults to the highest tier (first in list); actual per-video ceiling
@@ -287,30 +291,36 @@ enum VideoFormat: String, CaseIterable, Identifiable {
 
 /// Which hardware encoder reencodeIfNeeded (DownloadManager) targets when a source has no
 /// stream compatible with the requested output container (see that function's own doc
-/// comment). Both options are Apple Silicon's dedicated videotoolbox encode blocks, not
-/// software -- HEVC is NOT faster to encode than H.264 on the same hardware (its coding
-/// tools are inherently more complex even accelerated), its advantage is a meaningfully
-/// smaller file at the same visual quality. H.264 stays the default: it is also readable by
-/// older/non-Apple software HEVC sometimes isn't.
+/// comment). H.264 and HEVC are both Apple Silicon's dedicated videotoolbox encode blocks, not
+/// software -- HEVC is NOT faster to encode than H.264 on the same hardware (its coding tools
+/// are inherently more complex even accelerated), its advantage is a meaningfully smaller file
+/// at the same visual quality. H.264 stays the default: it is also readable by older/non-Apple
+/// software HEVC sometimes isn't. .off skips the step entirely, keeping the source's original
+/// AV1/VP9 stream even though that means the file may not open in Preview/QuickTime -- for a
+/// user who already knows that and would rather keep the untouched original (e.g. it's headed
+/// to an app that decodes AV1/VP9 fine, or they just don't want ANY re-encode loss).
 enum ReencodeCodec: String, CaseIterable, Identifiable {
-    case h264, hevc
+    case h264, hevc, off
     var id: String { rawValue }
     var label: String {
         switch self {
         case .h264: return "H.264"
         case .hevc: return "HEVC"
+        case .off:  return "Off"
         }
     }
     var note: String {
         switch self {
         case .h264: return "Fastest, plays everywhere"
         case .hevc: return "Smaller file, same quality"
+        case .off:  return "Keep original — may not open in Preview/QuickTime"
         }
     }
-    var videotoolboxEncoder: String {
+    var videotoolboxEncoder: String? {
         switch self {
         case .h264: return "h264_videotoolbox"
         case .hevc: return "hevc_videotoolbox"
+        case .off:  return nil
         }
     }
 }
@@ -1078,7 +1088,7 @@ struct Download: Identifiable {
     var resolvedBaseName: String? = nil
     var thumbnailURL: String = ""  // carried from LinkPreview for history
     var browser: BrowserSource = .none
-    var reencodeCodec: ReencodeCodec = .h264
+    var reencodeCodec: ReencodeCodec = .off  // always overwritten from config.reencodeCodec in add()
     var audioQuality: AudioQuality = .q320
     var isPlaylist: Bool = false
     // Full analyze snapshot — populated immediately when dispatched, used by Retry/Redownload
@@ -2248,7 +2258,22 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     private func reencodeIfNeeded(atPath path: String, ffmpegPath: String, finalExtension: String, targetCodec: ReencodeCodec, downloadID: UUID) -> String? {
         guard let sourceCodec = actualVideoCodec(atPath: path, ffmpegPath: ffmpegPath),
               sourceCodec == "av1" || sourceCodec == "vp9" else { return nil }
-        appendLog("⚠ Source had no \(targetCodec.label) stream at this resolution (got \(sourceCodec.uppercased())) — re-encoding for Preview/QuickTime compatibility…")
+        // .off genuinely means "don't touch it" when the file is already sitting in its real
+        // final container (MP4 output: a valid, if non-H.264, .mp4 -- see this function's own
+        // top-level doc comment on why that's fine to just leave). But a MOV request whose
+        // source needed the .mp4 intermediate (mov's muxer flatly can't hold AV1/VP9 at all --
+        // see sourceNeedsTranscodeForMov at the download-args site) still has to produce a real
+        // .mov somehow, and that container CANNOT hold the untouched source codec either -- so
+        // .off can't be honored there. The picker already hides .off for MOV to avoid offering
+        // a choice it can't keep, but fall back to H.264 here too in case a card's stored value
+        // is stale from before a format switch, rather than silently handing back a .mp4 file
+        // under a .mov name.
+        guard targetCodec != .off || finalExtension != (path as NSString).pathExtension else { return nil }
+        let effectiveCodec = targetCodec == .off ? .h264 : targetCodec
+        if targetCodec == .off {
+            appendLog("⚠ Off isn't possible for a MOV source -- .mov can't hold \(sourceCodec.uppercased()) at all, re-encoding to \(effectiveCodec.label) instead.")
+        }
+        appendLog("⚠ Source had no \(effectiveCodec.label) stream at this resolution (got \(sourceCodec.uppercased())) — re-encoding for Preview/QuickTime compatibility…")
         let finalPath = (path as NSString).deletingPathExtension + ".\(finalExtension)"
         let tempPath = (path as NSString).deletingPathExtension + ".reencode.\(finalExtension)"
 
@@ -2264,7 +2289,9 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         // Probed once, up front, and reused for both the bitrate target above and the live
         // progress fraction below (previously probed a second time purely for the bitrate calc).
         let durationSeconds = probeDurationSeconds(atPath: path, ffmpegPath: ffmpegPath)
-        var videoArgs = ["-c:v", targetCodec.videotoolboxEncoder]
+        // effectiveCodec is never .off here (see the guard above), so this always has a real
+        // encoder name -- the fallback is defensive only, never actually hit.
+        var videoArgs = ["-c:v", effectiveCodec.videotoolboxEncoder ?? "h264_videotoolbox"]
         let sizeBytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? nil
         if let sizeBytes, sizeBytes > 0, let durationSeconds, durationSeconds > 0 {
             let sourceKbps = Int((Double(sizeBytes) * 8 / 1000) / durationSeconds)
@@ -2327,7 +2354,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         }
         p.waitUntilExit()
         guard p.terminationStatus == 0, FileManager.default.fileExists(atPath: tempPath) else {
-            appendLog("❌ Re-encode to \(targetCodec.label) failed — keeping the original \(sourceCodec.uppercased()) file.")
+            appendLog("❌ Re-encode to \(effectiveCodec.label) failed — keeping the original \(sourceCodec.uppercased()) file.")
             try? FileManager.default.removeItem(atPath: tempPath)
             return nil
         }
@@ -2339,7 +2366,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             try? FileManager.default.removeItem(atPath: tempPath)
             return nil
         }
-        appendLog("✓ Re-encoded to \(targetCodec.label).")
+        appendLog("✓ Re-encoded to \(effectiveCodec.label).")
         return finalPath
     }
 
@@ -7527,12 +7554,20 @@ struct ContentView: View {
 
     private func downloadReencodeCodecOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
         let p = preview.wrappedValue
-        return ReencodeCodec.allCases.map { c in
+        // Falls back to config.reencodeCodec (the last value picked on ANY card, persisted) until
+        // this specific card's own value is explicitly set -- see LinkPreview.reencodeCodec's own
+        // doc comment. .off is hidden for MOV: it can't actually be honored there (reencodeIfNeeded
+        // falls back to H.264 if it ever receives .off for a MOV source anyway -- see its own doc
+        // comment), so it shouldn't be offered as if it were.
+        let effective = p.reencodeCodec ?? config.reencodeCodec
+        return ReencodeCodec.allCases.filter { $0 != .off || p.videoFormat != .mov }.map { c in
             SegmentOption(
                 id: c.rawValue, label: c.label, help: c.note,
-                isSelected: p.reencodeCodec == c, tint: DesignTokens.Accent.primary
+                isSelected: effective == c, tint: DesignTokens.Accent.primary
             ) {
                 preview.reencodeCodec.wrappedValue = c
+                // Remembered as the default for the NEXT card that needs this choice.
+                config.reencodeCodec = c
             }
         }
     }
@@ -7855,9 +7890,13 @@ struct ContentView: View {
         var mediaMode: MediaMode
         var videoQuality: VideoQuality = VideoQuality.allCases.first!  // set to highest(for: sourceMaxHeight) after analyze
         var videoFormat: VideoFormat   = VideoFormat.allCases.first!
-        // Only has any effect when sourceVideoCodec needs reencodeIfNeeded to run at all (AV1/VP9
-        // source + MP4/MOV output) -- see the field's own selector, shown only in that case.
-        var reencodeCodec: ReencodeCodec = .h264
+        // nil until the user explicitly picks a value on THIS card -- falls back to
+        // config.reencodeCodec (the last value picked on any card, persisted; "Off" if the user
+        // has never picked one at all) everywhere this is read, rather than defaulting every
+        // fresh card back to a fixed value and losing the user's last choice. Only has any effect
+        // when sourceVideoCodec needs reencodeIfNeeded to run at all (AV1/VP9 source + MP4/MOV
+        // output) -- see the field's own selector, shown only in that case.
+        var reencodeCodec: ReencodeCodec? = nil
         var audioFormat: AudioFormat   = AudioFormat.allCases.first!   // M4A — native, no re-encode
         var audioQuality: AudioQuality = .q320  // quality for current format
         // Per-format quality memory
@@ -8730,7 +8769,11 @@ struct ContentView: View {
                 let preview = linkPreviews[i]
                 let itemConfig = config.detached(mediaMode: preview.mediaMode, videoQuality: preview.videoQuality,
                                                  videoFormat: preview.videoFormat, format: preview.audioFormat,
-                                                 quality: preview.audioQuality, reencodeCodec: preview.reencodeCodec)
+                                                 quality: preview.audioQuality,
+                                                 // Falls back to the remembered default when this
+                                                 // card's own dropdown was never touched -- see
+                                                 // LinkPreview.reencodeCodec's own doc comment.
+                                                 reencodeCodec: preview.reencodeCodec ?? config.reencodeCodec)
                 // add() returns the UUID of the newly created Download
                 let snap = DownloadSnapshot(
                     title:            preview.title,
@@ -8794,6 +8837,7 @@ struct ContentView: View {
         lp.videoFormat       = dl.videoFormat
         lp.audioFormat       = dl.format
         lp.audioQuality      = dl.audioQuality
+        lp.reencodeCodec     = dl.reencodeCodec
         lp.qualityByFormat   = snap.qualityByFormat
         lp.fileSizeByQuality = snap.fileSizeByQuality
         lp.isSelected        = true

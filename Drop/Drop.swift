@@ -1495,11 +1495,19 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             let ytdlp  = self.ytdlpPath  != nil
             let ffmpeg = self.ffmpegPath != nil
             DispatchQueue.main.async {
+                // Reported live: "Tools ready" logged twice back to back on an ordinary launch.
+                // This runs once immediately at launch and again once ensureLatestTools's
+                // downloads finish (see that function's own comment for why the second call
+                // exists) -- on a first launch those two calls genuinely differ (not ready, then
+                // ready), but on every later launch the tools are already on disk for BOTH calls,
+                // so the second one was re-announcing exactly what the first already said. Only
+                // the not-ready -> ready transition is worth logging a second time.
+                let wasAlreadyReady = self.toolsReady
                 self.toolsReady    = ytdlp && ffmpeg
                 self.checkingDeps  = false
                 if !self.toolsReady {
                     self.appendLog("Tools not ready yet (yt-dlp=\(ytdlp), ffmpeg=\(ffmpeg)) — waiting on the automatic download. If this doesn't clear after the download finishes, check your internet connection.")
-                } else {
+                } else if !wasAlreadyReady {
                     self.appendLog("Tools ready — yt-dlp: \(self.ytdlpPath ?? "?"), ffmpeg: \(self.ffmpegPath ?? "?")")
                 }
             }

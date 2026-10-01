@@ -1982,7 +1982,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             }
             downloads[idx].status = .cancelled
             appendLog("Cancelled: \(downloads[idx].title)")
-            Self.deletePartialFiles(baseName: downloads[idx].resolvedBaseName, in: downloads[idx].outputDir, log: appendLog)
+            Self.deletePartialFiles(baseName: downloads[idx].resolvedBaseName, in: downloads[idx].outputDir, log: { self.appendLog($0) })
         }
     }
 
@@ -2655,9 +2655,10 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                         // first unbracketed stdout line can be arbitrary yt-dlp output
                         // like "Deleting original file ... (pass -k to keep)", which
                         // would clobber the real title if captured.
+                        let isProgressLine = t.hasPrefix("[download]") && t.contains("%")
                         DispatchQueue.main.async {
                             self.withDownload(downloadID) { $0.logs.append(renderedLine) }
-                            self.appendLog(renderedLine)
+                            self.appendLog(renderedLine, progressSourceID: isProgressLine ? "download-\(downloadID)" : nil)
                         }
                     }
                 }
@@ -3011,11 +3012,32 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         return f
     }()
 
-    func appendLog(_ line: String) {
+    /// Which source's progress line currently occupies the LAST slot in globalLogs -- nil means
+    /// that slot is a one-off event, not a progress tick, so the next line (whatever it is)
+    /// always appends fresh rather than overwriting it.
+    private var lastLogProgressSourceID: String? = nil
+
+    /// yt-dlp's download percent and ffmpeg's frame=N both tick many times a second, and used to
+    /// each append their own line -- a single download could bury the rest of the log under
+    /// thousands of near-identical percent lines. Pass `progressSourceID` (a stable per-job key,
+    /// e.g. the download/job's UUID) for a repeating progress tick: consecutive calls with the
+    /// SAME id overwrite the log's last line in place, Homebrew/npm-style, instead of appending --
+    /// a different id (a second download/conversion running at once) still appends its own fresh
+    /// line rather than stomping on the first one's. Leave it nil (the default) for anything that
+    /// should remain its own permanent line -- errors, start/finish events, one-off output.
+    /// DropLogger's on-disk file is unaffected either way: every call is written there in full,
+    /// so the exportable log keeps complete fidelity for troubleshooting even when the in-app
+    /// list coalesces.
+    func appendLog(_ line: String, progressSourceID: String? = nil) {
         let ts = DownloadManager.logTimestampFormatter.string(from: Date())
         let entry = "[\(ts)] \(line)"
-        globalLogs.append(entry)
-        if globalLogs.count > 500 { globalLogs.removeFirst() }
+        if let progressSourceID, progressSourceID == lastLogProgressSourceID, !globalLogs.isEmpty {
+            globalLogs[globalLogs.count - 1] = entry
+        } else {
+            globalLogs.append(entry)
+            if globalLogs.count > 500 { globalLogs.removeFirst() }
+        }
+        lastLogProgressSourceID = progressSourceID
         DropLogger.shared.write(entry)
     }
 

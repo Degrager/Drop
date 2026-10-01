@@ -2087,6 +2087,72 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         return nil
     }
 
+    /// Same probe as actualVideoHeight, reading the codec name instead of the resolution off
+    /// ffmpeg's own "Video: <codec> (...)" banner line (e.g. "vp9", "av1", "h264").
+    private func actualVideoCodec(atPath path: String, ffmpegPath: String) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: ffmpegPath)
+        p.arguments = ["-hide_banner", "-i", path]
+        let errPipe = Pipe()
+        p.standardOutput = Pipe()
+        p.standardError = errPipe
+        do { try p.run() } catch { return nil }
+        let data = errPipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        for line in text.components(separatedBy: "\n") where line.contains("Video:") {
+            if let range = line.range(of: #"Video:\s*(\w+)"#, options: .regularExpression) {
+                return line[range].replacingOccurrences(of: "Video:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+
+    /// yt-dlp's MP4 format selector excludes VP9/AV1 (see VideoQuality.formatSelector(for:)'s own
+    /// doc comment) -- but its last fallback clause has no codec restriction at all, so when a
+    /// source genuinely has no H.264 stream at the requested height, it still hands back
+    /// whatever IS there. The resulting MP4 is completely valid (plays fine in VLC/ffplay), but
+    /// Preview and QuickTime Player can't decode AV1 or VP9 at all, on any Mac -- so a card
+    /// marked Done could hand back a file the user's own Mac won't open. Reported live: a 1080p
+    /// A24 teaser whose only YouTube source was VP9 came through unplayable in Preview, sitting
+    /// right next to sibling trailers that had a real H.264 stream and played fine. Re-encodes
+    /// the video track to H.264 in place (audio is stream-copied, untouched) whenever this
+    /// happens, so "Done" always means "will actually open" for an MP4. Returns whether a
+    /// re-encode happened (the caller re-measures file size either way).
+    private func reencodeToH264IfNeeded(atPath path: String, ffmpegPath: String) -> Bool {
+        guard let codec = actualVideoCodec(atPath: path, ffmpegPath: ffmpegPath),
+              codec == "av1" || codec == "vp9" else { return false }
+        appendLog("⚠ Source had no H.264 stream at this resolution (got \(codec.uppercased())) — re-encoding for Preview/QuickTime compatibility…")
+        let tempPath = (path as NSString).deletingPathExtension + ".h264reencode.mp4"
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: ffmpegPath)
+        p.arguments = ["-y", "-i", path, "-c:v", "libx264", "-preset", "fast", "-c:a", "copy", tempPath]
+        let errPipe = Pipe()
+        p.standardOutput = Pipe()
+        p.standardError = errPipe
+        do { try p.run() } catch {
+            appendLog("❌ Re-encode failed to start: \(error.localizedDescription) — keeping the original \(codec.uppercased()) file.")
+            return false
+        }
+        p.waitUntilExit()
+        guard p.terminationStatus == 0, FileManager.default.fileExists(atPath: tempPath) else {
+            appendLog("❌ Re-encode to H.264 failed — keeping the original \(codec.uppercased()) file.")
+            try? FileManager.default.removeItem(atPath: tempPath)
+            return false
+        }
+        do {
+            try FileManager.default.removeItem(atPath: path)
+            try FileManager.default.moveItem(atPath: tempPath, toPath: path)
+        } catch {
+            appendLog("❌ Couldn't replace the original file after re-encoding: \(error.localizedDescription)")
+            try? FileManager.default.removeItem(atPath: tempPath)
+            return false
+        }
+        appendLog("✓ Re-encoded to H.264.")
+        return true
+    }
+
     private func startDownload(index idx: Int, config: Config) {
         // Wall-clock start, used below to show "[Ns elapsed]" alongside the
         // progress bar.
@@ -2644,6 +2710,16 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                     self.appendLog("✓ Saved to: \(b.path)")
                 } else {
                     self.appendLog("❌ File not found in \(outputDir) after download.")
+                }
+
+                // MP4 only -- MKV/WebM hold AV1/VP9 natively (no compatibility issue to fix),
+                // and MOV can't hold them at all via remux regardless (a separate, pre-existing
+                // constraint -- see VideoFormat's own doc comment and isAvailable(forSourceVideoCodec:),
+                // which keeps MOV from being offered for a source this would affect in the first
+                // place). Before the fileSize measurement below, so a re-encode's real output
+                // size is what gets recorded, not the pre-swap original's.
+                if mediaMode == .videoAndAudio, videoFormat == .mp4, let path = confirmedPath, let ffmpeg = self.ffmpegPath {
+                    _ = self.reencodeToH264IfNeeded(atPath: path, ffmpegPath: ffmpeg)
                 }
 
                 if let path = confirmedPath,

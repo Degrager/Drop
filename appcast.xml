@@ -3,6 +3,33 @@
     <channel>
         <title>Drop</title>
         <item>
+            <title>1.5</title>
+            <pubDate>Thu, 01 Oct 2026 01:19:08 -0700</pubDate>
+            <sparkle:version>1.5</sparkle:version>
+            <sparkle:shortVersionString>1.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[Fix incorrect download resolution, added Re-Encode options for dowmloads, and UI bug fixes
+
+## What's New
+- Convert can now automatically re-encode incompatible sources to H.264 or HEVC for compatability issues
+- Drop's own version is now shown in the log at launch
+- Added a choice of H.264, HEVC, or Off when a download needs to re-encode for compatibility
+
+## Changed
+- Condensed repetitive progress lines in the Log tab into one self-updating line
+
+## Fixes
+- Fixed 4K+ YouTube downloads silently saving at a lower resolution than requested
+- Fixed the progress indicator briefly overlapping the Reveal/Redownload buttons when a download finishes
+- Fixed Convert's bottom bar visually glitching when clearing or resizing the queue]]></description>
+            <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.5/Drop-1.5.dmg" length="5115998" type="application/octet-stream" sparkle:edSignature="2nsHoYB1LW5MNgg7XmwZX2rD+10Y/5bYTMGRHaoEEI1D0Z1B2z8mex6WMX5O0xl8e2G+PGayapW4k8wkbbQmBg=="/>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.5/Drop1.5-1.4.1.delta" sparkle:deltaFrom="1.4.1" length="395354" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="nn7sGshlbR3iG5YLaeMhMay6E6hwPdnsLq0CWHNeikYRp8l4e+J1p6Q9dvSPM2/4Zsy7TUoo/cnS4+iwqVFRCw=="/>
+                <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.5/Drop1.5-1.4.delta" sparkle:deltaFrom="1.4" length="394726" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="7au4G1kSbFTGd0LwGLmOhewY1rtFyWO1hHfdh0F0GqMX35qAiVman9j3Xpuz1hKCdDMcdyEjx8tMUNyrBd2zAw=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.4.1</title>
             <pubDate>Wed, 30 Sep 2026 15:20:47 -0700</pubDate>
             <sparkle:version>1.4.1</sparkle:version>
@@ -11,9 +38,6 @@
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description><![CDATA[Fixed Update Error across recent updates]]></description>
             <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.4.1/Drop-1.4.1.dmg" length="5104385" type="application/octet-stream" sparkle:edSignature="KoC2TOsVQCaYnkWtQwfiABCyraAIIXR1CYg72d12nC7dw7jj8M1i7EGxmrs8tG5NpTut1M2SED+wa2kmlAIIBA=="/>
-            <sparkle:deltas>
-                <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.4.1/Drop1.4.1-1.4.delta" sparkle:deltaFrom="1.4" length="79402" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="FpwfS/wtdsfWPx/J2wiVDFfUeiNDPX5NgXjyGY4ZydN7/j8njDvH2wyEXUV8i+9Mq8IveE3Y3oJQ+CwUHsCQDQ=="/>
-            </sparkle:deltas>
         </item>
         <item>
             <title>1.4</title>

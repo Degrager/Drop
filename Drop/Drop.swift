@@ -1431,6 +1431,13 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
 
     /// Returns a unique file path in outputDir — appends (2), (3), … if needed.
     init() {
+        // The only indication of what's actually running was yt-dlp/ffmpeg's own paths/update
+        // status (reported live: "no indication of the Drop version in the log like there is for
+        // yt-dlp and ffmpeg") -- useful on its own (a source build reads as "dev", distinguishing
+        // it at a glance from a real stamped release -- see isReleaseVersion's own doc comment),
+        // and essential context for reading the rest of a log someone else sends in.
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        appendLog("Drop \(currentAppVersion) (build \(build))")
         checkDeps()
         requestNotificationPermission()
         // Both tools track nightly builds, so every launch makes sure the

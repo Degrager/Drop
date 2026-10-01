@@ -554,6 +554,65 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
     var encodesVideo: Bool { !videoCodecMatchesSource || scaledShortSide != nil || overridesVideoBitrate }
     var encodesAudio: Bool { !audioCodecMatchesSource || overridesAudioBitrate }
 
+    /// The exact ffmpeg argument list runConversion would launch for this job's CURRENT
+    /// selection, given the real output path -- pulled out as its own pure function (no process,
+    /// no I/O) so the Dev-only "reveal command" button on the analyze card (see
+    /// ConvertPreviewCard.ffmpegCommandPreview) can show the real thing rather than a second
+    /// implementation that could quietly drift out of sync with it. See runConversion's own inline
+    /// comments for why each piece is here -- this is a verbatim extraction, not a rewrite.
+    func ffmpegArgs(outputPath: String) -> [String] {
+        var args = ["-y", "-i", inputURL.path]
+        if mediaMode != .videoOnly {
+            let audioMatches = !encodesAudio
+            let encodeAudio = !audioMatches
+            args += ["-c:a", encodeAudio ? audioCodec.ffmpegCodec : "copy"]
+            let isMultichannel = (mediaInfo?.audioChannelLabel).map { $0 == "5.1" || $0 == "7.1" } ?? false
+            if encodeAudio, let kbps = audioBitrateArgKbps { args += ["-b:a", "\(kbps)k"] }
+            if encodeAudio && audioCodec == .mp3 {
+                if isMultichannel { args += ["-ac", "2"] }
+            }
+            if encodeAudio && audioCodec == .aac {
+                let layoutArg: String? = {
+                    switch mediaInfo?.audioChannelLabel {
+                    case "5.1": return "5.1"
+                    case "7.1": return "7.1"
+                    case "2.0": return "stereo"
+                    case "1.0": return "mono"
+                    default: return nil
+                    }
+                }()
+                if let layoutArg { args += ["-channel_layout", layoutArg] }
+            }
+        } else {
+            args += ["-an"]
+        }
+        if mediaMode.isVideo {
+            let encodeVideo = encodesVideo
+            args += ["-c:v", encodeVideo ? videoCodec.ffmpegCodec : "copy"]
+            if let side = scaledShortSide {
+                args += ["-vf", "scale=w='if(gt(iw,ih),-2,\(side))':h='if(gt(iw,ih),\(side),-2)':flags=lanczos"]
+            }
+            let videoKbps: Int? = (encodeVideo && overridesVideoBitrate) ? chosenVideoBitrateKbps : nil
+            if let kbps = videoKbps { args += ["-b:v", "\(kbps)k"] }
+            if encodeVideo && (videoCodec == .h264 || videoCodec == .h265) {
+                args += ["-preset", "fast"]
+            }
+            if videoCodec == .h265 && (outputFormat == .mp4 || outputFormat == .mov) {
+                args += ["-tag:v", "hvc1"]
+            }
+            if encodeVideo && videoCodec == .av1 {
+                args += videoKbps == nil ? ["-preset", "8", "-crf", "35"] : ["-preset", "8"]
+            }
+            if encodeVideo && videoCodec == .vp9 && videoKbps == nil {
+                args += ["-crf", "32", "-b:v", "0"]
+            }
+        } else {
+            args += ["-vn"]
+        }
+        args.append(outputPath)
+        return args
+    }
+
     private var isMultichannelSource: Bool {
         mediaInfo?.audioChannelLabel.map { $0 == "5.1" || $0 == "7.1" } ?? false
     }
@@ -1943,142 +2002,12 @@ struct ConvertView: View {
             let p = Process()
             job.process = p
             p.executableURL = URL(fileURLWithPath: ffmpeg)
-            var args = ["-y", "-i", job.inputURL.path]  // -y: always overwrite, always run a fresh process
-            // Audio stream — stream-copy (no re-encode) whenever the chosen codec
-            // already matches the source (as before), OR the VIDEO/AUDIO layer's
-            // "Same as Source" chip is selected ("leave this side alone"). That
-            // chip never forces a copy that isn't actually valid for the source/
-            // container combination — it only skips re-encoding when the source
-            // already is (or can be treated as) the selected codec.
-            if job.mediaMode != .videoOnly {
-                // Copy only while nothing asks for a change to the track (a chosen bitrate cannot be
-                // applied to a copy): see ConvertJob.encodesAudio.
-                let audioMatches = !job.encodesAudio
-                // Stream-copy is only ever valid when the codec ffmpeg would
-                // be asked to copy already matches the source -- NOT merely
-                // whenever transcodeAudio is false ("Same as Source"
-                // selected). A self-contained target format like MP3/WAV/
-                // FLAC has exactly one legal codec (audioCodec is forced to
-                // it regardless of the toggle), and there is no "Same as
-                // Source" option to fall back to when the real source codec
-                // isn't already that one -- ffmpeg then rejects "-c:a copy"
-                // outright ("Invalid audio stream. Exactly one MP3 audio
-                // stream is required.") since raw PCM can't be poured into
-                // an MP3 container unencoded. transcodeAudio only decides
-                // which chip glows as selected in the UI; it must never be
-                // allowed to force an impossible copy.
-                let encodeAudio = !audioMatches
-                args += ["-c:a", encodeAudio ? job.audioCodec.ffmpegCodec : "copy"]
-                // 5.1/7.1 sources need more headroom than stereo to avoid audible
-                // compression artifacts — 384k covers 5.1 cleanly, 256k is plenty for stereo/mono.
-                let isMultichannel = (job.mediaInfo?.audioChannelLabel).map { $0 == "5.1" || $0 == "7.1" } ?? false
-                // The chosen bitrate, else what an encode of this codec has always used (256k stereo /
-                // 384k 5.1 for AAC, 320k for MP3, the encoder's own for the rest).
-                if encodeAudio, let kbps = job.audioBitrateArgKbps { args += ["-b:a", "\(kbps)k"] }
-                if encodeAudio && job.audioCodec == .mp3 {
-                    // MP3 (libmp3lame) only supports mono/stereo -- a
-                    // >2-channel source (5.1, 7.1) gets silently downmixed
-                    // by the encoder's own default behavior if left
-                    // unspecified. That's not wrong, but relying on an
-                    // implicit encoder default for something this
-                    // consequential is fragile across ffmpeg versions/
-                    // builds; -ac 2 makes the downmix explicit and
-                    // guaranteed. See displayAudioChannelLabel for the
-                    // matching UI-side fix (the output chip must say "2.0"
-                    // here, not the source's real channel count).
-                    if isMultichannel { args += ["-ac", "2"] }
-                }
-                // Explicitly re-tag the channel layout when re-encoding multichannel audio
-                // to AAC. Root cause of "audio imports but is silent / gets split into
-                // separate mono tracks in Resolve": many sources (esp. Dolby/E-AC-3 rips)
-                // carry a non-standard layout spelling like "5.1(side)" rather than plain
-                // "5.1". ffmpeg's AAC encoder happily encodes it, but writes that same
-                // non-standard layout tag into the MOV/MP4 container. QuickTime-family
-                // decoders (which Resolve's import path is built on) don't recognize
-                // "5.1(side)" as a valid MOV channel layout and fall back to exposing
-                // each channel as its own untagged mono stream — reproduced and verified
-                // on-device: re-reading a "5.1(side)"-tagged AAC/MOV file back through
-                // ffmpeg itself required "Guessed Channel Layout", proving the container
-                // tag wasn't trustworthy even to ffmpeg's own reader. Forcing the standard
-                // "5.1"/"7.1"/"stereo" layout name via -channel_layout normalizes the tag
-                // ffmpeg writes into the container, and the same re-read test showed a
-                // clean tag with no guessing afterward.
-                if encodeAudio && job.audioCodec == .aac {
-                    let layoutArg: String? = {
-                        switch job.mediaInfo?.audioChannelLabel {
-                        case "5.1": return "5.1"
-                        case "7.1": return "7.1"
-                        case "2.0": return "stereo"
-                        case "1.0": return "mono"
-                        default: return nil  // unrecognized/uncommon layouts: let ffmpeg pass the source layout through untouched
-                        }
-                    }()
-                    if let layoutArg { args += ["-channel_layout", layoutArg] }
-                }
-            } else {
-                args += ["-an"] // no audio
-            }
-            // Video stream — same copy-vs-encode rule as audio above: only
-            // ever stream-copy when the codec actually matches the source,
-            // regardless of the "Same as Source" toggle (see the audio
-            // branch's comment above for why -- e.g. a ProRes .mov
-            // converted to MP4, which can't hold ProRes at all, needs to
-            // encode even with "Same as Source" left selected).
-            if job.mediaMode.isVideo {
-                // Copy only while nothing asks for a change to the track: a smaller resolution or a
-                // bitrate cannot be applied to a copy (see ConvertJob.encodesVideo). With "Same as
-                // Source" selected the codec IS the source's own, so it is re-encoded like for like.
-                let encodeVideo = job.encodesVideo
-                args += ["-c:v", encodeVideo ? job.videoCodec.ffmpegCodec : "copy"]
-                // Scales the SHORT side to the chosen size (720p = 720 across the short edge, so a
-                // portrait clip comes out 720 wide, not 720 tall), the other side keeping the
-                // aspect ratio and an even number of pixels, which the encoders need.
-                if let side = job.scaledShortSide {
-                    args += ["-vf", "scale=w='if(gt(iw,ih),-2,\(side))':h='if(gt(iw,ih),\(side),-2)':flags=lanczos"]
-                }
-                // The chosen video bitrate. AV1 and VP9 are otherwise held to a quality target
-                // (-crf), which a bitrate replaces.
-                let videoKbps: Int? = (encodeVideo && job.overridesVideoBitrate) ? job.chosenVideoBitrateKbps : nil
-                if let kbps = videoKbps { args += ["-b:v", "\(kbps)k"] }
-                // -preset fast: significantly faster encode with minimal quality loss
-                if encodeVideo && (job.videoCodec == .h264 || job.videoCodec == .h265) {
-                    args += ["-preset", "fast"]
-                }
-                // HEVC needs an explicit "hvc1" container tag for QuickTime
-                // Player, Preview, Final Cut, and DaVinci Resolve's MOV/MP4
-                // import path to recognize it at all -- libx265 (and many
-                // non-Apple sources) instead tag it "hev1", the ISO generic
-                // tag. A "hev1"-tagged file is valid HEVC (plays fine in
-                // VLC/ffplay) but shows as no video / won't open in any of
-                // those Apple-ecosystem tools. Confirmed on-device: ffprobe
-                // reports "hevc (Rext) (hev1 / 0x31766568)" for a fresh
-                // libx265 encode without this. -tag:v is a container-level
-                // fourcc rewrite, not a re-encode, so it's applied whenever
-                // the OUTPUT is H.265 into MP4/MOV regardless of whether
-                // this track is being encoded or stream-copied -- a
-                // hev1-tagged HEVC source that's simply being remixed
-                // through (e.g. re-encoding only the audio, video left
-                // "Same as Source") would otherwise carry the same
-                // incompatible tag straight through untouched. Only
-                // meaningful for the two Apple-lineage containers -- MKV
-                // doesn't have this requirement at all.
-                if job.videoCodec == .h265 && (job.outputFormat == .mp4 || job.outputFormat == .mov) {
-                    args += ["-tag:v", "hvc1"]
-                }
-                // libsvtav1 uses its own preset scale (0-13, lower = slower/better) — 8 is a
-                // reasonable speed/quality balance, verified to encode successfully on-device.
-                if encodeVideo && job.videoCodec == .av1 {
-                    args += videoKbps == nil ? ["-preset", "8", "-crf", "35"] : ["-preset", "8"]
-                }
-                // libvpx-vp9 needs -b:v 0 to actually respect -crf (otherwise it defaults to
-                // a bitrate-controlled mode and ignores the quality target).
-                if encodeVideo && job.videoCodec == .vp9 && videoKbps == nil {
-                    args += ["-crf", "32", "-b:v", "0"]
-                }
-            } else {
-                args += ["-vn"] // no video
-            }
-            args.append(output.path)
+            // -y: always overwrite, always run a fresh process. See ConvertJob.ffmpegArgs for
+            // the actual audio/video stream logic (copy-vs-encode, bitrates, codec-specific
+            // flags) -- pulled out as its own pure function so the Dev-only "reveal command"
+            // button on the analyze card can show the exact command that would run here,
+            // without a second implementation that could drift out of sync with this one.
+            let args = job.ffmpegArgs(outputPath: output.path)
             p.arguments = args
 
             DispatchQueue.main.async {
@@ -2457,6 +2386,64 @@ struct ConvertPreviewCard: View {
     /// see DropdownPopoverPreferenceKey).
     @State private var openDropdownID: String? = nil
 
+    #if DEV_BUILD
+    @State private var showingFFmpegCommand = false
+
+    /// The exact command runConversion would launch for this job's CURRENT selection, built
+    /// from ConvertJob.ffmpegArgs (the same function the real conversion calls) so this can
+    /// never show something other than what would actually run. Shell-quotes any arg containing
+    /// a space so the printed line is directly pasteable into Terminal. Reported live: wanting a
+    /// way to see this per-selection instead of inferring it from behavior/timing.
+    private var ffmpegCommandPreview: String {
+        let output = URL(fileURLWithPath: config.convertOutputDir).appendingPathComponent(job.outputFilename)
+        let args = job.ffmpegArgs(outputPath: output.path)
+        return (["ffmpeg"] + args)
+            .map { $0.contains(" ") ? "\"\($0)\"" : $0 }
+            .joined(separator: " ")
+    }
+
+    private var ffmpegCommandPopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("ffmpeg command")
+                .font(.appMono(size: 11, weight: .semibold))
+                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+            ScrollView {
+                Text(ffmpegCommandPreview)
+                    .font(.appMono(size: 11))
+                    .foregroundColor(.white)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(width: 480, height: 160)
+            HStack {
+                Spacer()
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(ffmpegCommandPreview, forType: .string)
+                }
+            }
+        }
+        .padding(12)
+    }
+
+    /// headerAccessory plus this dev-only button, side by side -- headerAccessory alone
+    /// (ConvertView's file switcher, when more than one file is staged) is unaffected; this
+    /// button is simply appended next to whatever's already there, or shown alone when nothing
+    /// else occupies the slot.
+    private var combinedHeaderAccessory: AnyView? {
+        let revealButton = AnyView(
+            HoverIconButton(icon: "terminal", size: 13, help: "Reveal ffmpeg command", expandable: true) {
+                showingFFmpegCommand = true
+            }
+            .popover(isPresented: $showingFFmpegCommand, arrowEdge: .top) { ffmpegCommandPopover }
+        )
+        guard let headerAccessory else { return revealButton }
+        return AnyView(HStack(spacing: 8) { headerAccessory; revealButton })
+    }
+    #else
+    private var combinedHeaderAccessory: AnyView? { headerAccessory }
+    #endif
+
     var body: some View {
         if isQueueRow {
             // Every status (including queued-but-not-started) renders as the
@@ -2689,7 +2676,7 @@ struct ConvertPreviewCard: View {
             title: job.inputURL.deletingPathExtension().lastPathComponent,
             secondaryTitle: job.inputURL.path,
             subtitle: subtitleView, // IN / OUT lines
-            headerAccessory: headerAccessory,
+            headerAccessory: combinedHeaderAccessory,
             footer: footer
         ) {
             // Two rows instead of one-row-per-option (the redesign approved

@@ -241,15 +241,16 @@ enum MediaMode: String, CaseIterable, Identifiable {
 }
 
 enum VideoFormat: String, CaseIterable, Identifiable {
-    // MOV was removed once, then re-added conditionally: yt-dlp/ffmpeg can't merge AV1/VP9
-    // into a real .mov container, so offering it unconditionally silently saved as .mp4
-    // anyway while still showing "MOV" — a misleading option. Rather than drop it
-    // entirely (QuickTime plays MP4 natively, so MP4 covers that case too), it's offered
-    // only for sources it can actually satisfy as a genuine remux — see
-    // isAvailable(forSourceVideoCodec:), used to filter the option list itself, so the
-    // option simply isn't there to pick for an incompatible source rather than silently
-    // lying about the container once picked. (Convert tab's MOV is unaffected — that path
-    // re-encodes to a genuine .mov file and is a separate enum.)
+    // MOV was once hidden for AV1/VP9 sources: ffmpeg's mov muxer can't remux those
+    // codecs (unlike mp4's, which can), so --merge-output-format mov silently produced
+    // a .mp4 anyway while still showing "MOV" — a misleading option, hidden via
+    // isAvailable(forSourceVideoCodec:) rather than offered and lying about the
+    // container. Now offered unconditionally: the download step merges an incompatible
+    // source into .mp4 instead (the container mov can't take, mp4 already proven to
+    // handle for any codec — see VideoQuality.formatSelector(for:)), and
+    // reencodeToH264IfNeeded transcodes that to a genuine H.264 .mov afterward — H.264
+    // is fully native to .mov, so that step is a real remux, not a workaround. (Convert
+    // tab's MOV is unaffected — that path always re-encodes and is a separate enum.)
     case mp4, mov, mkv, webm
     var id: String { rawValue }
     var label: String { rawValue.uppercased() }
@@ -275,14 +276,6 @@ enum VideoFormat: String, CaseIterable, Identifiable {
         case .mkv:  return ["--merge-output-format", "mkv"]
         case .webm: return ["--merge-output-format", "webm"]
         }
-    }
-    /// MOV can't actually hold AV1/VP9 (ffmpeg falls back to producing .mp4 despite the
-    /// requested container) — hidden for those sources rather than offered and silently
-    /// wrong. `codec` is the normalized family label from analysis (e.g. "AV1", "H264"),
-    /// nil when unknown; nil is treated as available rather than hiding it on a guess.
-    func isAvailable(forSourceVideoCodec codec: String?) -> Bool {
-        guard self == .mov, let codec else { return true }
-        return codec != "AV1" && codec != "VP9"
     }
 }
 
@@ -2189,14 +2182,21 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// marked Done could hand back a file the user's own Mac won't open. Reported live: a 1080p
     /// A24 teaser whose only YouTube source was VP9 came through unplayable in Preview, sitting
     /// right next to sibling trailers that had a real H.264 stream and played fine. Re-encodes
-    /// the video track to H.264 in place (audio is stream-copied, untouched) whenever this
-    /// happens, so "Done" always means "will actually open" for an MP4. Returns whether a
-    /// re-encode happened (the caller re-measures file size either way).
-    private func reencodeToH264IfNeeded(atPath path: String, ffmpegPath: String) -> Bool {
+    /// the video track to H.264 (audio is stream-copied, untouched) whenever this happens, so
+    /// "Done" always means "will actually open" for an MP4 -- and, since H.264+AAC is fully
+    /// native to .mov, doubles as the step that turns an AV1/VP9 source's .mp4 intermediate
+    /// (see sourceNeedsTranscodeForMov at the download-args site) into a genuine .mov:
+    /// `finalExtension` is normally the same as the input's own extension (a true in-place
+    /// re-encode), but passing a different one produces the result under that extension instead,
+    /// deleting the intermediate. Returns the resulting file's path if a re-encode happened
+    /// (which may differ from `path` when finalExtension changed it), nil if none was
+    /// needed/possible (the caller re-measures file size either way, from whichever path is current).
+    private func reencodeToH264IfNeeded(atPath path: String, ffmpegPath: String, finalExtension: String) -> String? {
         guard let codec = actualVideoCodec(atPath: path, ffmpegPath: ffmpegPath),
-              codec == "av1" || codec == "vp9" else { return false }
+              codec == "av1" || codec == "vp9" else { return nil }
         appendLog("⚠ Source had no H.264 stream at this resolution (got \(codec.uppercased())) — re-encoding for Preview/QuickTime compatibility…")
-        let tempPath = (path as NSString).deletingPathExtension + ".h264reencode.mp4"
+        let finalPath = (path as NSString).deletingPathExtension + ".\(finalExtension)"
+        let tempPath = (path as NSString).deletingPathExtension + ".h264reencode.\(finalExtension)"
 
         // h264_videotoolbox (Apple Silicon's dedicated encode hardware, guaranteed present since
         // Drop ships arm64-only) has no CRF/quality-value option -- -b:v is its only quality
@@ -2221,24 +2221,24 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         p.standardError = errPipe
         do { try p.run() } catch {
             appendLog("❌ Re-encode failed to start: \(error.localizedDescription) — keeping the original \(codec.uppercased()) file.")
-            return false
+            return nil
         }
         p.waitUntilExit()
         guard p.terminationStatus == 0, FileManager.default.fileExists(atPath: tempPath) else {
             appendLog("❌ Re-encode to H.264 failed — keeping the original \(codec.uppercased()) file.")
             try? FileManager.default.removeItem(atPath: tempPath)
-            return false
+            return nil
         }
         do {
             try FileManager.default.removeItem(atPath: path)
-            try FileManager.default.moveItem(atPath: tempPath, toPath: path)
+            try FileManager.default.moveItem(atPath: tempPath, toPath: finalPath)
         } catch {
             appendLog("❌ Couldn't replace the original file after re-encoding: \(error.localizedDescription)")
             try? FileManager.default.removeItem(atPath: tempPath)
-            return false
+            return nil
         }
         appendLog("✓ Re-encoded to H.264.")
-        return true
+        return finalPath
     }
 
     private func startDownload(index idx: Int, config: Config) {
@@ -2279,6 +2279,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         // whatever quality the most recently added item happened to use.
         let audioQuality = downloads[idx].audioQuality
         let sourceABR    = downloads[idx].snapshot.sourceABR
+        let sourceVideoCodec = downloads[idx].snapshot.sourceVideoCodec
         let isPlaylist   = downloads[idx].isPlaylist
         // Real analyzed title when available (set from the Analyze
         // snapshot in add()); falls back to being literally equal to the
@@ -2418,7 +2419,13 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 // --audio-quality only affects -x re-encodes; since we're not re-encoding audio here,
                 // it has no effect — omit it to avoid confusion.
                 ytArgs += ["-f", videoQuality.formatSelector(for: videoFormat)]
-                ytArgs += videoFormat.ytdlpArgs  // --merge-output-format
+                // ffmpeg's mov muxer can't remux AV1/VP9 (mp4's can) -- merge into .mp4
+                // in that case instead of the .mov this download will ultimately be, so
+                // the merge itself doesn't silently fail/fall back. reencodeToH264IfNeeded
+                // below produces the real .mov as its final output once it transcodes to
+                // H.264, which .mov natively supports.
+                let sourceNeedsTranscodeForMov = videoFormat == .mov && (sourceVideoCodec == "AV1" || sourceVideoCodec == "VP9")
+                ytArgs += sourceNeedsTranscodeForMov ? ["--merge-output-format", "mp4"] : videoFormat.ytdlpArgs  // --merge-output-format
             }
 
             // YouTube only: as of mid-2026 YouTube requires a per-video PO
@@ -2801,14 +2808,20 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                     self.appendLog("❌ File not found in \(outputDir) after download.")
                 }
 
-                // MP4 only -- MKV/WebM hold AV1/VP9 natively (no compatibility issue to fix),
-                // and MOV can't hold them at all via remux regardless (a separate, pre-existing
-                // constraint -- see VideoFormat's own doc comment and isAvailable(forSourceVideoCodec:),
-                // which keeps MOV from being offered for a source this would affect in the first
-                // place). Before the fileSize measurement below, so a re-encode's real output
-                // size is what gets recorded, not the pre-swap original's.
-                if mediaMode == .videoAndAudio, videoFormat == .mp4, let path = confirmedPath, let ffmpeg = self.ffmpegPath {
-                    _ = self.reencodeToH264IfNeeded(atPath: path, ffmpegPath: ffmpeg)
+                // MP4/MOV only -- MKV/WebM hold AV1/VP9 natively, no compatibility issue to fix.
+                // For MOV this is also what turns the .mp4 intermediate (see
+                // sourceNeedsTranscodeForMov at the download-args site) into the real .mov the
+                // user actually asked for -- confirmedPath/the "Saved to" log are corrected to
+                // match since the extension itself changes, not just the file's bytes. Before the
+                // fileSize measurement below, so a re-encode's real output size is what gets
+                // recorded, not the pre-swap original's.
+                if mediaMode == .videoAndAudio, (videoFormat == .mp4 || videoFormat == .mov),
+                   let path = confirmedPath, let ffmpeg = self.ffmpegPath,
+                   let reencodedPath = self.reencodeToH264IfNeeded(atPath: path, ffmpegPath: ffmpeg, finalExtension: videoFormat.rawValue) {
+                    confirmedPath = reencodedPath
+                    if reencodedPath != path {
+                        self.appendLog("✓ Saved to: \(reencodedPath)")
+                    }
                 }
 
                 if let path = confirmedPath,
@@ -7358,7 +7371,7 @@ struct ContentView: View {
 
     private func downloadVideoFormatOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
         let p = preview.wrappedValue
-        return VideoFormat.allCases.filter { $0.isAvailable(forSourceVideoCodec: p.sourceVideoCodec) }.map { f in
+        return VideoFormat.allCases.map { f in
             SegmentOption(
                 id: f.rawValue, label: f.label, help: f.note,
                 isSelected: p.videoFormat == f, tint: DesignTokens.Accent.primary

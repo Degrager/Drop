@@ -1790,7 +1790,18 @@ struct ConvertView: View {
     /// than pushing content down from a fixed top.
     private var queueDrawer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Grouped so ONE .transition() covers the row list and its trailing
+            // divider together -- with no transition at all this fell back to
+            // SwiftUI's default animated opacity removal, which (per
+            // AnyTransition.glassPopInOnly's own doc comment) keeps the
+            // outgoing rows in the layout, fading, for the whole spring
+            // duration WHILE the bar is already collapsing to its emptied
+            // height -- the rows' icons visibly "ghost" at the old position
+            // as the bar shrinks out from under them. Reported live: Clear
+            // Queue. glassPopInOnly's removal is instant (.identity), so
+            // there's nothing left to ghost.
             if isQueueExpanded && hasQueue {
+                Group {
                 // Plain ScrollView + LazyVStack (not List) -- same container
                 // pattern already proven throughout the rest of the app, and
                 // avoids List's native macOS drag visual (a free-floating
@@ -1861,6 +1872,8 @@ struct ConvertView: View {
                 // claims that room ahead of the empty state.
                 .frame(minHeight: hasStaging ? nil : queueRowStride, maxHeight: queueDrawerHeight)
                 GlassDivider()
+                }
+                .transition(.glassPopInOnly)
             }
             HStack(spacing: 8) {
                 if hasQueue {
@@ -1872,6 +1885,7 @@ struct ConvertView: View {
                     ) {
                         withAnimation(.spring(response: 0.25)) { isQueueExpanded.toggle() }
                     }
+                    .transition(.blurInOnly)
                 }
                 Text(queueCountLabel)
                     .font(.appMono(size: 11, weight: .semibold))
@@ -1891,6 +1905,7 @@ struct ConvertView: View {
                         }
                     }
                     .fixedSize()
+                    .transition(.blurInOnly)
                 }
             }
         }

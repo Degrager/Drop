@@ -53,6 +53,7 @@ Every download is logged with its original link, so redownloading or retrying a 
 ## Features
 
 - **Paste-and-go downloading** — paste any supported link (YouTube, Soundcloud, and Vimeo via yt-dlp), choose your quality and format, and download.
+- **Converting** - Convert video and audio files, change the format, codec, resolution, and bitrate.
 - **Menu bar quick access** — paste a link from anywhere and Drop picks it up without stealing focus from what you're doing.
 - **Download history** — every past download is tracked with one-click redownload/retry that reuses the original analyzed link, no need to re-paste.
 - **In-app updates** — Drop can detect latest GitHub Releases and can update itself, it also keeps yt-dlp and ffmpeg updated, all integrated directly into the app.

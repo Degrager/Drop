@@ -2790,6 +2790,12 @@ struct ConvertPreviewCard: View {
                             }
                         }
                     }
+                    // Own transition -- without this, switching mediaMode (e.g. away
+                    // from Video + Audio) to hide this row fell back to SwiftUI's
+                    // default opacity fade sharing whatever animation context the
+                    // surrounding VStack reflow was in, same unscoped-bleed pattern
+                    // already fixed for Convert's queue drawer.
+                    .transition(.opacity.animation(.easeOut(duration: 0.2)))
                 }
                 // Hidden entirely for video-only mode (no audio track in the
                 // output at all).
@@ -2817,6 +2823,8 @@ struct ConvertPreviewCard: View {
                             Spacer(minLength: 0)
                         }
                     }
+                    // Own transition, same reasoning as the VIDEO row above.
+                    .transition(.opacity.animation(.easeOut(duration: 0.2)))
                 }
             }
         }

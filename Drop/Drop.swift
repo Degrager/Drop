@@ -47,6 +47,7 @@ class Config: ObservableObject {
     private let outputDirKey        = "outputDir"
     private let qualityKey          = "quality"
     private let browserKey          = "browser"
+    private let reencodeCodecKey    = "reencodeCodec"
     private let filenameTemplateKey = "filenameTemplate"
     private let autoOpenFolderKey   = "autoOpenFolder"
     private let convertOutputDirKey = "convertOutputDir"
@@ -65,6 +66,9 @@ class Config: ObservableObject {
     }
     @Published var browser: BrowserSource {
         didSet { if persists { UserDefaults.standard.set(browser.rawValue, forKey: browserKey) } }
+    }
+    @Published var reencodeCodec: ReencodeCodec {
+        didSet { if persists { UserDefaults.standard.set(reencodeCodec.rawValue, forKey: reencodeCodecKey) } }
     }
     @Published var mediaMode: MediaMode {
         didSet { /* intentionally not persisted — resets to first-in-list (Video + Audio) on launch */ }
@@ -109,6 +113,7 @@ class Config: ObservableObject {
         } else {
             browser = BrowserSource.autoDetected()
         }
+        reencodeCodec    = ReencodeCodec(rawValue: UserDefaults.standard.string(forKey: reencodeCodecKey) ?? "") ?? .h264
         mediaMode        = MediaMode.allCases.first!
         videoFormat      = VideoFormat.allCases.first!
         // Resolution always defaults to the highest tier (first in list); actual per-video ceiling
@@ -126,7 +131,7 @@ class Config: ObservableObject {
     /// item's audio quality as the user's default and published a change (and
     /// a re-render of everything observing Config) once per batch item.
     func detached(mediaMode: MediaMode, videoQuality: VideoQuality, videoFormat: VideoFormat,
-                  format: AudioFormat, quality: AudioQuality) -> Config {
+                  format: AudioFormat, quality: AudioQuality, reencodeCodec: ReencodeCodec) -> Config {
         let copy = Config()
         copy.persists = false
         copy.mediaMode = mediaMode
@@ -134,6 +139,7 @@ class Config: ObservableObject {
         copy.videoFormat = videoFormat
         copy.format = format
         copy.quality = quality
+        copy.reencodeCodec = reencodeCodec
         return copy
     }
 }
@@ -248,8 +254,8 @@ enum VideoFormat: String, CaseIterable, Identifiable {
     // container. Now offered unconditionally: the download step merges an incompatible
     // source into .mp4 instead (the container mov can't take, mp4 already proven to
     // handle for any codec — see VideoQuality.formatSelector(for:)), and
-    // reencodeToH264IfNeeded transcodes that to a genuine H.264 .mov afterward — H.264
-    // is fully native to .mov, so that step is a real remux, not a workaround. (Convert
+    // reencodeIfNeeded transcodes that to a genuine H.264/HEVC .mov afterward — both are
+    // fully native to .mov, so that step is a real remux, not a workaround. (Convert
     // tab's MOV is unaffected — that path always re-encodes and is a separate enum.)
     case mp4, mov, mkv, webm
     var id: String { rawValue }
@@ -275,6 +281,36 @@ enum VideoFormat: String, CaseIterable, Identifiable {
         case .mov:  return ["--merge-output-format", "mov"]
         case .mkv:  return ["--merge-output-format", "mkv"]
         case .webm: return ["--merge-output-format", "webm"]
+        }
+    }
+}
+
+/// Which hardware encoder reencodeIfNeeded (DownloadManager) targets when a source has no
+/// stream compatible with the requested output container (see that function's own doc
+/// comment). Both options are Apple Silicon's dedicated videotoolbox encode blocks, not
+/// software -- HEVC is NOT faster to encode than H.264 on the same hardware (its coding
+/// tools are inherently more complex even accelerated), its advantage is a meaningfully
+/// smaller file at the same visual quality. H.264 stays the default: it is also readable by
+/// older/non-Apple software HEVC sometimes isn't.
+enum ReencodeCodec: String, CaseIterable, Identifiable {
+    case h264, hevc
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .h264: return "H.264"
+        case .hevc: return "HEVC"
+        }
+    }
+    var note: String {
+        switch self {
+        case .h264: return "Fastest, plays everywhere"
+        case .hevc: return "Smaller file, same quality"
+        }
+    }
+    var videotoolboxEncoder: String {
+        switch self {
+        case .h264: return "h264_videotoolbox"
+        case .hevc: return "hevc_videotoolbox"
         }
     }
 }
@@ -437,8 +473,9 @@ enum VideoQuality: String, CaseIterable, Identifiable {
     /// silently settled for the best remaining H.264 stream (1080p) and reported success rather
     /// than falling through to the real 4K/8K stream (confirmed via a real download log: itag 299,
     /// YouTube's 1080p60 avc1 stream, selected for a 4K request). No codec constraint is needed
-    /// here anymore -- reencodeToH264IfNeeded already transcodes a VP9/AV1 MP4 download to H.264
-    /// afterward (hardware-accelerated, VMAF-verified near-parity with the source), so the
+    /// here anymore -- reencodeIfNeeded already transcodes a VP9/AV1 MP4 download to a
+    /// QuickTime-native codec afterward (hardware-accelerated, VMAF-verified near-parity with the
+    /// source for H.264 -- see ReencodeCodec), so the
     /// selector can just fetch the real best stream and let that existing step handle
     /// MP4/QuickTime compatibility. MKV and WebM hold VP9/AV1/Opus natively and never reach this
     /// branch at all (see the `guard` below).
@@ -1041,6 +1078,7 @@ struct Download: Identifiable {
     var resolvedBaseName: String? = nil
     var thumbnailURL: String = ""  // carried from LinkPreview for history
     var browser: BrowserSource = .none
+    var reencodeCodec: ReencodeCodec = .h264
     var audioQuality: AudioQuality = .q320
     var isPlaylist: Bool = false
     // Full analyze snapshot — populated immediately when dispatched, used by Retry/Redownload
@@ -1997,6 +2035,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                               videoQuality: config.videoQuality)
             dl.thumbnailURL = thumbnailURL
             dl.browser = config.browser
+            dl.reencodeCodec = config.reencodeCodec
             dl.audioQuality = config.quality
             dl.isPlaylist = isPlaylist
             if let snap = snapshot {
@@ -2169,7 +2208,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     }
 
     /// Parses ffmpeg's own "Duration: HH:MM:SS.ms" banner line, the same probe pattern as
-    /// actualVideoHeight/actualVideoCodec. Used by reencodeToH264IfNeeded to size a bitrate
+    /// actualVideoHeight/actualVideoCodec. Used by reencodeIfNeeded to size a bitrate
     /// target off the source file instead of guessing a flat number.
     private func probeDurationSeconds(atPath path: String, ffmpegPath: String) -> Double? {
         let p = Process()
@@ -2197,33 +2236,35 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// marked Done could hand back a file the user's own Mac won't open. Reported live: a 1080p
     /// A24 teaser whose only YouTube source was VP9 came through unplayable in Preview, sitting
     /// right next to sibling trailers that had a real H.264 stream and played fine. Re-encodes
-    /// the video track to H.264 (audio is stream-copied, untouched) whenever this happens, so
-    /// "Done" always means "will actually open" for an MP4 -- and, since H.264+AAC is fully
-    /// native to .mov, doubles as the step that turns an AV1/VP9 source's .mp4 intermediate
-    /// (see sourceNeedsTranscodeForMov at the download-args site) into a genuine .mov:
-    /// `finalExtension` is normally the same as the input's own extension (a true in-place
+    /// the video track to `targetCodec` (audio is stream-copied, untouched) whenever this
+    /// happens, so "Done" always means "will actually open" for an MP4 -- and, since both
+    /// options are fully native to .mov, doubles as the step that turns an AV1/VP9 source's .mp4
+    /// intermediate (see sourceNeedsTranscodeForMov at the download-args site) into a genuine
+    /// .mov: `finalExtension` is normally the same as the input's own extension (a true in-place
     /// re-encode), but passing a different one produces the result under that extension instead,
     /// deleting the intermediate. Returns the resulting file's path if a re-encode happened
     /// (which may differ from `path` when finalExtension changed it), nil if none was
     /// needed/possible (the caller re-measures file size either way, from whichever path is current).
-    private func reencodeToH264IfNeeded(atPath path: String, ffmpegPath: String, finalExtension: String, downloadID: UUID) -> String? {
-        guard let codec = actualVideoCodec(atPath: path, ffmpegPath: ffmpegPath),
-              codec == "av1" || codec == "vp9" else { return nil }
-        appendLog("⚠ Source had no H.264 stream at this resolution (got \(codec.uppercased())) — re-encoding for Preview/QuickTime compatibility…")
+    private func reencodeIfNeeded(atPath path: String, ffmpegPath: String, finalExtension: String, targetCodec: ReencodeCodec, downloadID: UUID) -> String? {
+        guard let sourceCodec = actualVideoCodec(atPath: path, ffmpegPath: ffmpegPath),
+              sourceCodec == "av1" || sourceCodec == "vp9" else { return nil }
+        appendLog("⚠ Source had no \(targetCodec.label) stream at this resolution (got \(sourceCodec.uppercased())) — re-encoding for Preview/QuickTime compatibility…")
         let finalPath = (path as NSString).deletingPathExtension + ".\(finalExtension)"
-        let tempPath = (path as NSString).deletingPathExtension + ".h264reencode.\(finalExtension)"
+        let tempPath = (path as NSString).deletingPathExtension + ".reencode.\(finalExtension)"
 
-        // h264_videotoolbox (Apple Silicon's dedicated encode hardware, guaranteed present since
-        // Drop ships arm64-only) has no CRF/quality-value option -- -b:v is its only quality
-        // lever. Matching the source's own overall bitrate (file size / duration, which also
-        // covers the audio track being copied through -- a deliberate slight overshoot on the
-        // video target rather than an underestimate) keeps the re-encode at least as good as the
-        // source instead of guessing a flat number. VMAF-verified against libx264's default CRF
-        // on a real 4K source: 94.96 vs 95.77, an imperceptible gap, for a large speed win.
+        // Apple Silicon's dedicated encode hardware (guaranteed present since Drop ships
+        // arm64-only) has no CRF/quality-value option for either codec -- -b:v is the only
+        // quality lever. Matching the source's own overall bitrate (file size / duration, which
+        // also covers the audio track being copied through -- a deliberate slight overshoot on
+        // the video target rather than an underestimate) keeps the re-encode at least as good as
+        // the source instead of guessing a flat number. VMAF-verified against libx264's default
+        // CRF on a real 4K source: 94.96 vs 95.77 for H.264, an imperceptible gap, for a large
+        // speed win; HEVC is not a speed option (see ReencodeCodec's own doc comment) but gets
+        // the same bitrate treatment for a meaningfully smaller file at the same quality.
         // Probed once, up front, and reused for both the bitrate target above and the live
         // progress fraction below (previously probed a second time purely for the bitrate calc).
         let durationSeconds = probeDurationSeconds(atPath: path, ffmpegPath: ffmpegPath)
-        var videoArgs = ["-c:v", "h264_videotoolbox"]
+        var videoArgs = ["-c:v", targetCodec.videotoolboxEncoder]
         let sizeBytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? nil
         if let sizeBytes, sizeBytes > 0, let durationSeconds, durationSeconds > 0 {
             let sourceKbps = Int((Double(sizeBytes) * 8 / 1000) / durationSeconds)
@@ -2281,12 +2322,12 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         progressThread.start()
 
         do { try p.run() } catch {
-            appendLog("❌ Re-encode failed to start: \(error.localizedDescription) — keeping the original \(codec.uppercased()) file.")
+            appendLog("❌ Re-encode failed to start: \(error.localizedDescription) — keeping the original \(sourceCodec.uppercased()) file.")
             return nil
         }
         p.waitUntilExit()
         guard p.terminationStatus == 0, FileManager.default.fileExists(atPath: tempPath) else {
-            appendLog("❌ Re-encode to H.264 failed — keeping the original \(codec.uppercased()) file.")
+            appendLog("❌ Re-encode to \(targetCodec.label) failed — keeping the original \(sourceCodec.uppercased()) file.")
             try? FileManager.default.removeItem(atPath: tempPath)
             return nil
         }
@@ -2298,7 +2339,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             try? FileManager.default.removeItem(atPath: tempPath)
             return nil
         }
-        appendLog("✓ Re-encoded to H.264.")
+        appendLog("✓ Re-encoded to \(targetCodec.label).")
         return finalPath
     }
 
@@ -2341,6 +2382,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         let audioQuality = downloads[idx].audioQuality
         let sourceABR    = downloads[idx].snapshot.sourceABR
         let sourceVideoCodec = downloads[idx].snapshot.sourceVideoCodec
+        let reencodeCodec = downloads[idx].reencodeCodec
         let isPlaylist   = downloads[idx].isPlaylist
         // Real analyzed title when available (set from the Analyze
         // snapshot in add()); falls back to being literally equal to the
@@ -2482,9 +2524,9 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 ytArgs += ["-f", videoQuality.formatSelector(for: videoFormat)]
                 // ffmpeg's mov muxer can't remux AV1/VP9 (mp4's can) -- merge into .mp4
                 // in that case instead of the .mov this download will ultimately be, so
-                // the merge itself doesn't silently fail/fall back. reencodeToH264IfNeeded
+                // the merge itself doesn't silently fail/fall back. reencodeIfNeeded
                 // below produces the real .mov as its final output once it transcodes to
-                // H.264, which .mov natively supports.
+                // the selected codec, which .mov natively supports either way.
                 let sourceNeedsTranscodeForMov = videoFormat == .mov && (sourceVideoCodec == "AV1" || sourceVideoCodec == "VP9")
                 ytArgs += sourceNeedsTranscodeForMov ? ["--merge-output-format", "mp4"] : videoFormat.ytdlpArgs  // --merge-output-format
             }
@@ -2878,7 +2920,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 // recorded, not the pre-swap original's.
                 if mediaMode == .videoAndAudio, (videoFormat == .mp4 || videoFormat == .mov),
                    let path = confirmedPath, let ffmpeg = self.ffmpegPath,
-                   let reencodedPath = self.reencodeToH264IfNeeded(atPath: path, ffmpegPath: ffmpeg, finalExtension: videoFormat.rawValue, downloadID: downloadID) {
+                   let reencodedPath = self.reencodeIfNeeded(atPath: path, ffmpegPath: ffmpeg, finalExtension: videoFormat.rawValue, targetCodec: reencodeCodec, downloadID: downloadID) {
                     confirmedPath = reencodedPath
                     if reencodedPath != path {
                         self.appendLog("✓ Saved to: \(reencodedPath)")
@@ -7368,16 +7410,25 @@ struct ContentView: View {
                                                   options: downloadVideoQualityOptions(preview: preview),
                                                   openID: $openDropdownID)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    // Kept at the same half-width RESOLUTION had while the
-                                    // (since-removed) CODEC field sat here -- an empty
-                                    // placeholder, not a real field, so the row's proportions
-                                    // don't change back to full-width. Still reported to the
-                                    // facade (as a .spacer, drawing nothing) so its growth
-                                    // share isn't silently piled onto RESOLUTION instead --
-                                    // see CardFacadeMetrics.Kind.spacer.
-                                    Color.clear
-                                        .frame(maxWidth: .infinity)
-                                        .reportsFacadeFieldShape(id: "download.video.spacer.\(p.id)", kind: .spacer)
+                                    // This half of the row was an empty placeholder (a
+                                    // .spacer, drawing nothing) since a since-removed CODEC
+                                    // field used to sit here -- now a real field again, but
+                                    // only when it would actually do something: reencodeIfNeeded
+                                    // only ever runs for an AV1/VP9 source going to MP4/MOV
+                                    // (see its own doc comment), so for every other
+                                    // format/source combination this choice has no effect and
+                                    // the field reverts to the same spacer as before, keeping
+                                    // RESOLUTION at its established half-width either way.
+                                    if needsReencodeChoice(preview: p) {
+                                        DropdownField(id: "download.video.reencodeCodec.\(p.id)", caption: "RE-ENCODE",
+                                                      options: downloadReencodeCodecOptions(preview: preview),
+                                                      openID: $openDropdownID)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    } else {
+                                        Color.clear
+                                            .frame(maxWidth: .infinity)
+                                            .reportsFacadeFieldShape(id: "download.video.spacer.\(p.id)", kind: .spacer)
+                                    }
                                 }
                             }
                         } else if p.audioFormat != .m4a {
@@ -7461,6 +7512,27 @@ struct ContentView: View {
                 isSelected: p.videoQuality == q, tint: DesignTokens.Accent.primary
             ) {
                 preview.videoQuality.wrappedValue = q
+            }
+        }
+    }
+
+    /// True only when this card's own reencodeCodec choice can actually affect anything --
+    /// reencodeIfNeeded (DownloadManager) only ever runs for an AV1/VP9 source going to MP4/MOV
+    /// output (every other combination either doesn't need a re-encode at all, like a native MKV/
+    /// WebM download, or already has a native H.264 stream). Gates whether the RE-ENCODE field
+    /// shows at all, next to RESOLUTION -- see its own call site's doc comment.
+    private func needsReencodeChoice(preview p: LinkPreview) -> Bool {
+        (p.sourceVideoCodec == "AV1" || p.sourceVideoCodec == "VP9") && (p.videoFormat == .mp4 || p.videoFormat == .mov)
+    }
+
+    private func downloadReencodeCodecOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
+        let p = preview.wrappedValue
+        return ReencodeCodec.allCases.map { c in
+            SegmentOption(
+                id: c.rawValue, label: c.label, help: c.note,
+                isSelected: p.reencodeCodec == c, tint: DesignTokens.Accent.primary
+            ) {
+                preview.reencodeCodec.wrappedValue = c
             }
         }
     }
@@ -7783,6 +7855,9 @@ struct ContentView: View {
         var mediaMode: MediaMode
         var videoQuality: VideoQuality = VideoQuality.allCases.first!  // set to highest(for: sourceMaxHeight) after analyze
         var videoFormat: VideoFormat   = VideoFormat.allCases.first!
+        // Only has any effect when sourceVideoCodec needs reencodeIfNeeded to run at all (AV1/VP9
+        // source + MP4/MOV output) -- see the field's own selector, shown only in that case.
+        var reencodeCodec: ReencodeCodec = .h264
         var audioFormat: AudioFormat   = AudioFormat.allCases.first!   // M4A — native, no re-encode
         var audioQuality: AudioQuality = .q320  // quality for current format
         // Per-format quality memory
@@ -8655,7 +8730,7 @@ struct ContentView: View {
                 let preview = linkPreviews[i]
                 let itemConfig = config.detached(mediaMode: preview.mediaMode, videoQuality: preview.videoQuality,
                                                  videoFormat: preview.videoFormat, format: preview.audioFormat,
-                                                 quality: preview.audioQuality)
+                                                 quality: preview.audioQuality, reencodeCodec: preview.reencodeCodec)
                 // add() returns the UUID of the newly created Download
                 let snap = DownloadSnapshot(
                     title:            preview.title,

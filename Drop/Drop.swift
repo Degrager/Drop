@@ -7298,6 +7298,11 @@ struct ContentView: View {
             statusLabel: dl.flatMap { downloadOutcomeLabel($0) },
             primaryControl: controls?.primary,
             secondaryControl: controls?.secondary,
+            // Reserved for the whole life of a real download, not just once Reveal in Finder
+            // actually appears at .done -- otherwise the status box's width changes at the exact
+            // instant the button does, which is what let them overlap (reported live). See
+            // secondaryControlCapable's own doc comment.
+            secondaryControlCapable: dl != nil,
             onCancel: cancelDownload,
             showsSettings: dl == nil && !failedAnalyze
         ) {

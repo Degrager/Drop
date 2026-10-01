@@ -1206,7 +1206,7 @@ struct ConvertView: View {
     /// live, the last queued item "lingering" after Clear Queue or a single remove.
     /// This keeps the fade itself (glassBar, unchanged) but sequences the two: the
     /// bar fades out first, the layout only collapses into the space once that's
-    /// essentially done. Appearing is never delayed, only disappearing waits.
+    /// essentially done.
     @State private var bottomBarHasItems = false
     private static let bottomBarRemovalDelay: TimeInterval = 0.16
 
@@ -1823,14 +1823,13 @@ struct ConvertView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Grouped so ONE .transition() covers the row list and its trailing
             // divider together -- with no transition at all this fell back to
-            // SwiftUI's default animated opacity removal, which (per
-            // AnyTransition.glassPopInOnly's own doc comment) keeps the
+            // SwiftUI's default animated opacity removal, which kept the
             // outgoing rows in the layout, fading, for the whole spring
             // duration WHILE the bar is already collapsing to its emptied
             // height -- the rows' icons visibly "ghost" at the old position
             // as the bar shrinks out from under them. Reported live: Clear
-            // Queue. glassPopInOnly's removal is instant (.identity), so
-            // there's nothing left to ghost.
+            // Queue. The transition below (see its own comment) keeps removal
+            // instant (.identity), so there's nothing left to ghost.
             if isQueueExpanded && hasQueue {
                 Group {
                 // Plain ScrollView + LazyVStack (not List) -- same container
@@ -1904,7 +1903,19 @@ struct ConvertView: View {
                 .frame(minHeight: hasStaging ? nil : queueRowStride, maxHeight: queueDrawerHeight)
                 GlassDivider()
                 }
-                .transition(.glassPopInOnly)
+                // Plain opacity, not glassPopInOnly's scale+blur: that scale (0.95->1,
+                // anchored top) made the FIRST queued item look like it was growing the
+                // row-list container itself into existence around it, rather than
+                // landing inside an already-correctly-sized queue area -- visible only
+                // on the very first item (hasQueue false->true mounts this Group fresh);
+                // adding a 2nd+ item to an already-open queue was already clean, since
+                // the Group doesn't remount then. Reported live: "the queued items
+                // [should] appear from within the bounds of the queue." Removal stays
+                // .identity (unchanged, see the instant-disappear note above).
+                .transition(.asymmetric(
+                    insertion: .opacity.animation(.easeOut(duration: 0.2)),
+                    removal: .identity
+                ))
             }
             HStack(spacing: 8) {
                 if hasQueue {

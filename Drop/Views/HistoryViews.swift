@@ -153,6 +153,10 @@ struct HistoryView: View {
                     title: history.entries.isEmpty ? "No downloads or conversions yet" : "No results"
                 )
                 .followsSidebar()
+                // Own transition -- an if/else where both branches take the same
+                // layout slot (list vs. empty state) otherwise falls back to
+                // SwiftUI's default opacity fade for each side.
+                .transition(.opacity.animation(.easeOut(duration: 0.2)))
             } else {
                 ScrollView {
                     LazyVStack(spacing: 6, pinnedViews: [.sectionHeaders]) {
@@ -216,6 +220,8 @@ struct HistoryView: View {
                 // above follows the sidebar's edge instead).
                 .contentColumn()
                 .pinnedToSidebar()
+                // Own transition, same reasoning as the empty state's.
+                .transition(.opacity.animation(.easeOut(duration: 0.2)))
             }
         }
     }

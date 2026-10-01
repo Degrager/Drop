@@ -6408,6 +6408,11 @@ struct ContentView: View {
                                 )
                                 .padding(.vertical, 16)
                                 .followsSidebar()
+                                // Own transition, matching the non-tiny-height branch's
+                                // equivalent empty state (see its own .overlay +
+                                // .transition(.blurIn)) -- otherwise this falls back to
+                                // SwiftUI's default opacity fade.
+                                .transition(.blurIn)
                             }
                             mainPanelBottomBar.pinnedToSidebar()
                         }

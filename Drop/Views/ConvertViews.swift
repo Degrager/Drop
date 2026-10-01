@@ -1604,12 +1604,60 @@ struct ConvertView: View {
     /// forced the whole panel to rebuild.
     private struct AddToQueueFooter: View {
         @ObservedObject var job: ConvertJob
+        let config: Config
         let stagingCount: Int
         let onAddAll: () -> Void
         let onAdd: () -> Void
 
+        #if DEV_BUILD
+        @State private var showingFFmpegCommand = false
+
+        /// The exact command runConversion would launch for this job's CURRENT selection, built
+        /// from ConvertJob.ffmpegArgs (the same function the real conversion calls) so this can
+        /// never show something other than what would actually run. Shell-quotes any arg containing
+        /// a space so the printed line is directly pasteable into Terminal. Reported live: wanting a
+        /// way to see this per-selection instead of inferring it from behavior/timing.
+        private var ffmpegCommandPreview: String {
+            let output = URL(fileURLWithPath: config.convertOutputDir).appendingPathComponent(job.outputFilename)
+            let args = job.ffmpegArgs(outputPath: output.path)
+            return (["ffmpeg"] + args)
+                .map { $0.contains(" ") ? "\"\($0)\"" : $0 }
+                .joined(separator: " ")
+        }
+
+        private var ffmpegCommandPopover: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("ffmpeg command")
+                    .font(.appMono(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                ScrollView {
+                    Text(ffmpegCommandPreview)
+                        .font(.appMono(size: 11))
+                        .foregroundColor(.white)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(width: 480, height: 160)
+                HStack {
+                    Spacer()
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(ffmpegCommandPreview, forType: .string)
+                    }
+                }
+            }
+            .padding(12)
+        }
+        #endif
+
         var body: some View {
             HStack(spacing: 8) {
+                #if DEV_BUILD
+                HoverIconButton(icon: "terminal", size: 13, help: "Reveal ffmpeg command", expandable: true) {
+                    showingFFmpegCommand = true
+                }
+                .popover(isPresented: $showingFFmpegCommand, arrowEdge: .top) { ffmpegCommandPopover }
+                #endif
                 let changed = job.encodeSettingsChangedCount
                 if changed > 0 {
                     HStack(spacing: 6) {
@@ -1656,7 +1704,7 @@ struct ConvertView: View {
                 onRemove: { removeFromStaging(job) },
                 isQueueRow: false,
                 headerAccessory: stagingJobs.count > 1 ? AnyView(fileSwitcher) : nil,
-                footer: AnyView(AddToQueueFooter(job: job, stagingCount: stagingJobs.count, onAddAll: addAllToQueue, onAdd: { addToQueue(job) }))
+                footer: AnyView(AddToQueueFooter(job: job, config: config, stagingCount: stagingJobs.count, onAddAll: addAllToQueue, onAdd: { addToQueue(job) }))
             )
             // In a normal window the card simply hugs its content. The scroll
             // fallback is only for a short window (the window's own minimum
@@ -2027,8 +2075,14 @@ struct ConvertView: View {
                     .filter { !$0.isEmpty }
                 guard let last = lines.last else { return }
                 // Log every raw ffmpeg line (not just the friendly summary) so the
-                // exportable log has full detail for troubleshooting.
-                DispatchQueue.main.async { self.manager.appendLog(last) }
+                // exportable log has full detail for troubleshooting -- repeating
+                // frame=N progress ticks coalesce into one updating line in the
+                // Log tab itself (see appendLog's progressSourceID), but still
+                // reach the on-disk log in full via appendLog's DropLogger write.
+                let isProgressLine = last.contains("frame=")
+                DispatchQueue.main.async {
+                    self.manager.appendLog(last, progressSourceID: isProgressLine ? "convert-\(job.id)" : nil)
+                }
                 // ffmpeg's progress lines look like:
                 // "frame=  120 fps=30 q=-1.0 size=    512kB time=00:00:04.00 bitrate= 1024.0kbits/s speed=1.2x"
                 // Parse time= against the known source duration for a 0-1 fraction
@@ -2386,64 +2440,6 @@ struct ConvertPreviewCard: View {
     /// see DropdownPopoverPreferenceKey).
     @State private var openDropdownID: String? = nil
 
-    #if DEV_BUILD
-    @State private var showingFFmpegCommand = false
-
-    /// The exact command runConversion would launch for this job's CURRENT selection, built
-    /// from ConvertJob.ffmpegArgs (the same function the real conversion calls) so this can
-    /// never show something other than what would actually run. Shell-quotes any arg containing
-    /// a space so the printed line is directly pasteable into Terminal. Reported live: wanting a
-    /// way to see this per-selection instead of inferring it from behavior/timing.
-    private var ffmpegCommandPreview: String {
-        let output = URL(fileURLWithPath: config.convertOutputDir).appendingPathComponent(job.outputFilename)
-        let args = job.ffmpegArgs(outputPath: output.path)
-        return (["ffmpeg"] + args)
-            .map { $0.contains(" ") ? "\"\($0)\"" : $0 }
-            .joined(separator: " ")
-    }
-
-    private var ffmpegCommandPopover: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("ffmpeg command")
-                .font(.appMono(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-            ScrollView {
-                Text(ffmpegCommandPreview)
-                    .font(.appMono(size: 11))
-                    .foregroundColor(.white)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(width: 480, height: 160)
-            HStack {
-                Spacer()
-                Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(ffmpegCommandPreview, forType: .string)
-                }
-            }
-        }
-        .padding(12)
-    }
-
-    /// headerAccessory plus this dev-only button, side by side -- headerAccessory alone
-    /// (ConvertView's file switcher, when more than one file is staged) is unaffected; this
-    /// button is simply appended next to whatever's already there, or shown alone when nothing
-    /// else occupies the slot.
-    private var combinedHeaderAccessory: AnyView? {
-        let revealButton = AnyView(
-            HoverIconButton(icon: "terminal", size: 13, help: "Reveal ffmpeg command", expandable: true) {
-                showingFFmpegCommand = true
-            }
-            .popover(isPresented: $showingFFmpegCommand, arrowEdge: .top) { ffmpegCommandPopover }
-        )
-        guard let headerAccessory else { return revealButton }
-        return AnyView(HStack(spacing: 8) { headerAccessory; revealButton })
-    }
-    #else
-    private var combinedHeaderAccessory: AnyView? { headerAccessory }
-    #endif
-
     var body: some View {
         if isQueueRow {
             // Every status (including queued-but-not-started) renders as the
@@ -2676,7 +2672,7 @@ struct ConvertPreviewCard: View {
             title: job.inputURL.deletingPathExtension().lastPathComponent,
             secondaryTitle: job.inputURL.path,
             subtitle: subtitleView, // IN / OUT lines
-            headerAccessory: combinedHeaderAccessory,
+            headerAccessory: headerAccessory,
             footer: footer
         ) {
             // Two rows instead of one-row-per-option (the redesign approved

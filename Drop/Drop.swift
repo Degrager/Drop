@@ -2191,7 +2191,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     /// deleting the intermediate. Returns the resulting file's path if a re-encode happened
     /// (which may differ from `path` when finalExtension changed it), nil if none was
     /// needed/possible (the caller re-measures file size either way, from whichever path is current).
-    private func reencodeToH264IfNeeded(atPath path: String, ffmpegPath: String, finalExtension: String) -> String? {
+    private func reencodeToH264IfNeeded(atPath path: String, ffmpegPath: String, finalExtension: String, downloadID: UUID) -> String? {
         guard let codec = actualVideoCodec(atPath: path, ffmpegPath: ffmpegPath),
               codec == "av1" || codec == "vp9" else { return nil }
         appendLog("⚠ Source had no H.264 stream at this resolution (got \(codec.uppercased())) — re-encoding for Preview/QuickTime compatibility…")
@@ -2205,20 +2205,66 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         // video target rather than an underestimate) keeps the re-encode at least as good as the
         // source instead of guessing a flat number. VMAF-verified against libx264's default CRF
         // on a real 4K source: 94.96 vs 95.77, an imperceptible gap, for a large speed win.
+        // Probed once, up front, and reused for both the bitrate target above and the live
+        // progress fraction below (previously probed a second time purely for the bitrate calc).
+        let durationSeconds = probeDurationSeconds(atPath: path, ffmpegPath: ffmpegPath)
         var videoArgs = ["-c:v", "h264_videotoolbox"]
         let sizeBytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? nil
-        if let sizeBytes, sizeBytes > 0,
-           let durationSeconds = probeDurationSeconds(atPath: path, ffmpegPath: ffmpegPath), durationSeconds > 0 {
+        if let sizeBytes, sizeBytes > 0, let durationSeconds, durationSeconds > 0 {
             let sourceKbps = Int((Double(sizeBytes) * 8 / 1000) / durationSeconds)
             videoArgs += ["-b:v", "\(sourceKbps)k"]
         }
 
+        // The card's progress bar/activity text were driven entirely by yt-dlp's own stdout
+        // (see outputThread in startDownload) and never touched again once that process exited --
+        // so a re-encode here, which can run tens of seconds on a large 4K source, left the UI
+        // frozen on whatever the download left behind with zero feedback (reported live). -progress
+        // pipe:1 makes ffmpeg emit a stable, machine-readable `out_time_us=N` line per frame on its
+        // own stdout (kept separate from stderr, which still carries human error text on failure
+        // below) -- read live the same way outputThread reads yt-dlp's, and converted to a 0-1
+        // fraction against the duration already probed above.
+        DispatchQueue.main.async {
+            self.withDownload(downloadID) {
+                $0.activityText = "Re-encoding\u{2026}"
+                $0.etaText = ""
+                $0.progress = (durationSeconds != nil) ? 0.0 : nil
+            }
+        }
+
         let p = Process()
         p.executableURL = URL(fileURLWithPath: ffmpegPath)
-        p.arguments = ["-y", "-i", path] + videoArgs + ["-c:a", "copy", tempPath]
+        p.arguments = ["-y", "-i", path] + videoArgs + ["-c:a", "copy", "-progress", "pipe:1", "-nostats", "-loglevel", "error", tempPath]
+        let progressPipe = Pipe()
         let errPipe = Pipe()
-        p.standardOutput = Pipe()
+        p.standardOutput = progressPipe
         p.standardError = errPipe
+
+        let progressThread = Thread {
+            let handle = progressPipe.fileHandleForReading
+            var buffer = Data()
+            while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                buffer.append(chunk)
+                guard let text = String(data: buffer, encoding: .utf8) else { continue }
+                var lines = text.components(separatedBy: "\n")
+                if let last = lines.last, !last.isEmpty {
+                    buffer = last.data(using: .utf8) ?? Data()
+                    lines.removeLast()
+                } else {
+                    buffer = Data()
+                }
+                for line in lines {
+                    guard line.hasPrefix("out_time_us="),
+                          let total = durationSeconds, total > 0,
+                          let microseconds = Double(line.dropFirst("out_time_us=".count)) else { continue }
+                    let fraction = min(max((microseconds / 1_000_000) / total, 0), 1)
+                    DispatchQueue.main.async { self.withDownload(downloadID) { $0.progress = fraction } }
+                }
+            }
+        }
+        progressThread.start()
+
         do { try p.run() } catch {
             appendLog("❌ Re-encode failed to start: \(error.localizedDescription) — keeping the original \(codec.uppercased()) file.")
             return nil
@@ -2817,7 +2863,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 // recorded, not the pre-swap original's.
                 if mediaMode == .videoAndAudio, (videoFormat == .mp4 || videoFormat == .mov),
                    let path = confirmedPath, let ffmpeg = self.ffmpegPath,
-                   let reencodedPath = self.reencodeToH264IfNeeded(atPath: path, ffmpegPath: ffmpeg, finalExtension: videoFormat.rawValue) {
+                   let reencodedPath = self.reencodeToH264IfNeeded(atPath: path, ffmpegPath: ffmpeg, finalExtension: videoFormat.rawValue, downloadID: downloadID) {
                     confirmedPath = reencodedPath
                     if reencodedPath != path {
                         self.appendLog("✓ Saved to: \(reencodedPath)")

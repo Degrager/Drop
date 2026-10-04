@@ -102,17 +102,16 @@ class Config: ObservableObject {
         // launch — never restored from a previous session's selection.
         format           = AudioFormat.allCases.first!
         quality          = AudioQuality(rawValue:  UserDefaults.standard.string(forKey: qualityKey) ?? "") ?? .q320
-        // nil (not just an empty string) means the key was never written —
-        // i.e. this user has never had an explicit cookie source, including
-        // the .setCookieNone fix path, which always writes a real value
-        // ("none") rather than clearing the key. Only that true first-run
-        // case gets auto-detected; any persisted value, even "none", is
-        // respected as-is so a user/fix choice is never silently overridden.
-        if let storedBrowser = UserDefaults.standard.string(forKey: browserKey) {
-            browser = BrowserSource(rawValue: storedBrowser) ?? .none
-        } else {
-            browser = BrowserSource.autoDetected()
-        }
+        // REVERTED (2026-10-04): this used to call BrowserSource.autoDetected() on a true first
+        // run, to get an authenticated format list (notably 4K+) without any setup. Reported
+        // live from real users: it triggered a macOS Keychain prompt for the detected browser's
+        // "Safe Storage" key (yt-dlp's --cookies-from-browser has to decrypt Chrome/Edge/Brave's
+        // cookie DB to read it) the first time ANYONE clicked Download -- a bewildering, unasked-
+        // for permission prompt from a button that has nothing to do with another app's
+        // credentials, not a Dev-tooling issue. Defaulting to .none here is the fix: cookies are
+        // opt-in only now, via whatever explicit control reaches this setting (none currently
+        // does -- autoDetected() is kept on BrowserSource for if/when one is added deliberately).
+        browser = BrowserSource(rawValue: UserDefaults.standard.string(forKey: browserKey) ?? "") ?? .none
         // Defaults to Off (not H.264) the first time this has ever run -- the user's explicit
         // choice ("if never been selected before it should default to off"). Any later card's
         // selection overwrites this (see downloadReencodeCodecOptions), so this only matters on

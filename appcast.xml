@@ -3,6 +3,24 @@
     <channel>
         <title>Drop</title>
         <item>
+            <title>1.5.1</title>
+            <pubDate>Sun, 04 Oct 2026 11:17:26 -0700</pubDate>
+            <sparkle:version>1.5.1</sparkle:version>
+            <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[Minor Bug Fix
+
+## Fixes
+- Fixed a Keychain permission prompt showing when using Download tab.]]></description>
+            <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.5.1/Drop-1.5.1.dmg" length="5115492" type="application/octet-stream" sparkle:edSignature="jMpBoOP180nqjlDmXS2VUmr2z4r7Bx3sAA/ie3bnUBF0ko2mBRiXaY9gbdDUsq6ai29u/abqsWpWDFPQWadMBg=="/>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.5.1/Drop1.5.1-1.5.delta" sparkle:deltaFrom="1.5" length="160170" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="4zqaY1tVuVjsBSDeF8UtyCGGV6K8y6pdc9+elv7bWC1oeXbzSJnU30BoaaOe9D0SbN1TuOpiuQauw4XYkY5hAA=="/>
+                <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.5.1/Drop1.5.1-1.4.1.delta" sparkle:deltaFrom="1.4.1" length="389370" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="Mv+uJNDqlsojhFhtyRwUTe+KGLYvxJRKhT3KRRS0E6GOhUvJKPfvSjboMlqqxbtqZhX4/3gQr0uFSJcyipOrCA=="/>
+                <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.5.1/Drop1.5.1-1.4.delta" sparkle:deltaFrom="1.4" length="388654" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="a7q/qXJFcRxa2uocqBeWkc90n2E/cqANRaU5+rSwSInUFlATpc5ZdMIvz0ItVp//Jmj15IdrD0uc8LyuHG14Dw=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.5</title>
             <pubDate>Thu, 01 Oct 2026 01:19:08 -0700</pubDate>
             <sparkle:version>1.5</sparkle:version>
@@ -38,45 +56,6 @@
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description><![CDATA[Fixed Update Error across recent updates]]></description>
             <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.4.1/Drop-1.4.1.dmg" length="5104385" type="application/octet-stream" sparkle:edSignature="KoC2TOsVQCaYnkWtQwfiABCyraAIIXR1CYg72d12nC7dw7jj8M1i7EGxmrs8tG5NpTut1M2SED+wa2kmlAIIBA=="/>
-        </item>
-        <item>
-            <title>1.4</title>
-            <pubDate>Wed, 30 Sep 2026 15:10:08 -0700</pubDate>
-            <sparkle:version>1.4</sparkle:version>
-            <sparkle:shortVersionString>1.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[Card Layout Changes, Performance Improvements, and more bug fixes...
-
-## What's New
-- Added resolution and bitrate controls to Convert.
-- Added source details to Same as Source options in Convert.
-- Redesigned the Download and Convert card: fewer rows, dropdown fields for codec and bitrate.
-- Convert shows an estimated Auto bitrate when the source file doesn't report one.
-- Convert resolution options now show their common name, like 4K Ultra HD.
-- Re-added MOV as a Download format, for sources that can actually use it.
-
-## Changed
-- Edit is now hidden in the Convert queue while a conversion is running.
-- Every icon button now shows a label on hover, and fixed a few non-square ones.
-- Cleaned up the View menu: added Toggle Sidebar, removed unused tab-bar items.
-- The options button now shows a settings icon, and every button shows its name on hover.
-
-## Fixes
-- Improved window resizing performance
-- Fixed the metadata capsule briefly showing two states at once while a file finishes analyzing.
-- Fixed Convert dropdown menus that could run past the window edge and stuttered when closing.
-- Fixed SoundCloud links not showing an estimated download size.
-- A running download now shows one Cancel button instead of two overlapping ones.
-- Fixed automatic retries after a blocked download repeating the exact same failed request.
-- Check for Updates now switches to Checking instantly and can't be clicked mid-result.
-- Fixed long links truncating in the middle instead of at the end.
-- Fixed dropdown menus needing two clicks to act on anything else while open.
-- Fixed a transparent background on Convert's file switcher popup.
-- Fixed the metadata capsule briefly resizing oddly when switching audio format or tabs.
-- Fixed the audio bitrate shown for FLAC and M4A not matching the real setting.
-- Fixed the placeholder shown while resizing not matching a card's real layout.]]></description>
-            <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.4/Drop-1.4.dmg" length="5103993" type="application/octet-stream" sparkle:edSignature="YgasaEteZda7nGgBpujYXovz9MC0aPrOSq7HIVT4u6Xri6v8cQK+fx4utcWH6os2yrKxIGdPFWQ6lNokS8vPDg=="/>
         </item>
     </channel>
 </rss>

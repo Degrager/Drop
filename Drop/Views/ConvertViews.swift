@@ -2370,7 +2370,20 @@ extension View {
                         .frame(width: 0, height: 0)
                         entry.content()
                             .offset(x: x, y: y)
-                            .transition(.focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top))
+                            // ASYMMETRIC, not .focus(...) straight -- see dropdownPopoverOverlay's
+                            // identical fix and its own doc comment for the full account. Same
+                            // popover-host shape (floating content published via a preference,
+                            // drawn as a sibling so it escapes the card's own clip), so the same
+                            // risk applies: a plain symmetric transition's REMOVAL can get
+                            // interrupted by any other animation competing for the same frames
+                            // (quick reopen, a sibling layout change) and get stuck half-blurred
+                            // on screen -- reads as a ghost even with only one possible open item.
+                            // Removal here is `.identity` (instant) so there's nothing to interrupt.
+                            .transition(.asymmetric(
+                                insertion: .focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top)
+                                    .animation(.spring(response: 0.25)),
+                                removal: .identity
+                            ))
                     }
                     .zIndex(20)
                 }

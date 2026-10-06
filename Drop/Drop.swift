@@ -3376,6 +3376,26 @@ extension View {
 }
 
 extension AnyTransition {
+    /// WARNING before using this bare, symmetric, on a conditionally-mounted view (an
+    /// `if`/`if let` branch, or a view keyed with `.id()` to one of several possible
+    /// values): a SYMMETRIC transition's removal half can get INTERRUPTED before it
+    /// finishes by any other animation competing for the same frames (another branch
+    /// opening, a sibling layout change, the user re-triggering the same toggle
+    /// quickly) -- Core Animation leaves that half-blurred/half-scaled frame stuck on
+    /// screen until something else clears it, which reads as a persistent duplicate
+    /// "ghost," not a transient flicker. Hit three times in this codebase before the
+    /// pattern was recognized (HoverIconButton's hover caption, 64d698e; Convert's
+    /// queue rows on Clear Queue, 88c66b0; the dropdown field popover, 3db4f08) --
+    /// every time reported as "ghosting is still happening" even after a first,
+    /// more surgical fix that tried to suppress the TRIGGERING state change's
+    /// animation instead of the view's own removal. If the view can plausibly be
+    /// re-triggered (opened/closed/switched) faster than its own transition's
+    /// duration, wrap it `.asymmetric(insertion: focus(...).animation(...), removal:
+    /// .identity)` instead -- see glassPopInOnly/blurInOnly/pageSwap below for the
+    /// established convention. Safe to use bare where removal genuinely can't be
+    /// interrupted (a one-shot card leaving a list with nothing else competing for
+    /// its slot) -- glassPop/glassBar/chipFill/dominoPop/blurIn below do this
+    /// deliberately, for the motion, not by oversight.
     static func focus(blur: CGFloat, scale: CGFloat, opacity: Double = 1, anchor: UnitPoint = .center) -> AnyTransition {
         .modifier(
             active: FocusEffect(blur: blur, scale: scale, opacity: opacity, anchor: anchor),

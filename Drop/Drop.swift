@@ -3723,6 +3723,23 @@ enum GlassInteractiveShape {
     case roundedRect(CGFloat)
 }
 
+/// A capsule whose corners use .continuous (squircle-style smooth curvature) instead of plain
+/// Capsule()'s .circular corners. Capsule's two semicircular ends meet the straight sides at a
+/// genuine curvature DISCONTINUITY -- flat (zero curvature) snapping straight to the arc's full
+/// curvature right at the tangent point, with nothing in between -- and a stroke traced around
+/// that join visibly thins out exactly there (reported live: "where the flat edges meet the
+/// corner radius... gets thinner than the top or the actual curve"), the same reason Apple's own
+/// continuous/squircle corners exist for rounded rects. SwiftUI's RoundedRectangle already
+/// supports .continuous, just not at a radius that tracks the view's own eventual height (a
+/// capsule's radius is always exactly half of it) -- this computes that radius from the actual
+/// rect handed to path(in:) and delegates to RoundedRectangle for the real continuous-corner math
+/// rather than reimplementing it.
+struct ContinuousCapsule: Shape {
+    func path(in rect: CGRect) -> Path {
+        RoundedRectangle(cornerRadius: min(rect.width, rect.height) / 2, style: .continuous).path(in: rect)
+    }
+}
+
 /// Shared glass hover/press/glow wrapper. Wrap any tappable content in this
 /// to get the same liquid-glass interactive feel as every other control in
 /// the app -- translucent base, brightening tint on hover, animated glow
@@ -3875,7 +3892,7 @@ struct GlassInteractive<Content: View>: View {
     private var clipShape: AnyShape {
         switch shape {
         case .capsule:
-            return AnyShape(Capsule())
+            return AnyShape(ContinuousCapsule())
         case .circle:
             return AnyShape(Circle())
         case .roundedRect(let r):
@@ -4393,13 +4410,21 @@ final class PulsingRingView: NSView {
         ring.frame = bounds
         switch shape {
         case .capsule:
-            let radius = min(bounds.width, bounds.height) / 2
-            ring.path = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
+            // .continuous corners (via ContinuousCapsule, see its own doc comment), not
+            // CGPath's plain circular-corner roundedRect -- that's a genuine curvature
+            // discontinuity right where the straight side meets the arc, which traced a glow
+            // that visibly thinned out exactly there (reported live). Routed through SwiftUI's
+            // own continuous-corner math (.cgPath) rather than reimplemented by hand, so the
+            // glow traces the identical path GlassInteractive's stroke does -- same reasoning
+            // as GlassInteractive's own clipShape using ContinuousCapsule now.
+            ring.path = ContinuousCapsule().path(in: bounds).cgPath
         case .circle:
             ring.path = CGPath(ellipseIn: bounds, transform: nil)
         case .roundedRect(let radius):
+            // Same reasoning as .capsule above -- GlassInteractive's own stroke for this shape
+            // is already .continuous (see its clipShape), so the glow should trace the same path.
             let r = min(radius, min(bounds.width, bounds.height) / 2)
-            ring.path = CGPath(roundedRect: bounds, cornerWidth: r, cornerHeight: r, transform: nil)
+            ring.path = RoundedRectangle(cornerRadius: r, style: .continuous).path(in: bounds).cgPath
         }
         CATransaction.commit()
     }

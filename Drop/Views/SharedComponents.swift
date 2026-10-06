@@ -2586,36 +2586,30 @@ extension View {
                         .frame(width: 0, height: 0)
                         entry.content()
                             .offset(x: x, y: y)
-                            .transition(.focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top))
-                            // Without this, switching `openID` from one field to another
-                            // (e.g. tapping CODEC while RESOLUTION's menu is open) keeps this
-                            // the SAME view in SwiftUI's eyes -- the `if let` branch above
-                            // stays true the whole time, so nothing is removed or inserted,
-                            // and the withAnimation wrapping that openID change (see
-                            // DropdownField's toggle button) just animates the `.offset` above
-                            // from the old field's position to the new one -- the menu visibly
-                            // slides from one field to the other rather than closing and
-                            // reopening (reported live).
+                            // `.id()` outermost (wrapping offset too) so a field switch is a
+                            // real identity change -- the exiting copy keeps its OWN frozen
+                            // offset instead of a shared ancestor dragging it toward the new
+                            // field's position (see git history on this line for the fuller
+                            // account of that earlier bug).
                             //
-                            // Putting `.id(id)` BEFORE `.offset`/`.transition` (tried first,
-                            // also reported live) only wraps `entry.content()` itself in the
-                            // new identity -- `.offset`/`.transition` stay OUTSIDE that
-                            // wrapper, on a stable ancestor node that is never removed or
-                            // reinserted, only updated. SwiftUI then renders the OLD content's
-                            // exit animation (shrink/blur) as a child of that SAME ancestor,
-                            // which has already moved on to the NEW field's `x`/`y` -- so the
-                            // outgoing menu fades out while being dragged to the new field's
-                            // position: a "ghost" that still moves over, now a step behind the
-                            // real menu instead of perfectly in sync with it.
-                            //
-                            // `.id()` has to be the OUTERMOST modifier -- applied LAST, after
-                            // `.offset`/`.transition` -- so identity covers the position too.
-                            // Then a field change removes and reinserts this ENTIRE node,
-                            // offset included: the exiting copy keeps ITS OWN frozen offset
-                            // (the old field's position) for the whole fade-out, and the
-                            // incoming copy starts immediately at ITS OWN offset (the new
-                            // field's position) for the fade-in. No shared ancestor is left
-                            // to drag the exiting copy toward the new location.
+                            // ASYMMETRIC transition, not .focus(...) straight (which is
+                            // symmetric insertion==removal): this codebase has hit this exact
+                            // "ghosting is still happening after a first real-but-secondary
+                            // fix" shape twice before (HoverIconButton's caption, 64d698e; this
+                            // bar's own queue rows, 88c66b0) and both times the actual cause
+                            // was a SYMMETRIC transition's removal getting INTERRUPTED before
+                            // it finishes -- another field's own insertion starting up and
+                            // competing for the same frames leaves the old menu's removal
+                            // animation stuck half-blurred/half-scaled on screen, which reads
+                            // as a second, ghost menu. Matches glassPopInOnly/blurInOnly's
+                            // established convention: insertion keeps the nice blur+scale pop,
+                            // removal is `.identity` (instant) so there is nothing left for a
+                            // competing animation to interrupt.
+                            .transition(.asymmetric(
+                                insertion: .focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top)
+                                    .animation(.spring(response: 0.25)),
+                                removal: .identity
+                            ))
                             .id(id)
                     }
                 }
@@ -2722,27 +2716,17 @@ struct DropdownField: View {
         VStack(alignment: .leading, spacing: 4) {
             FieldCaption(icon: nil, text: caption).reportsFacadeFieldShape(id: "\(id)_caption", kind: .text)
             Button {
-                if let openID = openID, openID != id {
-                    // Switching directly from ANOTHER field's open menu to this one -- NOT
-                    // just "don't call withAnimation" (tried first, still reported live as
-                    // "ghosting is still there" on a genuine mouse click, confirmed via a
-                    // live screenshot: a faint CODEC menu ghosted behind the fresh
-                    // RESOLUTION one). Omitting withAnimation only skips REQUESTING an
-                    // animation -- it doesn't SUPPRESS one; the OPENING field's own tap just
-                    // ran `withAnimation(.spring(...))` a moment earlier, and that spring's
-                    // transaction can still be the ambient one in effect when THIS tap's
-                    // state change lands (confirmed: an AXPress-driven test click never
-                    // showed it, only a real mouse click did -- a real click's event
-                    // delivery/transaction timing differs enough to actually land inside
-                    // that still-live window). `Transaction.disablesAnimations` forces
-                    // suppression regardless of any ambient transaction already open,
-                    // instead of merely declining to add a new one.
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) { self.openID = id }
-                } else {
-                    withAnimation(.spring(response: 0.25)) { self.openID = isOpen ? nil : id }
-                }
+                // One uniform animated toggle for open, close, AND switching directly
+                // to a different field -- two earlier, more surgical attempts at the
+                // switch case specifically (an unanimated plain assignment, then a
+                // Transaction with disablesAnimations) both still reportedly ghosted
+                // on a real mouse click. Root cause turned out to live in
+                // dropdownPopoverOverlay's own `.transition()` being SYMMETRIC (see
+                // its own doc comment) -- an interrupted removal animation gets stuck
+                // mid-blur regardless of how carefully the state CHANGE itself is
+                // wrapped. Now that removal there is `.identity` (instant, nothing to
+                // interrupt), this call no longer needs special-casing the switch.
+                withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
             } label: {
                 // .firstTextBaseline, not the default .center: the label (12pt) and
                 // subtext (9pt) are different sizes, and centering by bounding box
@@ -2836,19 +2820,9 @@ struct DropdownBitrateField: View {
         VStack(alignment: .leading, spacing: 4) {
             FieldCaption(icon: nil, text: caption).reportsFacadeFieldShape(id: "\(id)_caption", kind: .text)
             Button {
-                if let openID = openID, openID != id {
-                    // See DropdownField's identical toggle for why this needs
-                    // Transaction.disablesAnimations rather than just omitting
-                    // withAnimation -- omitting it doesn't suppress an ambient
-                    // transaction already open from the OTHER field's own animated
-                    // opening (confirmed live: a real mouse click still ghosted without
-                    // this; an AXPress-driven test click never reproduced it at all).
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) { self.openID = id }
-                } else {
-                    withAnimation(.spring(response: 0.25)) { self.openID = isOpen ? nil : id }
-                }
+                // One uniform animated toggle -- see DropdownField's identical button
+                // for why the switch case no longer needs special-casing.
+                withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
             } label: {
                 // .firstTextBaseline -- see DropdownField's identical fix.
                 HStack(alignment: .firstTextBaseline, spacing: 6) {

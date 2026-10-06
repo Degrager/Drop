@@ -6598,9 +6598,6 @@ struct ContentView: View {
                 .padding(.top, isCompactHeight ? 22 : 30)
                 .padding(.bottom, isCompactHeight ? 10 : 14)
                 .followsSidebar()
-                // Moved here from urlCard itself (see its own doc comment) so the refresh
-                // button and the bar share the same established column width as a pair.
-                .contentColumn()
 
             if isTinyHeight {
                 // Too short for pinned chrome AND a card list: everything under

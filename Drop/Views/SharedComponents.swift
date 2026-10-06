@@ -2462,9 +2462,43 @@ private struct DropdownMenuChrome<Content: View>: View {
     @ViewBuilder let content: () -> Content
     var body: some View {
         content()
+            .modifier(PopoverGlassChrome())
+    }
+}
+
+/// Shared background chrome for a floating popover panel -- dropdown menus
+/// (DropdownMenuChrome above) and the file switcher popup (ConvertViews.swift)
+/// both use this. Backdrop blur + black tint, clipped to a rounded rect, a
+/// hairline rim, two stacked shadows for real depth against the black card
+/// behind it.
+///
+/// Starts with the live VisualEffectBlur swapped for a plain solid color and
+/// switches to the real material ~0.25s after mounting (matching the pop-in's
+/// own spring response) -- established fix, same mechanism as GlassCard's own
+/// `simplified` (a418821, queue-row drag ghosting): VisualEffectBlur with
+/// .behindWindow blending continuously RE-SAMPLES whatever is actually behind
+/// the window at its CURRENT on-screen position. A popover's position/scale
+/// are both changing every frame during its `.focus(blur:scale:anchor:)`
+/// pop-in -- fast enough to outrun that live resampling, which can blend in
+/// pixels from whatever sits nearby (reported live: a neighboring field's own
+/// caption/value, e.g. "BITRATE" and its subtext, bleeding into a RESOLUTION
+/// menu while it was still scaling/blurring in). A plain solid color has
+/// nothing to resample, so it can't produce that blend -- visually
+/// near-identical anyway, since blackTint is already heavy enough that the
+/// live blur's own contribution underneath it is small. Reset is automatic:
+/// this modifier's own @State re-initializes to true every time, since both
+/// call sites key their popover's content to a fresh `.id()` on open.
+struct PopoverGlassChrome: ViewModifier {
+    @State private var simplified = true
+    func body(content: Content) -> some View {
+        content
             .background(
                 ZStack {
-                    VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                    if simplified {
+                        Color(white: 0.1)
+                    } else {
+                        VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
+                    }
                     Color.black.opacity(DesignTokens.Glass.blackTint)
                 }
             )
@@ -2473,6 +2507,20 @@ private struct DropdownMenuChrome<Content: View>: View {
                 .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
             .shadow(color: .black.opacity(0.5), radius: 6, y: 3)
             .shadow(color: .black.opacity(0.6), radius: 24, y: 12)
+            .onAppear {
+                // Deliberately longer than the pop-in's own nominal spring response
+                // (0.25s) -- a spring's `response` is a time constant, not a hard
+                // settling deadline; with the default dampingFraction it visibly
+                // keeps interpolating scale/blur somewhat past that point. Flipping
+                // back to the live VisualEffectBlur before the geometry has
+                // genuinely stopped changing re-enables the exact resampling-lag
+                // bleed this exists to prevent (confirmed live: still bled through
+                // at 0.25s). Staying in the solid-color fallback a little longer
+                // than strictly necessary costs nothing visually (see this
+                // modifier's own doc comment on why); flipping back too early
+                // brings the bug back.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { simplified = false }
+            }
     }
 }
 
@@ -2555,20 +2603,6 @@ extension View {
                     let bottomMargin: CGFloat = 145
                     let opensUpward = cardGlobalTop + rect.maxY + 6 + entry.height > windowHeight - bottomMargin
                     let y = opensUpward ? rect.minY - 6 - entry.height : rect.maxY + 6
-                    // Where the TRIGGER's own center falls across the menu's width, as a
-                    // 0...1 fraction -- NOT always 0.5. The `x` clamp above keeps the menu
-                    // on screen by sliding its box left/right of the trigger whenever the
-                    // trigger sits near either edge of the row (a field near the right,
-                    // e.g. BITRATE, pulls the whole menu leftward to fit) -- so the menu's
-                    // own horizontal CENTER frequently isn't above its trigger at all. The
-                    // pop-in's scale anchor (below) needs to grow from wherever the
-                    // trigger actually is, or it visibly "slides in from the left/right"
-                    // instead of growing out of the field that was clicked (reported live:
-                    // "you can tell its sliding from the left or the right depending on
-                    // the pop up"). Clamped in case a trigger's center somehow falls
-                    // outside the menu's own bounds (shouldn't normally happen given the
-                    // field/menu width proportions here, but a 0.5 fallback is harmless).
-                    let anchorX = entry.width > 0 ? min(max((rect.midX - x) / entry.width, 0), 1) : 0.5
                     ZStack(alignment: .topLeading) {
                         // Was an invisible, card-sized SwiftUI tap-catcher (a view that
                         // CLAIMS hit-testing over the whole card so it can see an
@@ -2619,8 +2653,24 @@ extension View {
                             // established convention: insertion keeps the nice blur+scale pop,
                             // removal is `.identity` (instant) so there is nothing left for a
                             // competing animation to interrupt.
+                            //
+                            // Anchor is .top/.bottom (horizontally CENTERED on the menu's own
+                            // box), not the trigger's own x position -- tried anchoring to the
+                            // trigger instead (so the pop-in would visually originate exactly at
+                            // the field that was clicked), but that makes the scale's anchor
+                            // point land far from the menu's own center for any edge field
+                            // (CODEC on the far left, BITRATE on the far right) -- scaleEffect
+                            // holds the anchor point fixed and grows everything else AWAY from
+                            // it, so an off-center anchor makes one whole side of the box visibly
+                            // travel toward its final position while the other barely moves,
+                            // reading as diagonal sliding rather than growth (reported live,
+                            // watched slowed to 3s: "starts very blurry [near the field], then
+                            // moves diagonally down to the right... I want it to go straight
+                            // down"). A horizontally-centered anchor grows the box symmetrically
+                            // left/right with no net horizontal drift -- only straight-down growth
+                            // from the top edge (or straight up, for opensUpward).
                             .transition(.asymmetric(
-                                insertion: .focus(blur: 10, scale: 0.9, anchor: UnitPoint(x: anchorX, y: opensUpward ? 1 : 0))
+                                insertion: .focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top)
                                     .animation(.spring(response: 0.25)),
                                 removal: .identity
                             ))

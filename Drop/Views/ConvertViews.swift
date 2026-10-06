@@ -1965,8 +1965,12 @@ struct ConvertView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         panel.prompt = "Import"
-        if panel.runModal() == .OK {
-            panel.urls.forEach { addFile($0) }
+        // .begin (async), not .runModal() (blocking) -- see
+        // FolderActionButtons' identical fix (SharedComponents.swift) for why.
+        panel.begin { response in
+            if response == .OK {
+                panel.urls.forEach { addFile($0) }
+            }
         }
     }
 

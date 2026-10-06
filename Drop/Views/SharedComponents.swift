@@ -2723,21 +2723,23 @@ struct DropdownField: View {
             FieldCaption(icon: nil, text: caption).reportsFacadeFieldShape(id: "\(id)_caption", kind: .text)
             Button {
                 if let openID = openID, openID != id {
-                    // Switching directly from ANOTHER field's open menu to this one (not
-                    // opening from closed, not closing this same one) -- no withAnimation.
-                    // The real "ghost" wasn't ever about where the old menu ended up (that
-                    // part's fixed -- see dropdownPopoverOverlay's own .id() ordering
-                    // comment); it's that wrapping BOTH the old menu's close and the new
-                    // menu's open in ONE animated transaction keeps the old one on screen,
-                    // fading out, for the whole transition -- a second, dimmer copy of a
-                    // menu simply being visible at the same time as the real one reads as
-                    // "ghosting" even once it's no longer sliding (reported live: "ghosting
-                    // is still there" even after the sliding was fixed). A plain,
-                    // unanimated assignment has no transaction for `.transition()` to
-                    // animate against, so dropdownPopoverOverlay's .id()-keyed removal and
-                    // insertion both happen instantly in the same frame -- the old menu is
-                    // simply gone the instant the new one appears, nothing lingers to see.
-                    self.openID = id
+                    // Switching directly from ANOTHER field's open menu to this one -- NOT
+                    // just "don't call withAnimation" (tried first, still reported live as
+                    // "ghosting is still there" on a genuine mouse click, confirmed via a
+                    // live screenshot: a faint CODEC menu ghosted behind the fresh
+                    // RESOLUTION one). Omitting withAnimation only skips REQUESTING an
+                    // animation -- it doesn't SUPPRESS one; the OPENING field's own tap just
+                    // ran `withAnimation(.spring(...))` a moment earlier, and that spring's
+                    // transaction can still be the ambient one in effect when THIS tap's
+                    // state change lands (confirmed: an AXPress-driven test click never
+                    // showed it, only a real mouse click did -- a real click's event
+                    // delivery/transaction timing differs enough to actually land inside
+                    // that still-live window). `Transaction.disablesAnimations` forces
+                    // suppression regardless of any ambient transaction already open,
+                    // instead of merely declining to add a new one.
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { self.openID = id }
                 } else {
                     withAnimation(.spring(response: 0.25)) { self.openID = isOpen ? nil : id }
                 }
@@ -2835,21 +2837,15 @@ struct DropdownBitrateField: View {
             FieldCaption(icon: nil, text: caption).reportsFacadeFieldShape(id: "\(id)_caption", kind: .text)
             Button {
                 if let openID = openID, openID != id {
-                    // Switching directly from ANOTHER field's open menu to this one (not
-                    // opening from closed, not closing this same one) -- no withAnimation.
-                    // The real "ghost" wasn't ever about where the old menu ended up (that
-                    // part's fixed -- see dropdownPopoverOverlay's own .id() ordering
-                    // comment); it's that wrapping BOTH the old menu's close and the new
-                    // menu's open in ONE animated transaction keeps the old one on screen,
-                    // fading out, for the whole transition -- a second, dimmer copy of a
-                    // menu simply being visible at the same time as the real one reads as
-                    // "ghosting" even once it's no longer sliding (reported live: "ghosting
-                    // is still there" even after the sliding was fixed). A plain,
-                    // unanimated assignment has no transaction for `.transition()` to
-                    // animate against, so dropdownPopoverOverlay's .id()-keyed removal and
-                    // insertion both happen instantly in the same frame -- the old menu is
-                    // simply gone the instant the new one appears, nothing lingers to see.
-                    self.openID = id
+                    // See DropdownField's identical toggle for why this needs
+                    // Transaction.disablesAnimations rather than just omitting
+                    // withAnimation -- omitting it doesn't suppress an ambient
+                    // transaction already open from the OTHER field's own animated
+                    // opening (confirmed live: a real mouse click still ghosted without
+                    // this; an AXPress-driven test click never reproduced it at all).
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { self.openID = id }
                 } else {
                     withAnimation(.spring(response: 0.25)) { self.openID = isOpen ? nil : id }
                 }

@@ -2357,6 +2357,12 @@ extension View {
                     let bottomMargin: CGFloat = 90
                     let opensUpward = cardGlobalTop + rect.maxY + 6 + entry.height > windowHeight - bottomMargin
                     let y = opensUpward ? rect.minY - 6 - entry.height : rect.maxY + 6
+                    // See dropdownPopoverOverlay's identical line for the full account --
+                    // the trigger's own horizontal center, as a 0...1 fraction across the
+                    // menu's width, so the pop-in scales from wherever the trigger actually
+                    // is instead of the menu's own geometric center (which the `x` clamp
+                    // above can shift well away from the trigger near either edge).
+                    let anchorX = entry.width > 0 ? min(max((rect.midX - x) / entry.width, 0), 1) : 0.5
                     ZStack(alignment: .topLeading) {
                         OutsideClickMonitor(
                             // Unioned with the trigger button's OWN rect (`rect`) -- see
@@ -2380,7 +2386,7 @@ extension View {
                             // on screen -- reads as a ghost even with only one possible open item.
                             // Removal here is `.identity` (instant) so there's nothing to interrupt.
                             .transition(.asymmetric(
-                                insertion: .focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top)
+                                insertion: .focus(blur: 10, scale: 0.9, anchor: UnitPoint(x: anchorX, y: opensUpward ? 1 : 0))
                                     .animation(.spring(response: 0.25)),
                                 removal: .identity
                             ))

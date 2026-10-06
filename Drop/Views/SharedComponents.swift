@@ -2722,7 +2722,25 @@ struct DropdownField: View {
         VStack(alignment: .leading, spacing: 4) {
             FieldCaption(icon: nil, text: caption).reportsFacadeFieldShape(id: "\(id)_caption", kind: .text)
             Button {
-                withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
+                if let openID = openID, openID != id {
+                    // Switching directly from ANOTHER field's open menu to this one (not
+                    // opening from closed, not closing this same one) -- no withAnimation.
+                    // The real "ghost" wasn't ever about where the old menu ended up (that
+                    // part's fixed -- see dropdownPopoverOverlay's own .id() ordering
+                    // comment); it's that wrapping BOTH the old menu's close and the new
+                    // menu's open in ONE animated transaction keeps the old one on screen,
+                    // fading out, for the whole transition -- a second, dimmer copy of a
+                    // menu simply being visible at the same time as the real one reads as
+                    // "ghosting" even once it's no longer sliding (reported live: "ghosting
+                    // is still there" even after the sliding was fixed). A plain,
+                    // unanimated assignment has no transaction for `.transition()` to
+                    // animate against, so dropdownPopoverOverlay's .id()-keyed removal and
+                    // insertion both happen instantly in the same frame -- the old menu is
+                    // simply gone the instant the new one appears, nothing lingers to see.
+                    self.openID = id
+                } else {
+                    withAnimation(.spring(response: 0.25)) { self.openID = isOpen ? nil : id }
+                }
             } label: {
                 // .firstTextBaseline, not the default .center: the label (12pt) and
                 // subtext (9pt) are different sizes, and centering by bounding box
@@ -2816,7 +2834,25 @@ struct DropdownBitrateField: View {
         VStack(alignment: .leading, spacing: 4) {
             FieldCaption(icon: nil, text: caption).reportsFacadeFieldShape(id: "\(id)_caption", kind: .text)
             Button {
-                withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
+                if let openID = openID, openID != id {
+                    // Switching directly from ANOTHER field's open menu to this one (not
+                    // opening from closed, not closing this same one) -- no withAnimation.
+                    // The real "ghost" wasn't ever about where the old menu ended up (that
+                    // part's fixed -- see dropdownPopoverOverlay's own .id() ordering
+                    // comment); it's that wrapping BOTH the old menu's close and the new
+                    // menu's open in ONE animated transaction keeps the old one on screen,
+                    // fading out, for the whole transition -- a second, dimmer copy of a
+                    // menu simply being visible at the same time as the real one reads as
+                    // "ghosting" even once it's no longer sliding (reported live: "ghosting
+                    // is still there" even after the sliding was fixed). A plain,
+                    // unanimated assignment has no transaction for `.transition()` to
+                    // animate against, so dropdownPopoverOverlay's .id()-keyed removal and
+                    // insertion both happen instantly in the same frame -- the old menu is
+                    // simply gone the instant the new one appears, nothing lingers to see.
+                    self.openID = id
+                } else {
+                    withAnimation(.spring(response: 0.25)) { self.openID = isOpen ? nil : id }
+                }
             } label: {
                 // .firstTextBaseline -- see DropdownField's identical fix.
                 HStack(alignment: .firstTextBaseline, spacing: 6) {

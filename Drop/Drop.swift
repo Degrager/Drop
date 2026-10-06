@@ -1172,11 +1172,17 @@ struct Download: Identifiable {
             }
             result.append(.audio([format.rawValue.uppercased(), snapshot.sourceChannelLabel, bitrate]) ?? .audioPlaceholder)
         case .videoAndAudio:
-            // Video is never re-encoded when merging video+audio, so the
-            // output codec matches the source's own selected stream. The
-            // audio track is stream-copied too, so it reuses the detected
-            // source audio info.
-            result.append(.video([videoFormat.rawValue.uppercased(), snapshot.sourceVideoCodec,
+            // Video is usually stream-copied when merging, so the output codec matches the
+            // source's own selected stream -- EXCEPT the one case reencodeIfNeeded actually runs
+            // (an AV1/VP9 source going to MP4/MOV, reencodeCodec != .off), where the real output
+            // codec is reencodeCodec's choice, not the source's. This chip used to always show
+            // the source codec regardless, which went stale the moment the re-encode selector
+            // could change what's actually produced (reported live). The audio track is always
+            // stream-copied either way, so it still reuses the detected source audio info.
+            let needsReencode = (snapshot.sourceVideoCodec == "AV1" || snapshot.sourceVideoCodec == "VP9")
+                && (videoFormat == .mp4 || videoFormat == .mov) && reencodeCodec != .off
+            let displayedVideoCodec = needsReencode ? reencodeCodec.label : snapshot.sourceVideoCodec
+            result.append(.video([videoFormat.rawValue.uppercased(), displayedVideoCodec,
                                   outputResolutionLabel(videoQuality, width: snapshot.sourceWidthPx, height: snapshot.sourceHeightPx, tierHeight: snapshot.sourceMaxHeight)
                                     ?? effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: snapshot.sourceMaxHeight)]) ?? .videoPlaceholder)
             result.append(.audio([snapshot.sourceAudioCodec, snapshot.sourceChannelLabel, bitrateLabel(kbps: snapshot.sourceABR)]) ?? .audioPlaceholder)
@@ -7317,7 +7323,10 @@ struct ContentView: View {
             }
             if analyzing { return .analyzing }
             // Only what will be produced: the input side is Convert's business.
-            return .output(p.outputChips)
+            // Same resolution downloadReencodeCodecOptions uses: this card's own choice, or the
+            // remembered default, so the capsule's VIDEO chip matches what the RE-ENCODE
+            // dropdown actually shows as selected.
+            return .output(p.outputChips(effectiveReencodeCodec: p.reencodeCodec ?? config.reencodeCodec))
         }()
         // The pasted link stands in for the title until a real one arrives.
         let titleKnown = !analyzing || (!p.title.isEmpty && p.title != p.url)
@@ -7967,7 +7976,12 @@ struct ContentView: View {
         // row that changes when the Video+Audio / Audio Only chip is
         // toggled -- mirrors Download.outputChips exactly so the pre-
         // download card and the active/completed card read identically.
-        var outputChips: [ChipData] {
+        // `effectiveReencodeCodec` is this card's own choice (reencodeCodec,
+        // when set) or the remembered default (config.reencodeCodec) --
+        // LinkPreview itself has no visibility into Config, so the caller
+        // resolves it the same way downloadReencodeCodecOptions does and
+        // passes it in (nil is fine when it doesn't matter, e.g. audioOnly).
+        func outputChips(effectiveReencodeCodec: ReencodeCodec?) -> [ChipData] {
             var result: [ChipData] = []
             if let length = ChipData.lengthAndSize(length: lengthChipValue(seconds: durationSeconds, raw: duration), size: estimatedSizeString(), reservesEstimateMark: true) {
                 result.append(length)
@@ -7990,9 +8004,15 @@ struct ContentView: View {
                 }
                 result.append(.audio([audioFormat.rawValue.uppercased(), sourceChannelLabel, bitrate]) ?? .audioPlaceholder)
             case .videoAndAudio:
-                // Video and audio are both stream-copied when merging, so the
-                // output codec/channels/bitrate match the source's own.
-                result.append(.video([videoFormat.rawValue.uppercased(), sourceVideoCodec,
+                // Audio is always stream-copied, so it still reuses the source's own info. Video
+                // usually is too -- EXCEPT the one case reencodeIfNeeded actually runs (an AV1/
+                // VP9 source going to MP4/MOV, and the resolved choice isn't .off), where the
+                // real output codec is that choice, not the source's. This chip used to always
+                // show the source codec regardless of the re-encode selector (reported live).
+                let needsReencode = (sourceVideoCodec == "AV1" || sourceVideoCodec == "VP9")
+                    && (videoFormat == .mp4 || videoFormat == .mov) && effectiveReencodeCodec != .off
+                let displayedVideoCodec = needsReencode ? effectiveReencodeCodec?.label : sourceVideoCodec
+                result.append(.video([videoFormat.rawValue.uppercased(), displayedVideoCodec,
                                       outputResolutionLabel(videoQuality, width: sourceWidthPx, height: sourceHeightPx, tierHeight: sourceMaxHeight)
                                         ?? effectiveVideoResolutionLabel(videoQuality, sourceMaxHeight: sourceMaxHeight)]) ?? .videoPlaceholder)
                 result.append(.audio([sourceAudioCodec, sourceChannelLabel, bitrateLabel(kbps: sourceABR)]) ?? .audioPlaceholder)

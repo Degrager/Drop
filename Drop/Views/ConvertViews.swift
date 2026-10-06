@@ -1548,20 +1548,7 @@ struct ConvertView: View {
         // still shouldn't be free to blow out to an arbitrary width for a
         // very long name.
         .frame(maxWidth: switcherCardWidth > 0 ? switcherCardWidth * 0.65 : nil, alignment: .trailing)
-        .background(
-            ZStack {
-                VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                Color.black.opacity(DesignTokens.Glass.blackTint)
-            }
-        )
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.large, style: .continuous)
-            .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
-        // Two stacked shadows for real depth (a tight dark contact shadow
-        // plus a soft wide one) -- a single subtle shadow read as
-        // basically invisible against the app's already-black background.
-        .shadow(color: .black.opacity(0.5), radius: 6, y: 3)
-        .shadow(color: .black.opacity(0.6), radius: 24, y: 12)
+        .modifier(PopoverGlassChrome())
     }
 
     /// "2 of 3" -- where the file in Analyze sits among every staged file.
@@ -2357,12 +2344,6 @@ extension View {
                     let bottomMargin: CGFloat = 90
                     let opensUpward = cardGlobalTop + rect.maxY + 6 + entry.height > windowHeight - bottomMargin
                     let y = opensUpward ? rect.minY - 6 - entry.height : rect.maxY + 6
-                    // See dropdownPopoverOverlay's identical line for the full account --
-                    // the trigger's own horizontal center, as a 0...1 fraction across the
-                    // menu's width, so the pop-in scales from wherever the trigger actually
-                    // is instead of the menu's own geometric center (which the `x` clamp
-                    // above can shift well away from the trigger near either edge).
-                    let anchorX = entry.width > 0 ? min(max((rect.midX - x) / entry.width, 0), 1) : 0.5
                     ZStack(alignment: .topLeading) {
                         OutsideClickMonitor(
                             // Unioned with the trigger button's OWN rect (`rect`) -- see
@@ -2385,8 +2366,14 @@ extension View {
                             // (quick reopen, a sibling layout change) and get stuck half-blurred
                             // on screen -- reads as a ghost even with only one possible open item.
                             // Removal here is `.identity` (instant) so there's nothing to interrupt.
+                            // Anchor is .top/.bottom (horizontally centered on the menu's own
+                            // box), not the trigger's own x position -- see
+                            // dropdownPopoverOverlay's identical comment for why: anchoring to
+                            // the trigger instead made the scale-in visibly travel diagonally
+                            // for any edge-positioned trigger (reported live, watched slowed to
+                            // 3s: wanted straight-down growth, not diagonal).
                             .transition(.asymmetric(
-                                insertion: .focus(blur: 10, scale: 0.9, anchor: UnitPoint(x: anchorX, y: opensUpward ? 1 : 0))
+                                insertion: .focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top)
                                     .animation(.spring(response: 0.25)),
                                 removal: .identity
                             ))

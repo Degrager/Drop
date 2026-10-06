@@ -2585,6 +2585,20 @@ extension View {
                         }
                         .frame(width: 0, height: 0)
                         entry.content()
+                            // Without this, switching `openID` from one field to another
+                            // (e.g. tapping CODEC while RESOLUTION's menu is open) keeps this
+                            // the SAME view in SwiftUI's eyes -- the `if let` branch above
+                            // stays true the whole time, so nothing is removed or inserted,
+                            // and the withAnimation wrapping that openID change (see
+                            // DropdownField's toggle button) just animates the `.offset` below
+                            // from the old field's position to the new one instead -- the
+                            // menu visibly slides/morphs from one field to the other rather
+                            // than closing and reopening (reported live). Keying identity to
+                            // `id` makes a field change a real identity change, so SwiftUI
+                            // removes the old menu and inserts the new one via `.transition`
+                            // below -- each one appearing/disappearing in place at its own
+                            // field, never sliding across to another.
+                            .id(id)
                             .offset(x: x, y: y)
                             .transition(.focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top))
                     }

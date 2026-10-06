@@ -6943,6 +6943,19 @@ struct ContentView: View {
 
     // MARK: - URL Card
 
+    // Same reasoning as pasteAnalyzeButton's own extraction just below: a small property of
+    // its own instead of being written inline inside urlCard's already-large view-builder tree.
+    // Overlaid on the trailing edge of urlCard's field ZStack (see that call site) -- in the
+    // same spot/style the old typed-field's clear button used to occupy, back when this bar
+    // accepted typing (see 16f354a). Dimmer than the accent-filled Analyze pill so it doesn't
+    // compete with it, matching the leading link glyph's own secondary weight.
+    private var clipboardRefreshButton: some View {
+        HoverIconButton(icon: "arrow.clockwise", size: 11, boxSize: 24, color: .white.opacity(DesignTokens.Text.secondary), help: "Refresh clipboard", shape: .circle) {
+            refreshClipboardPreview()
+        }
+        .padding(.trailing, 6)
+    }
+
     // Extracted out of urlCard's body -- inlining this GlassButton call
     // (with its tuple literal, closure, and multiple chained modifiers)
     // directly inside urlCard's giant view-builder tree made the whole
@@ -7155,13 +7168,18 @@ struct ContentView: View {
                     .frame(height: fieldHeight, alignment: .center)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 10)
-                    .padding(.trailing, 14)
+                    // Leaves room for clipboardRefreshButton (below), overlaid on this same
+                    // ZStack's trailing edge, so long clipboard text truncates before running
+                    // underneath it -- same reasoning the old typed-field clear button used this
+                    // inset for.
+                    .padding(.trailing, 40)
                     .onDrop(of: ["public.url", "public.plain-text"], isTargeted: $isDragging) { providers in
                         self.handleDrop(providers: providers)
                         return true
                     }
             }
             .frame(maxWidth: .infinity)
+            .overlay(alignment: .trailing) { clipboardRefreshButton }
 
             // Paste & Analyze / Retry -- inset accent pill living INSIDE
             // the outer field capsule (not a second independent capsule).

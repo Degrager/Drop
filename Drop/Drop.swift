@@ -6584,8 +6584,16 @@ struct ContentView: View {
         VStack(spacing: 12) {
             // Input area — the paste field and Paste & Analyze button
             // share one seamless pill bar (built inside urlCard itself), so
-            // no outer card wrapper is needed here.
-            urlCard
+            // no outer card wrapper is needed here. The refresh button beside
+            // it is its own separate capsule (every icon button in this app
+            // keeps one -- it never gets folded into an unrelated pill), sized
+            // to urlCard's own 52pt bar height for visual parity.
+            HStack(spacing: 10) {
+                HoverIconButton(icon: "arrow.clockwise", size: 15, boxSize: 52, help: "Refresh clipboard", expandable: true) {
+                    refreshClipboardPreview()
+                }
+                urlCard
+            }
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
                 // Clearly more breathing room above the drop zone (top of
                 // window) and below it (before the toolbar/list header
@@ -6598,6 +6606,9 @@ struct ContentView: View {
                 .padding(.top, isCompactHeight ? 22 : 30)
                 .padding(.bottom, isCompactHeight ? 10 : 14)
                 .followsSidebar()
+                // Moved here from urlCard itself (see its own doc comment) so the refresh
+                // button and the bar share the same established column width as a pair.
+                .contentColumn()
 
             if isTinyHeight {
                 // Too short for pinned chrome AND a card list: everything under
@@ -7243,10 +7254,12 @@ struct ContentView: View {
                 WaitingPulseGlow()
             }
         }
-        // Same content column as everything beneath it (it used to be a
-        // separate fixed 864pt cap, which left it narrower than the cards on
-        // big windows and wider than them on small ones).
-        .contentColumn()
+        // Expands to fill whatever's left of the content column once the refresh button
+        // beside it (see its call site in mainPanel) takes its own fixed width -- contentColumn()
+        // itself now lives on that wrapping HStack instead of here, so the pair of them together
+        // match the column every other row uses (it used to be a separate fixed 864pt cap, which
+        // left it narrower than the cards on big windows and wider than them on small ones).
+        .frame(maxWidth: .infinity)
         .onAppear { refreshClipboardPreview() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshClipboardPreview()

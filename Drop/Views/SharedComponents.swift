@@ -2555,6 +2555,20 @@ extension View {
                     let bottomMargin: CGFloat = 145
                     let opensUpward = cardGlobalTop + rect.maxY + 6 + entry.height > windowHeight - bottomMargin
                     let y = opensUpward ? rect.minY - 6 - entry.height : rect.maxY + 6
+                    // Where the TRIGGER's own center falls across the menu's width, as a
+                    // 0...1 fraction -- NOT always 0.5. The `x` clamp above keeps the menu
+                    // on screen by sliding its box left/right of the trigger whenever the
+                    // trigger sits near either edge of the row (a field near the right,
+                    // e.g. BITRATE, pulls the whole menu leftward to fit) -- so the menu's
+                    // own horizontal CENTER frequently isn't above its trigger at all. The
+                    // pop-in's scale anchor (below) needs to grow from wherever the
+                    // trigger actually is, or it visibly "slides in from the left/right"
+                    // instead of growing out of the field that was clicked (reported live:
+                    // "you can tell its sliding from the left or the right depending on
+                    // the pop up"). Clamped in case a trigger's center somehow falls
+                    // outside the menu's own bounds (shouldn't normally happen given the
+                    // field/menu width proportions here, but a 0.5 fallback is harmless).
+                    let anchorX = entry.width > 0 ? min(max((rect.midX - x) / entry.width, 0), 1) : 0.5
                     ZStack(alignment: .topLeading) {
                         // Was an invisible, card-sized SwiftUI tap-catcher (a view that
                         // CLAIMS hit-testing over the whole card so it can see an
@@ -2606,7 +2620,7 @@ extension View {
                             // removal is `.identity` (instant) so there is nothing left for a
                             // competing animation to interrupt.
                             .transition(.asymmetric(
-                                insertion: .focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top)
+                                insertion: .focus(blur: 10, scale: 0.9, anchor: UnitPoint(x: anchorX, y: opensUpward ? 1 : 0))
                                     .animation(.spring(response: 0.25)),
                                 removal: .identity
                             ))

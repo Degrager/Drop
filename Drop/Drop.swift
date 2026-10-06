@@ -6584,16 +6584,8 @@ struct ContentView: View {
         VStack(spacing: 12) {
             // Input area — the paste field and Paste & Analyze button
             // share one seamless pill bar (built inside urlCard itself), so
-            // no outer card wrapper is needed here. The refresh button beside
-            // it is its own separate capsule (every icon button in this app
-            // keeps one -- it never gets folded into an unrelated pill), sized
-            // to urlCard's own 52pt bar height for visual parity.
-            HStack(spacing: 10) {
-                HoverIconButton(icon: "arrow.clockwise", size: 15, boxSize: 52, help: "Refresh clipboard", expandable: true) {
-                    refreshClipboardPreview()
-                }
-                urlCard
-            }
+            // no outer card wrapper is needed here.
+            urlCard
                 .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
                 // Clearly more breathing room above the drop zone (top of
                 // window) and below it (before the toolbar/list header
@@ -7166,13 +7158,26 @@ struct ContentView: View {
                     .frame(height: fieldHeight, alignment: .center)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 10)
-                    .padding(.trailing, 14)
+                    // Leaves room for the refresh button below so long clipboard text
+                    // truncates before running underneath it, same reasoning the old
+                    // typed-field clear button used this same trailing inset for.
+                    .padding(.trailing, 40)
                     .onDrop(of: ["public.url", "public.plain-text"], isTargeted: $isDragging) { providers in
                         self.handleDrop(providers: providers)
                         return true
                     }
             }
             .frame(maxWidth: .infinity)
+
+            // Small circular refresh button, inside the field itself and to the left of the
+            // Analyze Link pill -- in the same spot/style the old typed-field's clear button
+            // used to occupy, back when this bar accepted typing (see 16f354a). Dimmer than
+            // the accent-filled Analyze pill so it doesn't compete with it, matching the
+            // leading link glyph's own secondary weight.
+            HoverIconButton(icon: "arrow.clockwise", size: 11, boxSize: 24, color: .white.opacity(DesignTokens.Text.secondary), help: "Refresh clipboard", shape: .circle) {
+                refreshClipboardPreview()
+            }
+            .padding(.trailing, 6)
 
             // Paste & Analyze / Retry -- inset accent pill living INSIDE
             // the outer field capsule (not a second independent capsule).
@@ -7254,12 +7259,10 @@ struct ContentView: View {
                 WaitingPulseGlow()
             }
         }
-        // Expands to fill whatever's left of the content column once the refresh button
-        // beside it (see its call site in mainPanel) takes its own fixed width -- contentColumn()
-        // itself now lives on that wrapping HStack instead of here, so the pair of them together
-        // match the column every other row uses (it used to be a separate fixed 864pt cap, which
-        // left it narrower than the cards on big windows and wider than them on small ones).
-        .frame(maxWidth: .infinity)
+        // Same content column as everything beneath it (it used to be a
+        // separate fixed 864pt cap, which left it narrower than the cards on
+        // big windows and wider than them on small ones).
+        .contentColumn()
         .onAppear { refreshClipboardPreview() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshClipboardPreview()

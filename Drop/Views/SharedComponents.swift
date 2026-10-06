@@ -2585,22 +2585,38 @@ extension View {
                         }
                         .frame(width: 0, height: 0)
                         entry.content()
+                            .offset(x: x, y: y)
+                            .transition(.focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top))
                             // Without this, switching `openID` from one field to another
                             // (e.g. tapping CODEC while RESOLUTION's menu is open) keeps this
                             // the SAME view in SwiftUI's eyes -- the `if let` branch above
                             // stays true the whole time, so nothing is removed or inserted,
                             // and the withAnimation wrapping that openID change (see
-                            // DropdownField's toggle button) just animates the `.offset` below
-                            // from the old field's position to the new one instead -- the
-                            // menu visibly slides/morphs from one field to the other rather
-                            // than closing and reopening (reported live). Keying identity to
-                            // `id` makes a field change a real identity change, so SwiftUI
-                            // removes the old menu and inserts the new one via `.transition`
-                            // below -- each one appearing/disappearing in place at its own
-                            // field, never sliding across to another.
+                            // DropdownField's toggle button) just animates the `.offset` above
+                            // from the old field's position to the new one -- the menu visibly
+                            // slides from one field to the other rather than closing and
+                            // reopening (reported live).
+                            //
+                            // Putting `.id(id)` BEFORE `.offset`/`.transition` (tried first,
+                            // also reported live) only wraps `entry.content()` itself in the
+                            // new identity -- `.offset`/`.transition` stay OUTSIDE that
+                            // wrapper, on a stable ancestor node that is never removed or
+                            // reinserted, only updated. SwiftUI then renders the OLD content's
+                            // exit animation (shrink/blur) as a child of that SAME ancestor,
+                            // which has already moved on to the NEW field's `x`/`y` -- so the
+                            // outgoing menu fades out while being dragged to the new field's
+                            // position: a "ghost" that still moves over, now a step behind the
+                            // real menu instead of perfectly in sync with it.
+                            //
+                            // `.id()` has to be the OUTERMOST modifier -- applied LAST, after
+                            // `.offset`/`.transition` -- so identity covers the position too.
+                            // Then a field change removes and reinserts this ENTIRE node,
+                            // offset included: the exiting copy keeps ITS OWN frozen offset
+                            // (the old field's position) for the whole fade-out, and the
+                            // incoming copy starts immediately at ITS OWN offset (the new
+                            // field's position) for the fade-in. No shared ancestor is left
+                            // to drag the exiting copy toward the new location.
                             .id(id)
-                            .offset(x: x, y: y)
-                            .transition(.focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top))
                     }
                 }
             }

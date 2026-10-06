@@ -4379,6 +4379,17 @@ final class PulsingRingView: NSView {
         // No implicit animation: the ring must follow the control's edge exactly.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        // Also set here, not just in viewDidChangeBackingProperties below -- that only fires on
+        // an actual SCALE CHANGE (e.g. dragging the window to a different display), never on a
+        // view's first attachment to its (already-Retina) window, so contentsScale was silently
+        // left at its 1.0 default for the ring's entire life on a single-display Mac. Core
+        // Animation rasterizes a CAShapeLayer's shadow (the hover glow) at contentsScale, then
+        // the compositor upscales that bitmap to fit the real pixel grid -- at 1.0 on a 2x
+        // display that's exactly what showed as visible blockiness around the stroke, worst on
+        // the curved corners where under-sampling is most visible (reported live). layout()
+        // itself always runs before the first paint, so this reliably catches the case
+        // viewDidChangeBackingProperties never fires for.
+        ring.contentsScale = window?.backingScaleFactor ?? 2
         ring.frame = bounds
         switch shape {
         case .capsule:

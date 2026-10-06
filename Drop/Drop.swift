@@ -7158,26 +7158,13 @@ struct ContentView: View {
                     .frame(height: fieldHeight, alignment: .center)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 10)
-                    // Leaves room for the refresh button below so long clipboard text
-                    // truncates before running underneath it, same reasoning the old
-                    // typed-field clear button used this same trailing inset for.
-                    .padding(.trailing, 40)
+                    .padding(.trailing, 14)
                     .onDrop(of: ["public.url", "public.plain-text"], isTargeted: $isDragging) { providers in
                         self.handleDrop(providers: providers)
                         return true
                     }
             }
             .frame(maxWidth: .infinity)
-
-            // Small circular refresh button, inside the field itself and to the left of the
-            // Analyze Link pill -- in the same spot/style the old typed-field's clear button
-            // used to occupy, back when this bar accepted typing (see 16f354a). Dimmer than
-            // the accent-filled Analyze pill so it doesn't compete with it, matching the
-            // leading link glyph's own secondary weight.
-            HoverIconButton(icon: "arrow.clockwise", size: 11, boxSize: 24, color: .white.opacity(DesignTokens.Text.secondary), help: "Refresh clipboard", shape: .circle) {
-                refreshClipboardPreview()
-            }
-            .padding(.trailing, 6)
 
             // Paste & Analyze / Retry -- inset accent pill living INSIDE
             // the outer field capsule (not a second independent capsule).

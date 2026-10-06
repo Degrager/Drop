@@ -2922,7 +2922,14 @@ struct FolderActionButtons: View {
                 panel.allowsMultipleSelection = false
                 panel.prompt = "Select"
                 panel.directoryURL = URL(fileURLWithPath: path)
-                if panel.runModal() == .OK, let url = panel.url { onChoose(url.path) }
+                // .begin (async), not .runModal() (blocking) -- a modal session entered
+                // synchronously from inside a SwiftUI button/gesture callback crashed here
+                // (EXC_BREAKPOINT in ViewBridge's NSRendezvousWindowRemoteViewDelegate, surfaced
+                // using the panel's own "New Folder" control while browsing). The panel's
+                // completion handler keeps it alive for the duration, same as every other use.
+                panel.begin { response in
+                    if response == .OK, let url = panel.url { onChoose(url.path) }
+                }
             }
             HoverIconButton(icon: "arrow.up.forward.app", size: 13, boxSize: DropGrid.controlHeight, help: "Reveal in Finder", expandable: true) {
                 NSWorkspace.shared.open(URL(fileURLWithPath: path))

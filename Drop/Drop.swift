@@ -464,14 +464,20 @@ enum VideoQuality: String, CaseIterable, Identifiable {
         case .q480:  return 480
         }
     }
-    /// Format selector for video+audio merged download — sorted by bitrate descending
+    /// Format selector for video+audio merged download — sorted by bitrate descending. Falls
+    /// back to `best[height<=H]` (and a final unconditional `best`) for sources that have no
+    /// separate video-only/audio-only pair to merge at all -- TikTok, Instagram, and Facebook
+    /// clips are typically ONE pre-muxed stream, so `bestaudio` alone matches nothing and the
+    /// `+` combinator has nothing to combine, which without this fallback yt-dlp reported as
+    /// "Requested format is not available" (confirmed via a real TikTok download log) rather
+    /// than just picking the single muxed format that was there the whole time.
     var formatSelector: String {
         switch self {
-        case .q4k:   return "bestvideo[height<=2160]+bestaudio"
-        case .q1440: return "bestvideo[height<=1440]+bestaudio"
-        case .q1080: return "bestvideo[height<=1080]+bestaudio"
-        case .q720:  return "bestvideo[height<=720]+bestaudio"
-        case .q480:  return "bestvideo[height<=480]+bestaudio"
+        case .q4k:   return "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best"
+        case .q1440: return "bestvideo[height<=1440]+bestaudio/best[height<=1440]/best"
+        case .q1080: return "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+        case .q720:  return "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+        case .q480:  return "bestvideo[height<=480]+bestaudio/best[height<=480]/best"
         }
     }
     /// Format selector for MP4 output. Previously excluded vcodec=vp9/av01 outright to stay
@@ -493,8 +499,11 @@ enum VideoQuality: String, CaseIterable, Identifiable {
         let h = maxHeight
         // Prefer the best native M4A/AAC audio (highest bitrate available, Resolve-safe, no
         // re-encode needed for MP4). Only fall back to unrestricted bestaudio if the source has
-        // no AAC track at all — rare, but keeps the download from failing outright.
-        return "bestvideo[height<=\(h)]+bestaudio[ext=m4a]/bestvideo[height<=\(h)]+bestaudio"
+        // no AAC track at all — rare, but keeps the download from failing outright. Final
+        // best[height<=H]/best tail for a source with no separate video-only/audio-only pair to
+        // merge at all -- see formatSelector's own doc comment above (same root cause, same fix,
+        // just with the MP4-preferred-audio clause still tried first).
+        return "bestvideo[height<=\(h)]+bestaudio[ext=m4a]/bestvideo[height<=\(h)]+bestaudio/best[height<=\(h)]/best"
     }
     /// Highest quality that fits within sourceMaxHeight (no upscaling)
     static func highest(for sourceH: Int) -> VideoQuality {
@@ -6603,7 +6612,7 @@ struct ContentView: View {
                                 EmptyStateView(
                                     icon: "arrow.down.to.line",
                                     title: "Copy a link to get started",
-                                    subtitle: "Supports YouTube, SoundCloud, Vimeo and more"
+                                    subtitle: "Supports YouTube, SoundCloud, TikTok and more"
                                 )
                                 .padding(.vertical, 16)
                                 .followsSidebar()
@@ -6864,7 +6873,7 @@ struct ContentView: View {
                         EmptyStateView(
                             icon: "arrow.down.to.line",
                             title: "Copy a link to get started",
-                            subtitle: "Supports YouTube, SoundCloud, Vimeo and more"
+                            subtitle: "Supports YouTube, SoundCloud, TikTok and more"
                         )
                         .followsSidebar()
                         .transition(.blurIn)
@@ -7824,8 +7833,12 @@ struct ContentView: View {
                             panel.canChooseFiles = false; panel.canChooseDirectories = true
                             panel.canCreateDirectories = true
                             panel.allowsMultipleSelection = false; panel.prompt = "Select Folder"
-                            if panel.runModal() == .OK, let url = panel.url {
-                                config.outputDir = url.path
+                            // .begin (async), not .runModal() (blocking) -- see
+                            // FolderActionButtons' identical fix for why.
+                            panel.begin { response in
+                                if response == .OK, let url = panel.url {
+                                    config.outputDir = url.path
+                                }
                             }
                         }
                     }) {

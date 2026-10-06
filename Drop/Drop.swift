@@ -3734,9 +3734,24 @@ enum GlassInteractiveShape {
 /// capsule's radius is always exactly half of it) -- this computes that radius from the actual
 /// rect handed to path(in:) and delegates to RoundedRectangle for the real continuous-corner math
 /// rather than reimplementing it.
+///
+/// At EXACTLY radius = height/2 (a true capsule, no straight run at all on the short axis) each
+/// semicircular end is really two 90° continuous corner curves glued together at the leftmost/
+/// rightmost point -- each one blends from near-zero curvature (matching a straight edge) up to
+/// its own peak partway through its own sweep, so the seam where they meet is where BOTH curves
+/// are at their lowest local curvature, not the constant curvature a true semicircle would have
+/// there. A stroke traced over that seam reads as very slightly thinner right at the midpoint
+/// (reported live, after the fix above: "right in the middle of... where the corner radius meets
+/// to make a half circle"). Backing the radius off by a hair gives each corner curve a real
+/// (if visually imperceptible, well under half a point) straight segment to blend from on either
+/// side instead of a zero-length seam, without reintroducing the original, far more visible
+/// straight-to-curve discontinuity this shape exists to fix.
+private let continuousCapsuleRadiusSlack: CGFloat = 0.4
+
 struct ContinuousCapsule: Shape {
     func path(in rect: CGRect) -> Path {
-        RoundedRectangle(cornerRadius: min(rect.width, rect.height) / 2, style: .continuous).path(in: rect)
+        let radius = min(rect.width, rect.height) / 2 - continuousCapsuleRadiusSlack
+        return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect)
     }
 }
 

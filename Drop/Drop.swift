@@ -7694,14 +7694,23 @@ struct ContentView: View {
         // Tiers above what the source actually has are hidden (unknown height
         // keeps the old up-to-1080p default). A sub-480p source still shows
         // the 480p floor tier -- the output line reports the real resolution.
+        let h = p.sourceMaxHeight
+        // The highest tier the source actually supports -- what you'd get without
+        // touching this field at all, same logic the filter below already uses for
+        // its own upper bound. Marked isSourceDefault so the field reads as neutral
+        // there and only tints (DropdownField's isChanged) once a LOWER tier is
+        // chosen -- previously no option here was ever marked isSourceDefault, so
+        // every possible selection counted as "changed" and the field was always
+        // blue regardless of quality (reported live: "why are the fields blue").
+        let defaultTier: VideoQuality = h == 0 ? .q1080 : .highest(for: h)
         return VideoQuality.allCases.filter { q in
-            let h = p.sourceMaxHeight
-            return h == 0 ? q.maxHeight <= 1080 : q.maxHeight <= VideoQuality.highest(for: h).maxHeight
+            h == 0 ? q.maxHeight <= 1080 : q.maxHeight <= defaultTier.maxHeight
         }.map { q in
             SegmentOption(
                 id: "\(q)", label: effectiveVideoResolutionLabel(q, sourceMaxHeight: p.sourceMaxHeight),
                 isSelected: p.videoQuality == q, tint: DesignTokens.Accent.primary,
-                subtext: resolutionMarketingName(forMaxHeight: q.maxHeight)
+                subtext: resolutionMarketingName(forMaxHeight: q.maxHeight),
+                isSourceDefault: q == defaultTier
             ) {
                 preview.videoQuality.wrappedValue = q
             }
@@ -7742,7 +7751,12 @@ struct ContentView: View {
         return ReencodeCodec.allCases.filter { $0 != .off || p.videoFormat != .mov }.map { c in
             SegmentOption(
                 id: c.rawValue, label: c.label, help: c.note,
-                isSelected: effective == c, tint: DesignTokens.Accent.primary
+                isSelected: effective == c, tint: DesignTokens.Accent.primary,
+                // .off is the untouched/do-nothing choice, same role "Same as Source" plays
+                // on every other field -- without this the field was always blue regardless
+                // of selection, same bug as RESOLUTION's (see downloadVideoQualityOptions'
+                // own comment; reported live together as "why are the fields blue").
+                isSourceDefault: c == .off
             ) {
                 preview.reencodeCodec.wrappedValue = c
                 // Remembered as the default for the NEXT card that needs this choice.

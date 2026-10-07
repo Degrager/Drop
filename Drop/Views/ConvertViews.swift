@@ -1947,7 +1947,10 @@ struct ConvertView: View {
     }
 
     private func openFilePicker() {
-        let panel = CachedPanels.fileImport
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
         panel.prompt = "Import"
         // .begin (async), not .runModal() (blocking) -- see
         // FolderActionButtons' identical fix (SharedComponents.swift) for why.

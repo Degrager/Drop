@@ -9247,21 +9247,17 @@ struct FlowLayout: Layout {
 /// re-encode counterpart was removed -- the per-chip dot already distinguishes native
 /// from re-encoding options, so a second line spelling that out here was redundant.
 func nativeLegend(positiveLabel: String = "Native") -> some View {
-    // .firstTextBaseline + a rendered "circle.fill" SF Symbol, not a raw Circle() shape
-    // -- this exact problem (and fix) already exists in this file, see SegmentButton's
-    // own nativeBadge dot and its identical comment. Neither plain .center nor
-    // .firstTextBaseline over a bare Circle() read right (both tried here first, both
-    // confirmed wrong live) because a Circle() shape has no real baseline metrics at
-    // all -- under .center it's centered against the row's full line-height box
-    // (including space reserved for a descender the label may not even have), and
-    // under .firstTextBaseline it falls back to aligning its bottom edge to the text's
-    // baseline. A rendered SF Symbol glyph (even this simple filled-circle one) DOES
-    // carry real baseline metrics and aligns correctly under .firstTextBaseline, same
-    // as any icon+label pairing elsewhere in this file.
+    // Same dot as SegmentButton's nativeBadge, same fix -- see its comment. An
+    // Image(systemName:) under .firstTextBaseline has no real baseline guide of its
+    // own, so it falls back to VerticalAlignment.center: the dot's CENTER lands on
+    // the text's BASELINE (confirmed live), not on the label's cap-height middle.
+    // Shifting up by half the label's cap-height corrects it. (8.5pt -- cap height
+    // ~6pt, half ~3pt.)
     HStack(alignment: .firstTextBaseline, spacing: 4) {
         Image(systemName: "circle.fill")
             .font(.system(size: 6))
             .foregroundColor(DesignTokens.Accent.success)
+            .offset(y: -3)
         Text(positiveLabel).font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
             .lineLimit(1).fixedSize()
     }

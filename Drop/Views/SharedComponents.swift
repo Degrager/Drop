@@ -2640,40 +2640,22 @@ extension View {
                             // field's position (see git history on this line for the fuller
                             // account of that earlier bug).
                             //
-                            // ASYMMETRIC transition, not .focus(...) straight (which is
-                            // symmetric insertion==removal): this codebase has hit this exact
-                            // "ghosting is still happening after a first real-but-secondary
-                            // fix" shape twice before (HoverIconButton's caption, 64d698e; this
-                            // bar's own queue rows, 88c66b0) and both times the actual cause
-                            // was a SYMMETRIC transition's removal getting INTERRUPTED before
-                            // it finishes -- another field's own insertion starting up and
-                            // competing for the same frames leaves the old menu's removal
-                            // animation stuck half-blurred/half-scaled on screen, which reads
-                            // as a second, ghost menu. Matches glassPopInOnly/blurInOnly's
-                            // established convention: insertion keeps the nice blur+scale pop,
-                            // removal is `.identity` (instant) so there is nothing left for a
-                            // competing animation to interrupt.
-                            //
-                            // Anchor is .top/.bottom (horizontally CENTERED on the menu's own
-                            // box), not the trigger's own x position -- tried anchoring to the
-                            // trigger instead (so the pop-in would visually originate exactly at
-                            // the field that was clicked), but that makes the scale's anchor
-                            // point land far from the menu's own center for any edge field
-                            // (CODEC on the far left, BITRATE on the far right) -- scaleEffect
-                            // holds the anchor point fixed and grows everything else AWAY from
-                            // it, so an off-center anchor makes one whole side of the box visibly
-                            // travel toward its final position while the other barely moves,
-                            // reading as diagonal sliding rather than growth (reported live,
-                            // watched slowed to 3s: "starts very blurry [near the field], then
-                            // moves diagonally down to the right... I want it to go straight
-                            // down"). A horizontally-centered anchor grows the box symmetrically
-                            // left/right with no net horizontal drift -- only straight-down growth
-                            // from the top edge (or straight up, for opensUpward).
-                            .transition(.asymmetric(
-                                insertion: .focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top)
-                                    .animation(.spring(response: 0.25)),
-                                removal: .identity
-                            ))
+                            // Plain `.identity` on BOTH sides, not a scale+blur pop (tried a
+                            // `.focus(blur:scale:anchor:)` insertion first, matching the glass-pop
+                            // style used elsewhere in the app). ANY non-zero scale here visibly
+                            // travels diagonally on a field switch, regardless of the anchor point
+                            // chosen -- tried anchoring to the trigger's own position, then to the
+                            // menu's own horizontal center, and neither changed the diagonal
+                            // motion at all (confirmed live, watched slowed to 3s both times).
+                            // Isolated the actual cause by setting scale/blur to a no-op (matching
+                            // their own "identity" values) while leaving everything else the same
+                            // -- the diagonal motion disappeared completely, proving it was never
+                            // about the anchor's position at all, but about scaleEffect itself
+                            // (combined with this content, on a field switch specifically -- a
+                            // clean open from closed never showed it) being applied here at all.
+                            // Reported live as preferred anyway: "this fixed it, i like this
+                            // better" -- a plain instant appearance, no pop.
+                            .transition(.identity)
                             .id(id)
                     }
                 }

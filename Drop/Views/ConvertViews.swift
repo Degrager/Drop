@@ -2357,26 +2357,13 @@ extension View {
                         .frame(width: 0, height: 0)
                         entry.content()
                             .offset(x: x, y: y)
-                            // ASYMMETRIC, not .focus(...) straight -- see dropdownPopoverOverlay's
-                            // identical fix and its own doc comment for the full account. Same
-                            // popover-host shape (floating content published via a preference,
-                            // drawn as a sibling so it escapes the card's own clip), so the same
-                            // risk applies: a plain symmetric transition's REMOVAL can get
-                            // interrupted by any other animation competing for the same frames
-                            // (quick reopen, a sibling layout change) and get stuck half-blurred
-                            // on screen -- reads as a ghost even with only one possible open item.
-                            // Removal here is `.identity` (instant) so there's nothing to interrupt.
-                            // Anchor is .top/.bottom (horizontally centered on the menu's own
-                            // box), not the trigger's own x position -- see
-                            // dropdownPopoverOverlay's identical comment for why: anchoring to
-                            // the trigger instead made the scale-in visibly travel diagonally
-                            // for any edge-positioned trigger (reported live, watched slowed to
-                            // 3s: wanted straight-down growth, not diagonal).
-                            .transition(.asymmetric(
-                                insertion: .focus(blur: 10, scale: 0.9, anchor: opensUpward ? .bottom : .top)
-                                    .animation(.spring(response: 0.25)),
-                                removal: .identity
-                            ))
+                            // Plain `.identity`, not a scale+blur pop -- see
+                            // dropdownPopoverOverlay's identical line and its own doc comment for
+                            // the full account: a scaleEffect-based pop-in here visibly travels
+                            // diagonally on a field switch regardless of which anchor point is
+                            // used, and the user preferred the plain instant appearance anyway
+                            // once that was isolated and shown live.
+                            .transition(.identity)
                     }
                     .zIndex(20)
                 }

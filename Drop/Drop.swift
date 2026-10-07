@@ -7421,10 +7421,10 @@ struct ContentView: View {
             }
             if analyzing { return .analyzing }
             // Only what will be produced: the input side is Convert's business.
-            // Same resolution downloadReencodeCodecOptions uses: this card's own choice, or the
-            // remembered default, so the capsule's VIDEO chip matches what the RE-ENCODE
-            // dropdown actually shows as selected.
-            return .output(p.outputChips(effectiveReencodeCodec: p.reencodeCodec ?? config.reencodeCodec))
+            // Same resolution effectiveReencodeCodec uses (see its own doc comment), so the
+            // capsule's VIDEO chip matches what the RE-ENCODE dropdown actually shows as
+            // selected -- including the MOV-can't-honor-.off fallback to H.264.
+            return .output(p.outputChips(effectiveReencodeCodec: effectiveReencodeCodec(choice: p.reencodeCodec, default: config.reencodeCodec, videoFormat: p.videoFormat)))
         }()
         // The pasted link stands in for the title until a real one arrives.
         let titleKnown = !analyzing || (!p.title.isEmpty && p.title != p.url)
@@ -7658,14 +7658,28 @@ struct ContentView: View {
         (p.sourceVideoCodec == "AV1" || p.sourceVideoCodec == "VP9") && (p.videoFormat == .mp4 || p.videoFormat == .mov)
     }
 
+    /// Resolves a card's reencode choice (its own override, or the remembered default) to what
+    /// will ACTUALLY be used for the given output format -- `.off` can't be honored for `.mov`
+    /// (reencodeIfNeeded falls back to H.264 there regardless; see its own doc comment), so
+    /// anywhere a card needs to DISPLAY its effective choice has to mirror that same fallback,
+    /// not just the real re-encode call itself. Without this, switching a card's own output
+    /// format to MOV left `.off` as the resolved value, which `downloadReencodeCodecOptions`
+    /// then couldn't match against any of its own options (it hides `.off` for MOV) -- the field
+    /// showed a bare "—" instead of the H.264 that will actually run (reported live). Being a
+    /// pure function of the CURRENT format rather than something written back into
+    /// `preview.reencodeCodec`/`config.reencodeCodec` also means switching back to MP4 (where
+    /// `.off` is valid again) naturally resolves back to `.off` on its own, with nothing to
+    /// reset explicitly -- also reported live as the wanted behavior.
+    private func effectiveReencodeCodec(choice: ReencodeCodec?, default fallback: ReencodeCodec, videoFormat: VideoFormat) -> ReencodeCodec {
+        let resolved = choice ?? fallback
+        return (resolved == .off && videoFormat == .mov) ? .h264 : resolved
+    }
+
     private func downloadReencodeCodecOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
         let p = preview.wrappedValue
-        // Falls back to config.reencodeCodec (the last value picked on ANY card, persisted) until
-        // this specific card's own value is explicitly set -- see LinkPreview.reencodeCodec's own
-        // doc comment. .off is hidden for MOV: it can't actually be honored there (reencodeIfNeeded
-        // falls back to H.264 if it ever receives .off for a MOV source anyway -- see its own doc
-        // comment), so it shouldn't be offered as if it were.
-        let effective = p.reencodeCodec ?? config.reencodeCodec
+        // .off is hidden for MOV: it can't actually be honored there (see
+        // effectiveReencodeCodec's own doc comment), so it shouldn't be offered as if it were.
+        let effective = effectiveReencodeCodec(choice: p.reencodeCodec, default: config.reencodeCodec, videoFormat: p.videoFormat)
         return ReencodeCodec.allCases.filter { $0 != .off || p.videoFormat != .mov }.map { c in
             SegmentOption(
                 id: c.rawValue, label: c.label, help: c.note,

@@ -7731,9 +7731,19 @@ struct ContentView: View {
                         SegmentedCapsule(options: downloadModeOptions(preview: preview), fill: false, groupID: "downloadAs")
                     }
                     VStack(alignment: .leading, spacing: 6) {
-                        FieldCaption(icon: p.mediaMode == .audioOnly ? "waveform" : "video", text: "OUTPUT FORMAT")
-                            .frame(height: 15, alignment: .leading)
-                            .reportsFacadeFieldShape(id: "download.outputFormat.caption.\(p.id)", kind: .text)
+                        HStack(spacing: 10) {
+                            FieldCaption(icon: p.mediaMode == .audioOnly ? "waveform" : "video", text: "OUTPUT FORMAT")
+                                .reportsFacadeFieldShape(id: "download.outputFormat.caption.\(p.id)", kind: .text)
+                            // Explains MOV's own amber dot (see sourceNeedsReencode) -- only
+                            // shown when an AV1/VP9 source could actually trigger it, same as
+                            // the dot itself, so an ordinary H.264/HEVC source (plain remux,
+                            // no real re-encode either way) doesn't carry an irrelevant key.
+                            if p.mediaMode != .audioOnly && sourceNeedsReencode(for: .mov, preview: p) {
+                                Spacer(minLength: 10)
+                                nativeLegend(positiveLabel: "Re-encode", tint: DesignTokens.Accent.warning)
+                            }
+                        }
+                        .frame(height: 15, alignment: .leading)
                         SegmentedCapsule(options: p.mediaMode == .audioOnly
                             ? downloadAudioFormatOptions(preview: preview)
                             : downloadVideoFormatOptions(preview: preview), groupID: "outputFormat")
@@ -7830,11 +7840,22 @@ struct ContentView: View {
         return options
     }
 
+    /// MOV's own warning dot (nativeBadge: false -> SegmentButton's amber branch):
+    /// an AV1/VP9 source forces a REAL re-encode to land in a .mov -- same codec
+    /// gate as needsReencodeChoice/reencodeIfNeeded, just evaluated per-format here
+    /// instead of against whatever's currently selected, so the dot shows on MOV's
+    /// own pill regardless of which format is picked right now.
+    private func sourceNeedsReencode(for format: VideoFormat, preview p: LinkPreview) -> Bool {
+        format == .mov && (p.sourceVideoCodec == "AV1" || p.sourceVideoCodec == "VP9")
+    }
+
     private func downloadVideoFormatOptions(preview: Binding<LinkPreview>) -> [SegmentOption] {
         let p = preview.wrappedValue
         return VideoFormat.allCases.map { f in
             SegmentOption(
-                id: f.rawValue, label: f.label, help: f.note,
+                id: f.rawValue, label: f.label,
+                nativeBadge: sourceNeedsReencode(for: f, preview: p) ? false : nil,
+                help: f.note,
                 isSelected: p.videoFormat == f, tint: DesignTokens.Accent.primary
             ) {
                 preview.videoFormat.wrappedValue = f
@@ -9401,12 +9422,13 @@ struct FlowLayout: Layout {
     }
 }
 
-/// Small legend explaining the green (positive/native/original) dot shown on format/codec
-/// chips. `positiveLabel` reads "Native" for Download's format rows (true remux-native
-/// containers) and "Original" for Convert's codec rows (matches source). The amber
-/// re-encode counterpart was removed -- the per-chip dot already distinguishes native
-/// from re-encoding options, so a second line spelling that out here was redundant.
-func nativeLegend(positiveLabel: String = "Native") -> some View {
+/// Small legend explaining a dot shown on format/codec chips. `positiveLabel` reads
+/// "Native" for Download's format rows (true remux-native containers) and "Original"
+/// for Convert's codec rows (matches source) -- both green (`tint`'s default). Download's
+/// OUTPUT FORMAT row also uses this for the opposite case: an orange "Re-encode" legend
+/// next to MOV's own warning dot (see downloadVideoFormatOptions), when the source codec
+/// actually forces one.
+func nativeLegend(positiveLabel: String = "Native", tint: Color = DesignTokens.Accent.success) -> some View {
     // Same dot as SegmentButton's nativeBadge, same fix -- see its comment. An
     // Image(systemName:) under .firstTextBaseline has no real baseline guide of its
     // own, so it falls back to VerticalAlignment.center: the dot's CENTER lands on
@@ -9416,7 +9438,7 @@ func nativeLegend(positiveLabel: String = "Native") -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 4) {
         Image(systemName: "circle.fill")
             .font(.system(size: 6))
-            .foregroundColor(DesignTokens.Accent.success)
+            .foregroundColor(tint)
             .offset(y: -1.5)
         Text(positiveLabel).font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
             .lineLimit(1).fixedSize()

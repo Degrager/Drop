@@ -1355,6 +1355,13 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
     @Published var checkingUpdates: Bool = false
     @Published var updatingYtdlp: Bool = false
     @Published var updatingFFmpeg: Bool = false
+    /// Real download fractionCompleted (0...1), fed from the download
+    /// task's own `.progress` via KVO below -- lets the first-launch setup
+    /// card show actual progress instead of a generic spinner.
+    @Published var ytdlpDownloadProgress: Double = 0
+    @Published var ffmpegDownloadProgress: Double = 0
+    private var ytdlpProgressObservation: NSKeyValueObservation?
+    private var ffmpegProgressObservation: NSKeyValueObservation?
     @Published var updateAvailable: Bool = false
     @Published var ffmpegUpdateAvailable: Bool = false
     @Published var ytdlpVersion: String = UserDefaults.standard.string(forKey: "cachedYtdlpVersion") ?? ""
@@ -1579,6 +1586,35 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             // and relaunched. This makes the app un-stick itself instead.
             self.checkDeps()
             self.silentUpdateCheck { self.justCheckedUpToDate = true }
+        }
+    }
+
+    /// Dev-tab only: forces the first-launch "setting up tools" card into view
+    /// with simulated (not real) progress, so it can be eyeballed without
+    /// wiping Application Support and actually re-downloading both tools.
+    /// Auto-resolves back to the real ready state after a few seconds --
+    /// mirrors DropCustomUserDriver's own previewX() pattern for the update
+    /// overlay (see DevReleaseView's testingCard).
+    func previewToolsSetup() {
+        checkingDeps = false
+        toolsReady = false
+        updatingYtdlp = true
+        updatingFFmpeg = true
+        ytdlpDownloadProgress = 0
+        ffmpegDownloadProgress = 0
+        var tick = 0
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+            tick += 1
+            // Different rates so the two bars visibly diverge, like two
+            // independent real downloads would.
+            self.ytdlpDownloadProgress = min(1, Double(tick) * 0.045)
+            self.ffmpegDownloadProgress = min(1, Double(tick) * 0.03)
+            if self.ffmpegDownloadProgress >= 1 {
+                timer.invalidate()
+                self.updatingYtdlp = false
+                self.updatingFFmpeg = false
+                self.toolsReady = true
+            }
         }
     }
 
@@ -1815,6 +1851,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
 
     private func downloadYtdlp(from releaseURL: URL, completion: (() -> Void)?) {
         appendLog("Fetching latest yt-dlp nightly build…")
+        ytdlpDownloadProgress = 0
         let finalDir = supportDir.appendingPathComponent("yt-dlp_bin")
         let tempZip = supportDir.appendingPathComponent("yt-dlp_macos.zip.download")
         let task = URLSession.shared.downloadTask(with: releaseURL) { location, response, error in
@@ -1871,6 +1908,9 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                     completion?()
                 }
             }
+        }
+        ytdlpProgressObservation = task.progress.observe(\.fractionCompleted, options: [.new]) { [weak self] progress, _ in
+            DispatchQueue.main.async { self?.ytdlpDownloadProgress = progress.fractionCompleted }
         }
         task.resume()
     }
@@ -2017,6 +2057,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
 
     private func downloadFFmpeg(from releaseURL: URL, completion: (() -> Void)?) {
         appendLog("Fetching latest ffmpeg nightly build…")
+        ffmpegDownloadProgress = 0
         let destURL = supportDir.appendingPathComponent("ffmpeg")
         let tempZip = supportDir.appendingPathComponent("ffmpeg.zip")
         let task = URLSession.shared.downloadTask(with: releaseURL) { location, response, error in
@@ -2064,6 +2105,9 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                     completion?()
                 }
             }
+        }
+        ffmpegProgressObservation = task.progress.observe(\.fractionCompleted, options: [.new]) { [weak self] progress, _ in
+            DispatchQueue.main.async { self?.ffmpegDownloadProgress = progress.fractionCompleted }
         }
         task.resume()
     }
@@ -6185,7 +6229,7 @@ struct ContentView: View {
                     // for nothing. The transaction override stops the layout
                     // change at activation from animating the page's size.
                     ActiveOnlyLayout(isActive: activeTab == .devRelease) {
-                        DevReleaseView(dropDriver: dropDriver, isActive: activeTab == .devRelease)
+                        DevReleaseView(dropDriver: dropDriver, manager: manager, isActive: activeTab == .devRelease)
                             .contentColumn()
                             .pinnedToSidebar()
                             .transaction(value: activeTab) { $0.animation = nil }
@@ -6908,26 +6952,22 @@ struct ContentView: View {
     @ViewBuilder
     private var mainPanelCardsContent: some View {
                     LazyVStack(spacing: 10) {
-                        // Bundled tools missing banner — should only ever appear if the
-                        // app bundle itself is corrupt/incomplete, since yt-dlp and
-                        // ffmpeg ship inside Drop.app rather than being installed.
+                        // yt-dlp/ffmpeg are downloaded on launch (see ytdlpPath/
+                        // ffmpegPath) -- never actually bundled inside the app
+                        // despite what some older comments elsewhere claim -- so a
+                        // brand new install always hits this for however long that
+                        // one-time download takes. Used to show an alarming
+                        // "Bundled tools missing, please reinstall" error here
+                        // unconditionally instead, which was simply wrong for this
+                        // completely normal state and gave no progress feedback at
+                        // all (a new user's first impression was a false
+                        // "something's broken" message, not real setup progress).
                         if !manager.checkingDeps && !manager.toolsReady {
-                            HStack(spacing: 10) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.orange)
-                                    .font(.appMono(size: 16))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Bundled tools missing")
-                                        .font(.appMono(size: 13, weight: .semibold))
-                                        .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                                    Text("yt-dlp/ffmpeg weren't found inside the app bundle. Please reinstall Drop.")
-                                        .font(.appMono(size: 11))
-                                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                                }
-                                Spacer()
+                            if manager.updatingYtdlp || manager.updatingFFmpeg {
+                                toolsSetupCard
+                            } else {
+                                toolsSetupFailedCard
                             }
-                            .padding(14)
-                            .glassCard(cornerRadius: DesignTokens.Radius.medium)
                         }
 
                         previewCard
@@ -6960,6 +7000,77 @@ struct ContentView: View {
                     // the time its own modifier chain reaches this point, so one
                     // overlay here paints once, above every row, unconditionally.
                     .dropdownPopoverOverlay(openID: $openDropdownID)
+    }
+
+    /// Shown while yt-dlp/ffmpeg's one-time setup download is actually in
+    /// flight -- real per-tool progress (see ytdlpDownloadProgress/
+    /// ffmpegDownloadProgress), not a generic spinner, so a first launch
+    /// doesn't read as broken for however long the download takes. Each row
+    /// flips to "Done" independently the moment ITS OWN tool finishes --
+    /// the two run in parallel with no ordering guarantee.
+    private var toolsSetupCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                    .font(.appMono(size: 16))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Setting up yt-dlp and ffmpeg…")
+                        .font(.appMono(size: 13, weight: .semibold))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                    Text("One-time download — this only happens once.")
+                        .font(.appMono(size: 11))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                }
+                Spacer()
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                toolSetupProgressRow(name: "yt-dlp", fraction: manager.ytdlpDownloadProgress, done: !manager.updatingYtdlp)
+                toolSetupProgressRow(name: "ffmpeg", fraction: manager.ffmpegDownloadProgress, done: !manager.updatingFFmpeg)
+            }
+        }
+        .padding(14)
+        .glassCard(cornerRadius: DesignTokens.Radius.medium)
+    }
+
+    private func toolSetupProgressRow(name: String, fraction: Double, done: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text(name)
+                .font(.appMono(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                .frame(width: 48, alignment: .leading)
+            fractionProgressBar(done ? 1 : fraction)
+            Text(done ? "Done" : (fraction > 0 ? "\(Int((fraction * 100).rounded()))%" : ""))
+                .font(.appMono(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                .frame(width: 32, alignment: .trailing)
+        }
+    }
+
+    /// The setup download genuinely finished (or was already current) and
+    /// the tools are STILL not resolvable -- a real failure, not just
+    /// "still downloading." Can recur on any later launch too, not only
+    /// the first one, if e.g. the network drops mid-download.
+    private var toolsSetupFailedCard: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+                .font(.appMono(size: 16))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Couldn't set up yt-dlp/ffmpeg")
+                    .font(.appMono(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                Text("Check your internet connection, then try again.")
+                    .font(.appMono(size: 11))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+            }
+            Spacer()
+            GlassButton(label: "Retry", icon: "arrow.clockwise", tint: DesignTokens.Accent.primary, fitContent: true) {
+                manager.ensureLatestTools()
+            }
+        }
+        .padding(14)
+        .glassCard(cornerRadius: DesignTokens.Radius.medium)
     }
 
     @ViewBuilder
@@ -7942,16 +8053,23 @@ struct ContentView: View {
     /// actually transferring -- a still-`.pending` download has no bar at all, see
     /// queuedProgressColumn).
     private func downloadProgressBar(_ dl: Download) -> some View {
+        fractionProgressBar(dl.progress ?? 0)
+    }
+
+    /// Shared by any slim green progress bar keyed to a plain 0...1 fraction
+    /// (a download card's own percentage, or the tools-setup card below) --
+    /// shimmers in place of a fill until there's real progress to show.
+    private func fractionProgressBar(_ fraction: Double) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(DesignTokens.Interactive.fillRest)).frame(height: 4)
-                if let pct = dl.progress, pct > 0 {
+                if fraction > 0 {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(LinearGradient(colors: [Color.green.opacity(0.6), Color.green.opacity(1.0)],
                                              startPoint: .leading, endPoint: .trailing))
-                        .frame(width: geo.size.width * CGFloat(pct), height: 4)
+                        .frame(width: geo.size.width * CGFloat(fraction), height: 4)
                         .shadow(color: Color.green.opacity(0.6), radius: 4)
-                        .animation(.easeOut(duration: 0.25), value: pct)
+                        .animation(.easeOut(duration: 0.25), value: fraction)
                 } else {
                     ShimmerBar(width: geo.size.width, color: .green, glow: true, duration: 1.2)
                 }

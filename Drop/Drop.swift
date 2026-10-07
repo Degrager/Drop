@@ -333,6 +333,40 @@ func sourceResolutionLabel(_ height: Int) -> String? {
     return height >= 2160 ? "4K" : "\(height)p"
 }
 
+/// The common marketing name for one of the fixed resolution-ladder tiers (2160/1440/1080/720/
+/// 480 -- VideoQuality.maxHeight's own values, and Convert's identical ladder) -- shared by
+/// Download's RESOLUTION picker and Convert's, so the same height always reads the same way in
+/// both places. "4K"/"2K" only where that nickname is unambiguous; 1080 and below use their
+/// well-known name alone.
+func resolutionMarketingName(forMaxHeight height: Int) -> String? {
+    switch height {
+    case 2160: return "4K Ultra HD"
+    case 1440: return "2K Quad HD"
+    case 1080: return "Full HD"
+    case 720:  return "HD"
+    case 480:  return "SD"
+    default:   return nil
+    }
+}
+
+/// Same marketing names as `resolutionMarketingName(forMaxHeight:)`, but bucketed by a >=
+/// threshold rather than an exact match -- for a SOURCE's own, real (often non-ladder-exact)
+/// height, not one of the fixed ladder tiers a picker actually offers. Matches
+/// `sourceResolutionLabel`'s/`VideoQuality.highest(for:)`'s own >=2160 convention. Used for
+/// "Same as Source" subtext (Convert's RESOLUTION field): a 3840x2160 source should read "4K
+/// Ultra HD", not the raw "3840x2160" dimension string (reported live).
+func sourceResolutionMarketingName(_ height: Int) -> String? {
+    guard height > 0 else { return nil }
+    switch height {
+    case 2160...:    return "4K Ultra HD"
+    case 1440..<2160: return "2K Quad HD"
+    case 1080..<1440: return "Full HD"
+    case 720..<1080:  return "HD"
+    case 480..<720:   return "SD"
+    default:          return nil
+    }
+}
+
 /// Even pixel count, the way real encodes are sized (1920x1080, 854x480, ...).
 private func evenPixels(_ value: Double) -> Int { max(2, Int((value / 2).rounded()) * 2) }
 
@@ -2293,23 +2327,47 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
 
         // Apple Silicon's dedicated encode hardware (guaranteed present since Drop ships
         // arm64-only) has no CRF/quality-value option for either codec -- -b:v is the only
-        // quality lever. Matching the source's own overall bitrate (file size / duration, which
-        // also covers the audio track being copied through -- a deliberate slight overshoot on
-        // the video target rather than an underestimate) keeps the re-encode at least as good as
-        // the source instead of guessing a flat number. VMAF-verified against libx264's default
-        // CRF on a real 4K source: 94.96 vs 95.77 for H.264, an imperceptible gap, for a large
-        // speed win; HEVC is not a speed option (see ReencodeCodec's own doc comment) but gets
-        // the same bitrate treatment for a meaningfully smaller file at the same quality.
+        // true bitrate lever. Matching the source's own overall bitrate (file size / duration,
+        // which also covers the audio track being copied through -- a deliberate slight
+        // overshoot on the video target rather than an underestimate) was the original
+        // starting point, VMAF-verified against libx264's default CRF on a real 4K source at
+        // 94.96 vs 95.77 for H.264 -- a gap that read as imperceptible in that one comparison,
+        // but not what the user experienced in practice (reported live: a re-encode "doesn't
+        // maintain the same quality as if i didn't re-encode"). See the -realtime/-profile/
+        // bitrate-margin comment just below for what actually changed in response.
         // Probed once, up front, and reused for both the bitrate target above and the live
         // progress fraction below (previously probed a second time purely for the bitrate calc).
         let durationSeconds = probeDurationSeconds(atPath: path, ffmpegPath: ffmpegPath)
         // effectiveCodec is never .off here (see the guard above), so this always has a real
         // encoder name -- the fallback is defensive only, never actually hit.
-        var videoArgs = ["-c:v", effectiveCodec.videotoolboxEncoder ?? "h264_videotoolbox"]
+        //
+        // -realtime 0: VideoToolbox's own quality-over-speed lever, found after the user
+        // reported live that a re-encode "doesn't maintain the same quality as if i didn't
+        // re-encode" and asked for quality over speed (or a balance of both). ffmpeg's
+        // h264_videotoolbox/hevc_videotoolbox default to VideoToolbox's REAL-TIME encode
+        // mode (built for live capture, where staying ahead of the clock matters more than
+        // squeezing the most quality out of each frame) -- telling it `-realtime 0` lifts
+        // that constraint, so it spends more time per frame on better motion estimation/rate
+        // control at the SAME bitrate. This is the single flag the earlier VMAF comparison
+        // (94.96 vs libx264's 95.77, see this function's own history) was missing; it should
+        // close most of that gap for free, no larger file required. -profile:v high (H.264
+        // only -- HEVC's default "main" profile is the right one to leave alone, since a
+        // higher HEVC profile changes bit depth/compatibility, not just efficiency) squeezes
+        // a bit more compression efficiency out of the same bit budget too.
+        var videoArgs = ["-c:v", effectiveCodec.videotoolboxEncoder ?? "h264_videotoolbox", "-realtime", "0"]
+        if effectiveCodec == .h264 {
+            videoArgs += ["-profile:v", "high"]
+        }
         let sizeBytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? nil
         if let sizeBytes, sizeBytes > 0, let durationSeconds, durationSeconds > 0 {
             let sourceKbps = Int((Double(sizeBytes) * 8 / 1000) / durationSeconds)
-            videoArgs += ["-b:v", "\(sourceKbps)k"]
+            // On top of -realtime/-profile above (same bits, better quality), a real "spend
+            // more to get more" margin: 30% over the source's own bitrate, matching the
+            // user's explicit "quality over speed" preference rather than just matching the
+            // source 1:1 (which assumes VideoToolbox is exactly as efficient per-bit as
+            // whatever encoder produced the source -- rarely true for a hardware encoder).
+            let targetKbps = Int(Double(sourceKbps) * 1.3)
+            videoArgs += ["-b:v", "\(targetKbps)k"]
         }
 
         // The card's progress bar/activity text were driven entirely by yt-dlp's own stdout
@@ -7642,7 +7700,8 @@ struct ContentView: View {
         }.map { q in
             SegmentOption(
                 id: "\(q)", label: effectiveVideoResolutionLabel(q, sourceMaxHeight: p.sourceMaxHeight),
-                isSelected: p.videoQuality == q, tint: DesignTokens.Accent.primary
+                isSelected: p.videoQuality == q, tint: DesignTokens.Accent.primary,
+                subtext: resolutionMarketingName(forMaxHeight: q.maxHeight)
             ) {
                 preview.videoQuality.wrappedValue = q
             }

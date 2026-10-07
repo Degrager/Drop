@@ -9257,7 +9257,7 @@ func nativeLegend(positiveLabel: String = "Native") -> some View {
         Image(systemName: "circle.fill")
             .font(.system(size: 6))
             .foregroundColor(DesignTokens.Accent.success)
-            .offset(y: -3)
+            .offset(y: -1.5)
         Text(positiveLabel).font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
             .lineLimit(1).fixedSize()
     }

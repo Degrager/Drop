@@ -2753,12 +2753,19 @@ struct DropdownField: View {
     let caption: String
     let options: [SegmentOption]
     @Binding var openID: String?
+    /// True when this field doesn't apply at all right now (e.g. RE-ENCODE for
+    /// a container that can hold the source codec natively, no choice to make)
+    /// -- shown greyed out and unclickable instead of removing the field, so
+    /// the row's layout stays put rather than RESOLUTION jumping to fill the
+    /// gap every time the output format changes.
+    var disabled: Bool = false
 
     private var isOpen: Bool { openID == id }
     private var selected: SegmentOption? { options.first(where: \.isSelected) }
     /// "Same as Source" is the one option marked isSourceDefault -- everything else (including a
     /// resolution option, which now carries its own explanatory subtext too) counts as changed.
-    private var isChanged: Bool { selected != nil && !(selected?.isSourceDefault ?? false) }
+    /// Never true while disabled -- there's no real selection to call "changed."
+    private var isChanged: Bool { !disabled && selected != nil && !(selected?.isSourceDefault ?? false) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -2774,6 +2781,7 @@ struct DropdownField: View {
                 // mid-blur regardless of how carefully the state CHANGE itself is
                 // wrapped. Now that removal there is `.identity` (instant, nothing to
                 // interrupt), this call no longer needs special-casing the switch.
+                guard !disabled else { return }
                 withAnimation(.spring(response: 0.25)) { openID = isOpen ? nil : id }
             } label: {
                 // .firstTextBaseline, not the default .center: the label (12pt) and
@@ -2793,21 +2801,23 @@ struct DropdownField: View {
                     Spacer(minLength: 4)
                     Image(systemName: "chevron.down")
                         .font(.appMono(size: 9, weight: .bold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                        .foregroundColor(.white.opacity(disabled ? DesignTokens.Text.disabled : DesignTokens.Text.tertiary))
                 }
                 .font(.appMono(size: 12, weight: .medium))
-                .foregroundColor(isChanged ? DesignTokens.Accent.primaryLight : .white.opacity(DesignTokens.Text.primary))
+                .foregroundColor(disabled ? .white.opacity(DesignTokens.Text.disabled) : (isChanged ? DesignTokens.Accent.primaryLight : .white.opacity(DesignTokens.Text.primary)))
                 .padding(.horizontal, 10)
                 .frame(height: 30)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                         .fill(isChanged ? DesignTokens.Accent.primary.opacity(0.14) : Color.white.opacity(DesignTokens.Field.fillRest))
+                        .opacity(disabled ? 0.5 : 1)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                         .stroke(isChanged ? DesignTokens.Accent.primary.opacity(0.6) : Color.white.opacity(DesignTokens.Field.borderRest),
                                 lineWidth: DesignTokens.Field.borderWidth)
+                        .opacity(disabled ? 0.5 : 1)
                 )
             }
             .buttonStyle(.plain)

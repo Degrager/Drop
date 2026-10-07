@@ -7764,25 +7764,20 @@ struct ContentView: View {
                                                   options: downloadVideoQualityOptions(preview: preview),
                                                   openID: $openDropdownID)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    // This half of the row was an empty placeholder (a
-                                    // .spacer, drawing nothing) since a since-removed CODEC
-                                    // field used to sit here -- now a real field again, but
-                                    // only when it would actually do something: reencodeIfNeeded
-                                    // only ever runs for an AV1/VP9 source going to MP4/MOV
-                                    // (see its own doc comment), so for every other
-                                    // format/source combination this choice has no effect and
-                                    // the field reverts to the same spacer as before, keeping
-                                    // RESOLUTION at its established half-width either way.
-                                    if needsReencodeChoice(preview: p) {
-                                        DropdownField(id: "download.video.reencodeCodec.\(p.id)", caption: "RE-ENCODE",
-                                                      options: downloadReencodeCodecOptions(preview: preview),
-                                                      openID: $openDropdownID)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                    } else {
-                                        Color.clear
-                                            .frame(maxWidth: .infinity)
-                                            .reportsFacadeFieldShape(id: "download.video.spacer.\(p.id)", kind: .spacer)
-                                    }
+                                    // reencodeIfNeeded only ever runs for an AV1/VP9 source going
+                                    // to MP4/MOV (see its own doc comment) -- for every other
+                                    // format/source combination this choice has no effect at all,
+                                    // since the container can already hold the source codec
+                                    // natively. Always mounted (not swapped for a spacer) so the
+                                    // field reads as "doesn't apply right now" rather than
+                                    // vanishing -- greyed out and unclickable, same convention as
+                                    // a disabled GlassButton -- and RESOLUTION's width never jumps
+                                    // when the output format changes.
+                                    DropdownField(id: "download.video.reencodeCodec.\(p.id)", caption: "RE-ENCODE",
+                                                  options: needsReencodeChoice(preview: p) ? downloadReencodeCodecOptions(preview: preview) : [],
+                                                  openID: $openDropdownID,
+                                                  disabled: !needsReencodeChoice(preview: p))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                             }
                         } else if p.audioFormat != .m4a {

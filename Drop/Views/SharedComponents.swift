@@ -2423,8 +2423,22 @@ struct FieldCaption: View {
 /// ForEach can't hold an array of @State for its children.
 private struct DropdownMenuRow: View {
     let option: SegmentOption
+    /// True for the first/last row in the list -- their OUTER corners (top for the
+    /// first row, bottom for the last) round to match the menu's own outer radius
+    /// instead of the plain inner-row radius, so the hover highlight doesn't poke a
+    /// square corner out past the menu's rounded edge (reported live). The other two
+    /// corners of an edge row, and all four of a middle row, keep the normal radius.
+    let isFirst: Bool
+    let isLast: Bool
     let action: () -> Void
     @State private var hovering = false
+
+    /// DropdownMenuChrome clips the whole menu to DesignTokens.Radius.large (20),
+    /// and this row sits inset by the menu content's own 4pt padding -- subtracting
+    /// that padding from the outer radius keeps the row's corner CONCENTRIC with the
+    /// menu's, the same relationship Apple's own nested rounded-rect chrome uses.
+    private var outerRadius: CGFloat { DesignTokens.Radius.large - 4 }
+    private var innerRadius: CGFloat { 8 }
 
     var body: some View {
         Button(action: action) {
@@ -2446,7 +2460,15 @@ private struct DropdownMenuRow: View {
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover * 0.4 : 0))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: isFirst ? outerRadius : innerRadius,
+                    bottomLeadingRadius: isLast ? outerRadius : innerRadius,
+                    bottomTrailingRadius: isLast ? outerRadius : innerRadius,
+                    topTrailingRadius: isFirst ? outerRadius : innerRadius,
+                    style: .continuous
+                )
+            )
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -2831,8 +2853,8 @@ struct DropdownField: View {
     private var menu: some View {
         DropdownMenuChrome {
             VStack(alignment: .leading, spacing: 1) {
-                ForEach(options) { option in
-                    DropdownMenuRow(option: option) {
+                ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                    DropdownMenuRow(option: option, isFirst: index == 0, isLast: index == options.count - 1) {
                         option.action()
                         withAnimation(.spring(response: 0.2)) { openID = nil }
                     }

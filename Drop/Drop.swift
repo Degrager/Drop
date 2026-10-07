@@ -9247,7 +9247,13 @@ struct FlowLayout: Layout {
 /// re-encode counterpart was removed -- the per-chip dot already distinguishes native
 /// from re-encoding options, so a second line spelling that out here was redundant.
 func nativeLegend(positiveLabel: String = "Native") -> some View {
-    HStack(spacing: 4) {
+    // .firstTextBaseline, not the default .center -- centering by bounding box put
+    // the dot slightly off from the text's own baseline (reported live, Convert's
+    // "Original" indicator: "should be level with the text"). Same fix as
+    // DropdownField/DropdownBitrateField's own label+subtext row for the identical
+    // reason: a non-text view's "baseline" under this alignment is its own vertical
+    // center, which is what actually reads as level with a short label's text.
+    HStack(alignment: .firstTextBaseline, spacing: 4) {
         Circle().fill(DesignTokens.Accent.success).frame(width: 5, height: 5)
         Text(positiveLabel).font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
             .lineLimit(1).fixedSize()

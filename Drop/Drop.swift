@@ -5635,6 +5635,14 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // no longer paints a draggable bar the user can visually
         // grab.
         window.titlebarAppearsTransparent = true
+        // Left at AppKit's default (.automatic) this draws a hairline under
+        // the title bar whenever the content below has scrolled -- on by
+        // the time any tab's list isn't pinned to the very top, gone once
+        // it is, which read as the divider randomly appearing/disappearing.
+        // Every page already carries its own glass top bar as part of its
+        // content, so this native one is pure redundant chrome -- off
+        // unconditionally instead of state-dependent.
+        window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
         // Disables macOS's window-state-restoration snapshot --
         // SwiftUI's WindowGroup opts into this by default, which

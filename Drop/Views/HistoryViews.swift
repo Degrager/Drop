@@ -234,7 +234,6 @@ struct HistoryRow: View {
     @ObservedObject var config: Config
     let onRemove: () -> Void
     let onRedownload: () -> Void
-    @State private var hovering = false
     @Environment(\.contentColumnWidth) private var columnWidth
     private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint }
 
@@ -399,15 +398,13 @@ struct HistoryRow: View {
             ZStack {
                 VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
                 Color.black.opacity(DesignTokens.Glass.blackTint)
-                Color.white.opacity(hovering ? DesignTokens.Interactive.fillHover : DesignTokens.Glass.whiteWash)
+                Color.white.opacity(DesignTokens.Glass.whiteWash)
                 DitherNoise(opacity: 0.04)
             }
             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous))
         )
         .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
-            .stroke(Color.white.opacity(hovering ? DesignTokens.Interactive.strokeHover : DesignTokens.Interactive.strokeRest), lineWidth: 0.5))
-        .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovering)
+            .stroke(Color.white.opacity(DesignTokens.Interactive.strokeRest), lineWidth: 0.5))
         .contextMenu {
             Button("Remove from History", role: .destructive, action: onRemove)
         }

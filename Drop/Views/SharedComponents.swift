@@ -2242,14 +2242,18 @@ private struct SegmentButton: View {
                             .font(.appMono(size: 11, weight: .semibold))
                     }
                     if let native = option.nativeBadge {
-                        // A rendered SF Symbol (via .font) has real baseline metrics and
-                        // aligns correctly under .firstTextBaseline, same as the optional
-                        // icon above -- a raw Circle() shape doesn't, so it fell back to
-                        // aligning by its bottom edge, reading as sitting low against the
-                        // label instead of level with it.
+                        // Confirmed live (not just by theory): an Image(systemName:) under
+                        // .firstTextBaseline, with no explicit baseline guide of its own,
+                        // falls back to VerticalAlignment.center -- so its CENTER lands on
+                        // the text's BASELINE, not on the text's cap-height middle. That
+                        // reads as the dot sitting low (center at the letter's bottom).
+                        // Shifting up by half the label's cap-height puts the dot's center
+                        // where a reader expects it: level with the middle of a capital
+                        // letter. (11.5pt semibold -- cap height ~8pt, half ~4pt.)
                         Image(systemName: "circle.fill")
                             .font(.system(size: 6))
                             .foregroundColor(native ? DesignTokens.Accent.success : DesignTokens.Accent.warning)
+                            .offset(y: -4)
                     }
                     Text(option.label)
                         .font(.appMono(size: 11.5, weight: .semibold))

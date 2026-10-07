@@ -6153,33 +6153,10 @@ struct ContentView: View {
                         mainPanel
                             .transition(.identity)
                     } else if activeTab == .history {
-                        HistoryView(history: manager.history, activeTab: $activeTab, urlText: $urlText, hasInvalidURLs: $hasInvalidURLs, linkPreviews: $linkPreviews, config: config, onAnalyze: { urls, ids in analyzeURL(urls: urls, ids: ids) }, onReconvert: { fileURL in
-                            // Treat Reconvert exactly like freshly dropping/importing the original
-                            // input file into the Convert tab — no stored snapshot reused, the file
-                            // is re-probed from scratch just like a first-time add.
-                            // Selecting the job matters: ConvertView's Analyze panel only
-                            // renders the SELECTED staged file, so appending without
-                            // selecting left Reconvert landing on an empty Convert tab.
-                            if let existing = convertStagingJobs.first(where: { $0.inputURL == fileURL }) {
-                                convertSelectedStagingID = existing.id
-                                activeTab = .convert
-                                return
-                            }
-                            guard !convertQueue.contains(where: { $0.inputURL == fileURL }) else {
-                                activeTab = .convert
-                                return
-                            }
-                            let job = ConvertJob(inputURL: fileURL)
-                            withAnimation(.spring(response: 0.35)) {
-                                convertStagingJobs.append(job)
-                                convertSelectedStagingID = job.id
-                            }
-                            activeTab = .convert
-                        })
-                        // History caps its own header and list at the shared content
-                        // column (see HistoryView), each following or pinned to the
-                        // sidebar as it should.
-                        .transition(.identity)
+                        // Real content is historyOverlay below, kept permanently
+                        // mounted instead of created fresh here -- see its comment
+                        // for why.
+                        Color.clear
                     } else if activeTab == .convert {
                         ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
                             .transition(.identity)
@@ -6207,6 +6184,50 @@ struct ContentView: View {
                 // spawns, thumbnail loads and the rest of the subtree keep
                 // their own animations.
                 .transaction(value: activeTab) { $0.animation = nil }
+
+                // History, like Dev below, is kept permanently mounted instead of
+                // created fresh on every switch (the if/else-if pattern above).
+                // Mounting it fresh tore the whole row list down and rebuilt it
+                // from scratch each time, which meant every visible row replayed
+                // its own .glassBar insertion transition -- a LIVE BACKDROP BLUR
+                // recomputed every frame for 0.24s (see the GPU-cost comment on
+                // AnyTransition above) -- on EVERY switch to this tab, not just
+                // when a row was actually newly added. With a non-trivial history
+                // list, several rows' blurs animating in at once is real
+                // compositor work, and read as "a bit of a delay" switching here
+                // specifically (Download/Convert are usually near-empty, so they
+                // had nothing comparable to replay). Keeping it mounted means
+                // each row's insertion transition plays once, when the row is
+                // actually added to history, never again just from tab-switching.
+                ActiveOnlyLayout(isActive: activeTab == .history) {
+                    HistoryView(history: manager.history, activeTab: $activeTab, urlText: $urlText, hasInvalidURLs: $hasInvalidURLs, linkPreviews: $linkPreviews, config: config, onAnalyze: { urls, ids in analyzeURL(urls: urls, ids: ids) }, onReconvert: { fileURL in
+                        // Treat Reconvert exactly like freshly dropping/importing the original
+                        // input file into the Convert tab — no stored snapshot reused, the file
+                        // is re-probed from scratch just like a first-time add.
+                        // Selecting the job matters: ConvertView's Analyze panel only
+                        // renders the SELECTED staged file, so appending without
+                        // selecting left Reconvert landing on an empty Convert tab.
+                        if let existing = convertStagingJobs.first(where: { $0.inputURL == fileURL }) {
+                            convertSelectedStagingID = existing.id
+                            activeTab = .convert
+                            return
+                        }
+                        guard !convertQueue.contains(where: { $0.inputURL == fileURL }) else {
+                            activeTab = .convert
+                            return
+                        }
+                        let job = ConvertJob(inputURL: fileURL)
+                        withAnimation(.spring(response: 0.35)) {
+                            convertStagingJobs.append(job)
+                            convertSelectedStagingID = job.id
+                        }
+                        activeTab = .convert
+                    })
+                    .transaction(value: activeTab) { $0.animation = nil }
+                }
+                    .opacity(activeTab == .history ? 1 : 0)
+                    .allowsHitTesting(activeTab == .history)
+                    .transaction(value: activeTab) { $0.animation = nil }
 
                 // Dev tab, unlike the others above, keeps essentially
                 // all of its own state locally (pipeline, typed-in

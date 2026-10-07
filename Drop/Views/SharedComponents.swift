@@ -2494,33 +2494,23 @@ private struct DropdownMenuChrome<Content: View>: View {
 /// hairline rim, two stacked shadows for real depth against the black card
 /// behind it.
 ///
-/// Starts with the live VisualEffectBlur swapped for a plain solid color and
-/// switches to the real material ~0.25s after mounting (matching the pop-in's
-/// own spring response) -- established fix, same mechanism as GlassCard's own
-/// `simplified` (a418821, queue-row drag ghosting): VisualEffectBlur with
-/// .behindWindow blending continuously RE-SAMPLES whatever is actually behind
-/// the window at its CURRENT on-screen position. A popover's position/scale
-/// are both changing every frame during its `.focus(blur:scale:anchor:)`
-/// pop-in -- fast enough to outrun that live resampling, which can blend in
-/// pixels from whatever sits nearby (reported live: a neighboring field's own
-/// caption/value, e.g. "BITRATE" and its subtext, bleeding into a RESOLUTION
-/// menu while it was still scaling/blurring in). A plain solid color has
-/// nothing to resample, so it can't produce that blend -- visually
-/// near-identical anyway, since blackTint is already heavy enough that the
-/// live blur's own contribution underneath it is small. Reset is automatic:
-/// this modifier's own @State re-initializes to true every time, since both
-/// call sites key their popover's content to a fresh `.id()` on open.
+/// Used to start as a plain solid color and swap to this live VisualEffectBlur
+/// ~0.5s after mounting, to survive a fast scale/position-changing pop-in
+/// transition that both popovers had at the time (VisualEffectBlur's
+/// .behindWindow blending re-samples whatever's behind the window at its
+/// CURRENT position, live, which that transition's geometry changes could
+/// outrun and bleed neighboring content into). That pop-in was removed
+/// entirely in favor of a plain instant appearance (4a0a8d9) -- with no more
+/// fast geometry change to survive, the solid-to-blur swap was pure leftover
+/// baggage, and became its own visible glitch on its own: reported live, "the
+/// menu goes from black to translucent after a second." Removed; this just
+/// uses the live material from the first frame now.
 struct PopoverGlassChrome: ViewModifier {
-    @State private var simplified = true
     func body(content: Content) -> some View {
         content
             .background(
                 ZStack {
-                    if simplified {
-                        Color(white: 0.1)
-                    } else {
-                        VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
-                    }
+                    VisualEffectBlur(material: DesignTokens.Glass.material, blendingMode: .behindWindow)
                     Color.black.opacity(DesignTokens.Glass.blackTint)
                 }
             )
@@ -2529,20 +2519,6 @@ struct PopoverGlassChrome: ViewModifier {
                 .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
             .shadow(color: .black.opacity(0.5), radius: 6, y: 3)
             .shadow(color: .black.opacity(0.6), radius: 24, y: 12)
-            .onAppear {
-                // Deliberately longer than the pop-in's own nominal spring response
-                // (0.25s) -- a spring's `response` is a time constant, not a hard
-                // settling deadline; with the default dampingFraction it visibly
-                // keeps interpolating scale/blur somewhat past that point. Flipping
-                // back to the live VisualEffectBlur before the geometry has
-                // genuinely stopped changing re-enables the exact resampling-lag
-                // bleed this exists to prevent (confirmed live: still bled through
-                // at 0.25s). Staying in the solid-color fallback a little longer
-                // than strictly necessary costs nothing visually (see this
-                // modifier's own doc comment on why); flipping back too early
-                // brings the bug back.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { simplified = false }
-            }
     }
 }
 

@@ -2643,30 +2643,22 @@ struct ConvertPreviewCard: View {
     /// unlike the codec/format rows, this subtext does NOT mean "unchanged" (see
     /// SegmentOption.isSourceDefault, which only "Same as Source" sets).
     private var resolutionOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledShortSide == nil, subtext: job.mediaInfo?.resolution, isSourceDefault: true) {
+        // Was job.mediaInfo?.resolution (the raw "3840x2160" dimension string) -- reported live
+        // as wanting the same quality-tier subtext every other option already gets ("4K Ultra
+        // HD", not the dimensions themselves). sourceResolutionMarketingName buckets by >=
+        // threshold (the source's real height is rarely an EXACT ladder value the way the
+        // explicit options below always are), falling back to the raw dimension string only for
+        // a source so small no common name applies.
+        let sameAsSourceSubtext = job.sourceShortSide.flatMap(sourceResolutionMarketingName) ?? job.mediaInfo?.resolution
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledShortSide == nil, subtext: sameAsSourceSubtext, isSourceDefault: true) {
             withAnimation(.spring(response: 0.25)) { job.chooseResolution(nil) }
         }]
         options += job.availableResolutions.map { side in
-            SegmentOption(id: "\(side)", label: "\(side)p", isSelected: job.scaledShortSide == side, subtext: Self.resolutionMarketingName(side)) {
+            SegmentOption(id: "\(side)", label: "\(side)p", isSelected: job.scaledShortSide == side, subtext: resolutionMarketingName(forMaxHeight: side)) {
                 withAnimation(.spring(response: 0.25)) { job.chooseResolution(side) }
             }
         }
         return options
-    }
-
-    /// The common name for one of the fixed ladder sizes in ConvertJob.availableResolutions
-    /// (2160/1440/1080/720/480) -- "2K"/"4K" only where that nickname is unambiguous; 1080 and
-    /// below use their well-known name alone, the way Download's own quality ladder is described
-    /// everywhere else (Netflix, YouTube, Apple).
-    private static func resolutionMarketingName(_ shortSide: Int) -> String? {
-        switch shortSide {
-        case 2160: return "4K Ultra HD"
-        case 1440: return "2K Quad HD"
-        case 1080: return "Full HD"
-        case 720: return "HD"
-        case 480: return "SD"
-        default: return nil
-        }
     }
 
     /// VIDEO BITRATE -- a stepped slider: Auto (today's behaviour, the encoder's own quality target or

@@ -299,7 +299,7 @@ enum VideoFormat: String, CaseIterable, Identifiable {
 /// user who already knows that and would rather keep the untouched original (e.g. it's headed
 /// to an app that decodes AV1/VP9 fine, or they just don't want ANY re-encode loss).
 enum ReencodeCodec: String, CaseIterable, Identifiable {
-    case h264, hevc, off
+    case off, h264, hevc
     var id: String { rawValue }
     var label: String {
         switch self {

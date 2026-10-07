@@ -8005,10 +8005,8 @@ struct ContentView: View {
                 if dl.fixAction != .none {
                     Button(action: {
                         manager.performFix(for: dl, config: config) {
-                            let panel = NSOpenPanel()
-                            panel.canChooseFiles = false; panel.canChooseDirectories = true
-                            panel.canCreateDirectories = true
-                            panel.allowsMultipleSelection = false; panel.prompt = "Select Folder"
+                            let panel = CachedPanels.folderPicker
+                            panel.prompt = "Select Folder"
                             // .begin (async), not .runModal() (blocking) -- see
                             // FolderActionButtons' identical fix for why.
                             panel.begin { response in

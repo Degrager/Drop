@@ -5531,6 +5531,9 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared: DropAppDelegate!
     /// The status item, its panel and its right-click menu (MenuBarPanel.swift).
     private let menuBar = MenuBarController()
+    /// Keeps titlebarSeparatorStyle pinned to .none -- see configureWindow's
+    /// comment on why a one-time assignment doesn't hold.
+    private var titlebarSeparatorObservation: NSKeyValueObservation?
 
     override init() {
         super.init()
@@ -5640,9 +5643,19 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // the time any tab's list isn't pinned to the very top, gone once
         // it is, which read as the divider randomly appearing/disappearing.
         // Every page already carries its own glass top bar as part of its
-        // content, so this native one is pure redundant chrome -- off
-        // unconditionally instead of state-dependent.
+        // content, so this native one is pure redundant chrome.
+        //
+        // Setting it once here isn't enough: AppKit re-derives this property
+        // live off the content's own scroll position (the same mechanism
+        // .automatic uses), so it silently flips back to .line the next time
+        // a ScrollView underneath scrolls -- confirmed live, reported back as
+        // "that divider line is back" after a one-time `= .none` here. KVO
+        // on the property itself snaps it back to .none every time AppKit
+        // tries to reassert it, instead of fighting that per scroll event.
         window.titlebarSeparatorStyle = .none
+        titlebarSeparatorObservation = window.observe(\.titlebarSeparatorStyle, options: [.new]) { window, change in
+            if change.newValue != .none { window.titlebarSeparatorStyle = .none }
+        }
         window.isMovableByWindowBackground = true
         // Disables macOS's window-state-restoration snapshot --
         // SwiftUI's WindowGroup opts into this by default, which

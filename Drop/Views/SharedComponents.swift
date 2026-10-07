@@ -2253,7 +2253,7 @@ private struct SegmentButton: View {
                         Image(systemName: "circle.fill")
                             .font(.system(size: 6))
                             .foregroundColor(native ? DesignTokens.Accent.success : DesignTokens.Accent.warning)
-                            .offset(y: -4)
+                            .offset(y: -2)
                     }
                     Text(option.label)
                         .font(.appMono(size: 11.5, weight: .semibold))

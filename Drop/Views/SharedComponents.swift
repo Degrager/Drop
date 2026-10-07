@@ -2980,41 +2980,6 @@ struct FieldCapsule<Content: View>: View {
     }
 }
 
-/// Reused NSOpenPanel instances, cached per purpose instead of constructed fresh on
-/// every click -- aims to shave off some of the panel's own construction cost (building
-/// its file-browser/sidebar/bookmarks UI), which is inherent to AppKit and otherwise paid
-/// again on every single open (reported live: "there is delay when i click the browse
-/// buttons... could it be more instant"; confirmed first that nothing in Drop's own code
-/// was adding an artificial delay, and that Drop isn't sandboxed so there's no Powerbox/
-/// XPC service overhead either -- this targets the one remaining, genuine cost). A plain
-/// enum of static lets, not @State on some view: the panel is a system resource
-/// conceptually independent of any one view's identity, and a view's @State would reset
-/// if that view were ever removed and re-added (a card leaving then re-entering a list),
-/// silently losing the cached instance and the optimization along with it. Safe to reuse
-/// across repeated presentations -- NSOpenPanel is an ordinary NSWindow-like object, and
-/// nothing here ever has two `.begin()` calls overlapping on the same instance (a new
-/// presentation only ever starts after the previous one's completion handler already
-/// ran). Per-call properties that genuinely vary (directoryURL, prompt text) are still
-/// set fresh on every open -- only the instance itself, and the expensive setup it did
-/// once, are reused.
-enum CachedPanels {
-    static let fileImport: NSOpenPanel = {
-        let p = NSOpenPanel()
-        p.canChooseFiles = true
-        p.canChooseDirectories = false
-        p.allowsMultipleSelection = true
-        return p
-    }()
-    static let folderPicker: NSOpenPanel = {
-        let p = NSOpenPanel()
-        p.canChooseFiles = false
-        p.canChooseDirectories = true
-        p.canCreateDirectories = true
-        p.allowsMultipleSelection = false
-        return p
-    }()
-}
-
 /// Browse and Reveal, side by side next to a folder capsule: the same icon
 /// buttons as everywhere else, each with a hover caption saying what it does.
 struct FolderActionButtons: View {
@@ -3030,7 +2995,11 @@ struct FolderActionButtons: View {
             // (reported live: "same height as the directory bar"). `size` stays 13 so the
             // glyph and hover caption keep their original size instead of scaling up too.
             HoverIconButton(icon: "folder", size: 13, boxSize: DropGrid.controlHeight, help: "Choose folder", expandable: true) {
-                let panel = CachedPanels.folderPicker
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = false
+                panel.canChooseDirectories = true
+                panel.canCreateDirectories = true
+                panel.allowsMultipleSelection = false
                 panel.prompt = "Select"
                 panel.directoryURL = URL(fileURLWithPath: path)
                 // .begin (async), not .runModal() (blocking) -- a modal session entered

@@ -9247,13 +9247,16 @@ struct FlowLayout: Layout {
 /// re-encode counterpart was removed -- the per-chip dot already distinguishes native
 /// from re-encoding options, so a second line spelling that out here was redundant.
 func nativeLegend(positiveLabel: String = "Native") -> some View {
-    // .firstTextBaseline, not the default .center -- centering by bounding box put
-    // the dot slightly off from the text's own baseline (reported live, Convert's
-    // "Original" indicator: "should be level with the text"). Same fix as
-    // DropdownField/DropdownBitrateField's own label+subtext row for the identical
-    // reason: a non-text view's "baseline" under this alignment is its own vertical
-    // center, which is what actually reads as level with a short label's text.
-    HStack(alignment: .firstTextBaseline, spacing: 4) {
+    // Plain .center (the default -- no explicit alignment), NOT .firstTextBaseline.
+    // A `Circle()` has no real baseline of its own, so under .firstTextBaseline
+    // SwiftUI falls back to aligning its BOTTOM edge to the text's baseline, not
+    // its center -- confirmed wrong live: "the small dot is aligned to the bottom
+    // or the baseline, instead of the middle of the text". .firstTextBaseline only
+    // reads right for a view that provides its own correct baseline guide (like an
+    // SF Symbol Image, see FieldCaption's identical-looking but NOT identical case)
+    // -- a bare shape needs plain .center instead, which centers each child within
+    // the row's shared height, i.e. the middle, directly.
+    HStack(spacing: 4) {
         Circle().fill(DesignTokens.Accent.success).frame(width: 5, height: 5)
         Text(positiveLabel).font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
             .lineLimit(1).fixedSize()

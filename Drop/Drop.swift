@@ -9247,17 +9247,21 @@ struct FlowLayout: Layout {
 /// re-encode counterpart was removed -- the per-chip dot already distinguishes native
 /// from re-encoding options, so a second line spelling that out here was redundant.
 func nativeLegend(positiveLabel: String = "Native") -> some View {
-    // Plain .center (the default -- no explicit alignment), NOT .firstTextBaseline.
-    // A `Circle()` has no real baseline of its own, so under .firstTextBaseline
-    // SwiftUI falls back to aligning its BOTTOM edge to the text's baseline, not
-    // its center -- confirmed wrong live: "the small dot is aligned to the bottom
-    // or the baseline, instead of the middle of the text". .firstTextBaseline only
-    // reads right for a view that provides its own correct baseline guide (like an
-    // SF Symbol Image, see FieldCaption's identical-looking but NOT identical case)
-    // -- a bare shape needs plain .center instead, which centers each child within
-    // the row's shared height, i.e. the middle, directly.
-    HStack(spacing: 4) {
-        Circle().fill(DesignTokens.Accent.success).frame(width: 5, height: 5)
+    // .firstTextBaseline + a rendered "circle.fill" SF Symbol, not a raw Circle() shape
+    // -- this exact problem (and fix) already exists in this file, see SegmentButton's
+    // own nativeBadge dot and its identical comment. Neither plain .center nor
+    // .firstTextBaseline over a bare Circle() read right (both tried here first, both
+    // confirmed wrong live) because a Circle() shape has no real baseline metrics at
+    // all -- under .center it's centered against the row's full line-height box
+    // (including space reserved for a descender the label may not even have), and
+    // under .firstTextBaseline it falls back to aligning its bottom edge to the text's
+    // baseline. A rendered SF Symbol glyph (even this simple filled-circle one) DOES
+    // carry real baseline metrics and aligns correctly under .firstTextBaseline, same
+    // as any icon+label pairing elsewhere in this file.
+    HStack(alignment: .firstTextBaseline, spacing: 4) {
+        Image(systemName: "circle.fill")
+            .font(.system(size: 6))
+            .foregroundColor(DesignTokens.Accent.success)
         Text(positiveLabel).font(.appMono(size: 8.5)).foregroundColor(.white.opacity(DesignTokens.Text.disabled))
             .lineLimit(1).fixedSize()
     }

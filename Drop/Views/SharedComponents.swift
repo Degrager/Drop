@@ -607,7 +607,7 @@ struct CardFacade: View {
         RoundedRectangle(cornerRadius: 3, style: .continuous)
             .fill(Color.white.opacity(0.07))
             .frame(width: 52, height: 8)
-            .frame(width: CardMetrics.statusWidth - CardMetrics.buttonBoxSize, alignment: .trailing)
+            .frame(width: CardMetrics.statusWidth - CardMetrics.buttonBoxWidth, alignment: .trailing)
     }
 
     /// The only piece that stretches with the card while frozen: one plain rounded shape per

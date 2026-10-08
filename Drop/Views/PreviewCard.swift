@@ -601,13 +601,17 @@ struct PreviewCard<Settings: View>: View {
         }
     }
 
-    /// Same question as `primaryTrailingControl`, minus its `!isAnalyzing` gate -- whether this
-    /// card is EVER going to show that button, regardless of whether it's showing one right now.
-    /// `trailingAreaWidth` reserves room from this instead of `primaryTrailingControl`'s live
-    /// value specifically so that width never has to change the instant analyzing finishes (see
-    /// its own doc comment for why that matters).
+    /// Mirrors `primaryTrailingControl` exactly (same two branches, same `!isAnalyzing` gate on
+    /// the collapse-chevron fallback) -- `trailingAreaWidth` reserves room from this so the
+    /// button row's width only ever changes alongside an actual visible button appearing or
+    /// disappearing, never ahead of one. It used to drop the `!isAnalyzing` gate on the theory
+    /// that this kept the width from changing "the instant analyzing finishes" -- but Analyzing
+    /// and Downloading both show just the one spinner/cancel button, same as each other, so that
+    /// gate costs nothing at the Queued<->Downloading boundary this reservation exists to
+    /// protect. Dropping it instead reserved a second slot nothing was filling for the ENTIRE
+    /// Analyzing phase, which read live as "too much gap between the divider and the buttons."
     private var primaryTrailingControlCapable: Bool {
-        primaryControl != nil || (collapseButtonInHeader && isExpanded != nil && !collapseLocked)
+        primaryControl != nil || (!isAnalyzing && collapseButtonInHeader && isExpanded != nil && !collapseLocked)
     }
 
     private func controlButton(_ control: CardControl) -> some View {

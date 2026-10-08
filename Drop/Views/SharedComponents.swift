@@ -601,12 +601,13 @@ struct CardFacade: View {
         .frame(width: CardMetrics.statusWidth, alignment: .trailing)
     }
 
-    /// The outcome label of a finished download, in the room the Reveal button leaves it.
+    /// The outcome label of a finished download, beside the now-stacked button column -- same
+    /// width PreviewCard's own statusSlotWidth reserves for the real card.
     private var statusLabel: some View {
         RoundedRectangle(cornerRadius: 3, style: .continuous)
             .fill(Color.white.opacity(0.07))
             .frame(width: 52, height: 8)
-            .frame(width: CardMetrics.statusWidth - (metrics.buttonCount >= 3 ? CardMetrics.buttonSlot : 0), alignment: .trailing)
+            .frame(width: CardMetrics.statusWidth - CardMetrics.buttonBoxSize, alignment: .trailing)
     }
 
     /// The only piece that stretches with the card while frozen: one plain rounded shape per

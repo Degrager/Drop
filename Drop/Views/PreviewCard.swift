@@ -24,8 +24,11 @@ enum CardMetrics {
     /// the download has finished, for the outcome label plus the Reveal button that joins the
     /// buttons then: the total is the same either way, so the title never has to give way.
     static let statusWidth: CGFloat = 128
-    /// One header button (28pt) and the 12pt gap that follows it.
-    static let buttonSlot: CGFloat = 40
+    /// One header button's own rendered box -- HoverIconButton's default `size + 12` at the
+    /// header's `size: 16`. trailingArea's buttons stack in a column exactly this wide.
+    static let buttonBoxSize: CGFloat = 28
+    /// Vertical gap between trailingArea's two stacked buttons.
+    static let buttonStackGap: CGFloat = 4
 }
 
 /// A control in a card's header, in the button slot beside the remove button. The same
@@ -147,18 +150,8 @@ struct PreviewCard<Settings: View>: View {
     /// nothing that was in the column moves.
     var statusLabel: AnyView? = nil
     /// Takes the collapse button's slot (a download's redownload / retry, once it has ended).
+    /// Stacked above Remove/Cancel in trailingArea -- see its own doc comment.
     var primaryControl: CardControl? = nil
-    /// A control to the left of the primary one (Reveal in Finder, once a download is done).
-    var secondaryControl: CardControl? = nil
-    /// True whenever this card's secondaryControl is capable of eventually appearing (a real
-    /// download exists, even before it has reached .done) -- used instead of secondaryControl's
-    /// own live presence so statusSlotWidth (below) doesn't change size at the exact moment
-    /// Reveal in Finder appears. Mirrors primaryTrailingControlCapable's own reasoning: a status
-    /// box that shrinks in lockstep with the button showing up is what caused the progress
-    /// indicator and the newly-appeared buttons to overlap at the downloading -> done transition
-    /// (reported live), the same bug class primaryTrailingControlCapable already exists to avoid
-    /// for the analyzing -> analyzed transition.
-    var secondaryControlCapable: Bool = false
     /// When set, the red Remove button becomes an orange Cancel running this (a download that
     /// is still in flight) -- same one-button swap as CompletedCard.removeOrCancelButton, so a
     /// running job never shows two buttons (Cancel and Remove) at once for the same action.
@@ -321,31 +314,30 @@ struct PreviewCard<Settings: View>: View {
     /// Buttons on the header's trailing edge, for the resize facade.
     private var buttonCount: Int {
         if isAnalyzing { return 1 }
-        return (secondaryControl != nil ? 1 : 0) + (primaryTrailingControl != nil ? 1 : 0) + 1
+        return (primaryTrailingControl != nil ? 1 : 0) + 1
     }
 
-    /// The room the status slot takes: what the progress column needs, less whatever of the
-    /// trailing buttons is persistent -- secondaryControl and primaryTrailingControl, both
-    /// counted from their CAPABILITY to appear, not only once they actually have (see
-    /// secondaryControlCapable's and primaryTrailingControlCapable's own doc comments).
+    /// The room the status slot takes: what the progress column needs, less the single fixed-
+    /// width button column beside it (buttons stack vertically now -- see trailingArea -- so
+    /// that column is always exactly one button wide, never two side by side).
     private var statusSlotWidth: CGFloat {
-        CardMetrics.statusWidth
-            - (secondaryControlCapable ? CardMetrics.buttonSlot : 0)
-            - (primaryTrailingControlCapable ? CardMetrics.buttonSlot : 0)
+        CardMetrics.statusWidth - CardMetrics.buttonBoxSize
     }
 
-    /// The other half of the same budget: statusSlotWidth above only kept the status slot's OWN
-    /// width from changing the instant a button appeared -- it never stopped trailingArea's
-    /// width from changing, so the whole right-side group (status slot + buttons) still grew or
-    /// shrank, and so visibly SHIFTED, whenever Reveal/Redownload actually joined the remove
-    /// button (reported live: "they still move according to the buttons next it that appear and
-    /// disappear"). Same CAPABILITY booleans as statusSlotWidth -- not secondaryControl/
-    /// primaryTrailingControl's live presence -- so this box is exactly as wide while a button is
-    /// still capable-but-not-yet-visible as it is once the button actually renders inside it.
-    private var trailingAreaWidth: CGFloat {
-        CardMetrics.buttonSlot // remove/cancel (or the analyzing spinner), always present
-            + (secondaryControlCapable ? CardMetrics.buttonSlot : 0)
-            + (primaryTrailingControlCapable ? CardMetrics.buttonSlot : 0)
+    /// trailingArea's buttons stack vertically in ONE fixed-width column, so unlike the old
+    /// side-by-side layout its width never depends on how many buttons are actually present --
+    /// only its HEIGHT does, and that's reserved from primaryTrailingControlCapable rather than
+    /// primaryTrailingControl's live presence, same reasoning as statusSlotWidth always had: a
+    /// box that grows in lockstep with a button appearing is what caused the progress indicator
+    /// and the buttons to overlap before (reported live, both at the downloading -> done
+    /// transition and again as "they still move according to the buttons next it that appear and
+    /// disappear"). Reserving the full two-button height up front means the stack is exactly as
+    /// tall while the primary button is still capable-but-not-yet-visible (during analyzing) as
+    /// it is once that button actually renders inside it.
+    private var trailingAreaHeight: CGFloat {
+        primaryTrailingControlCapable
+            ? CardMetrics.buttonBoxSize * 2 + CardMetrics.buttonStackGap
+            : CardMetrics.buttonBoxSize
     }
 
     // MARK: Shared header
@@ -597,24 +589,20 @@ struct PreviewCard<Settings: View>: View {
         HoverIconButton(icon: control.icon, size: 16, color: control.color, help: control.help, expandable: true) { control.action() }
     }
 
-    /// The header's buttons, each in its own place: [secondary] [primary] [remove], remove
-    /// always last. Every one is the same 28pt capsule, and the primary one stays put while its
-    /// icon changes (collapse -> cancel -> redownload). The capability-gated group is pinned to
-    /// trailingAreaWidth (see its own doc comment) so Reveal/Redownload joining Remove doesn't
-    /// shift the status slot before it -- headerAccessory (Convert's file switcher, arbitrary
-    /// width, not gated by any download-progress capability) stays outside that fixed box,
-    /// naturally sized, same as before.
+    /// The header's buttons, stacked in one column instead of side by side -- there are at most
+    /// two now that Reveal in Finder is gone (Remove/Cancel and, below it, the collapse-options-
+    /// or-Redownload/Retry control), so a column reads as tighter than a row. Remove/Cancel is
+    /// always on top, by request, with the primary control (when there is one) underneath it --
+    /// NOT the other way around, so the one button that's always present never changes position
+    /// as the one below it comes and goes. The column is pinned to trailingAreaHeight (see its
+    /// own doc comment) so that second button joining doesn't shift the status slot beside it.
+    /// headerAccessory (Convert's file switcher, unrelated to any of this) stays outside the
+    /// column, naturally sized, same as before.
     @ViewBuilder
     private var trailingArea: some View {
         HStack(spacing: 12) {
             if let headerAccessory { headerAccessory }
-            HStack(spacing: 12) {
-                if let secondaryControl {
-                    controlButton(secondaryControl).transition(.blurIn)
-                }
-                if let primary = primaryTrailingControl {
-                    controlButton(primary).transition(.blurIn)
-                }
+            VStack(spacing: CardMetrics.buttonStackGap) {
                 if isAnalyzing {
                     // Spinner -> X on hover, in the remove button's own slot.
                     SkeletonCancelButton(action: onCancelAnalyze).transition(.blurIn)
@@ -629,8 +617,11 @@ struct PreviewCard<Settings: View>: View {
                     }
                     .transition(.blurIn)
                 }
+                if let primary = primaryTrailingControl {
+                    controlButton(primary).transition(.blurIn)
+                }
             }
-            .frame(width: trailingAreaWidth, alignment: .trailing)
+            .frame(width: CardMetrics.buttonBoxSize, height: trailingAreaHeight, alignment: .top)
         }
     }
 }

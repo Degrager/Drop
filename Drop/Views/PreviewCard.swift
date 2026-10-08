@@ -20,17 +20,29 @@ enum CardMetrics {
     /// Height of the IN / OUT metadata capsule (two rows). The analyzing placeholder is drawn
     /// at the same height, so a card keeps its size as it resolves.
     static let metaCapsuleHeight: CGFloat = 41
-    /// Room between a download card's text and its buttons for the progress column, and, once
-    /// the download has finished, for the outcome label that joins the primary button then: the
-    /// total is the same either way, so the title never has to give way.
+    /// CompletedCard's own status+buttons group width (StatusBesideButtons, a History row) --
+    /// unrelated to PreviewCard's own status card below; a separate component with its own
+    /// layout, not part of this round's fix.
     static let statusWidth: CGFloat = 128
-    /// One header button (28pt) and the 12pt gap that follows it -- buttons sit side by side
-    /// again (see trailingArea's own doc comment for why the stacked version was reverted).
-    static let buttonSlot: CGFloat = 40
+    /// The status card's own fixed CONTENT width -- a genuine constant, not derived from button
+    /// capability. It used to be `statusWidth - (capable ? buttonSlot : 0)`, which meant the
+    /// card's own width changed the instant a button's capability flipped (entering/leaving
+    /// Downloading, which has no primary button) -- reported live as "the card expands to the
+    /// right" at exactly that transition. Sized to fit "Cancelled" (the longest status word)
+    /// comfortably regardless of state.
+    static let statusCardContentWidth: CGFloat = 92
     /// The status card's own fixed CONTENT height (before its padding) -- sized for the tallest
     /// state (Downloading: icon+label, then a percentage+bar row below) so the card never
     /// resizes as the status changes. Every shorter state just has empty room below it.
     static let statusCardContentHeight: CGFloat = 32
+    /// One header button (28pt) and the 12pt gap that follows it -- buttons sit side by side
+    /// again (see trailingArea's own doc comment for why the stacked version was reverted).
+    /// trailingArea reserves room for up to two of these from CAPABILITY (primaryTrailingControl
+    /// might not be live yet, e.g. during Downloading, which has none) rather than live count --
+    /// without that, the button row's own width changed exactly when the status card's width
+    /// used to, compounding the same "card expands" bug from a second direction (the divider
+    /// position depends on where trailingArea starts, which depends on its own width).
+    static let buttonSlot: CGFloat = 40
 }
 
 /// A control in a card's header, in the button slot beside the remove button. The same
@@ -319,16 +331,14 @@ struct PreviewCard<Settings: View>: View {
         return (primaryTrailingControl != nil ? 1 : 0) + 1
     }
 
-    /// The room the status slot takes: what the progress column needs, less whatever of the
-    /// trailing buttons is persistent -- primaryTrailingControl, counted from its CAPABILITY to
-    /// appear, not only once it actually has (see primaryTrailingControlCapable's own doc
-    /// comment). A box that shrinks in lockstep with a button appearing is what caused the
-    /// progress indicator and the buttons to overlap before (reported live) -- reserving the
-    /// room up front avoids that regardless of which direction the content inside this box is
-    /// anchored (see the .leading alignment below, which is what actually keeps the STATUS TEXT
-    /// itself from shifting -- this width reservation alone only kept the box's own edges still).
-    private var statusSlotWidth: CGFloat {
-        CardMetrics.statusWidth - (primaryTrailingControlCapable ? CardMetrics.buttonSlot : 0)
+    /// trailingArea's own reserved width -- up to two button slots, from CAPABILITY to appear
+    /// (primaryTrailingControl might not be live yet, e.g. during Downloading, which has none)
+    /// rather than live count. Without this, the button row's natural width changed exactly when
+    /// Downloading started/ended, which shifted the divider and status card beside it even once
+    /// their OWN widths were made static (reported live as "the card expands... before the
+    /// divider finishes moving").
+    private var trailingAreaWidth: CGFloat {
+        CardMetrics.buttonSlot + (primaryTrailingControlCapable ? CardMetrics.buttonSlot : 0)
     }
 
     // MARK: Shared header
@@ -517,49 +527,48 @@ struct PreviewCard<Settings: View>: View {
                 //
                 // A real bounded section, not just text floating in open space before the
                 // buttons (asked for explicitly: "have its own section") -- its own small card,
-                // same fill/border recipe DropdownField's rest state uses, rather than a divider
-                // on the leading side (removed per request; the card's own fill is boundary
-                // enough there, the divider stayed on the trailing side toward the buttons). The
-                // room it reserves is worked out from the primary button's CAPABILITY to appear,
-                // not whether it actually has yet (see statusSlotWidth's own doc comment) --
-                // without that, this box's own width would shrink the instant the button showed
-                // up, which is what let the two overlap at the analyzing -> analyzed transition
-                // (reported live).
+                // outline only (no fill -- same hairline weight as VerticalGlassDivider), rather
+                // than a divider on the leading side (removed per request; the card's own outline
+                // is boundary enough there, the divider stayed on the trailing side toward the
+                // buttons). Both this card's own width/height AND trailingArea's (see
+                // trailingAreaWidth) are genuine fixed constants now, not derived from live
+                // button state -- they used to each shrink/grow independently depending on
+                // whether Downloading's missing primary button was live or just capable, which
+                // compounded into the divider and this card visibly shifting/expanding at that
+                // exact transition (reported live, twice, from two different symptoms of the
+                // same root cause).
                 //
-                // Content is LEADING-aligned within the box, not trailing: a trailing alignment
-                // put each word's own START position at the mercy of its own length ("Queued" vs
-                // "Done" vs "Downloading" are all different widths), so the text visibly shifted
-                // left/right on every status change even though the BOX itself never moved --
-                // reported live as "the status section moves left or right," which traced back to
-                // this, not to the buttons beside it. Anchoring to the leading edge means every
-                // status word starts at the exact same point regardless of how long it is; only
-                // the TRAILING edge of the text (which nothing else is anchored to) varies now.
-                Color.clear
-                    .frame(width: statusSlotWidth, height: 1)
-                    .animation(nil, value: statusSlotWidth)
-                    .overlay(alignment: .leading) {
-                        ZStack(alignment: .topLeading) {
-                            if let queuedStatus { queuedStatus.transition(.blurIn) }
-                            if let inlineStatus { inlineStatus.transition(.blurIn) }
-                            if let statusLabel { statusLabel.transition(.blurIn) }
-                        }
-                        // A static box, not a tight wrap: Downloading (icon+label, then a
-                        // percentage+bar row below) is the tallest state, every other state is
-                        // one line -- without a fixed size the card itself grew/shrank with
-                        // whichever was showing. topLeading keeps the icon+label row pinned to
-                        // the same top-left corner regardless of whether anything's below it,
-                        // rather than the whole block recentering vertically depending on
-                        // content -- same "nothing should move" reasoning as the text alignment
-                        // above, just applied to the card's own size this time. The frame sets
-                        // the CONTENT size; padding is added on top of that fixed size, not
-                        // squeezed inside it, so the padded total is also always the same.
-                        .frame(width: statusSlotWidth - 20, height: CardMetrics.statusCardContentHeight, alignment: .topLeading)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        // Outline only, no fill -- same hairline weight as VerticalGlassDivider
-                        // (0.5pt, 12% white) rather than a filled field background.
-                        .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                            .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-                    }
+                // Content is CENTERED within the box (not leading-aligned top-to-bottom; the
+                // text itself is still leading-aligned horizontally -- see below): asked for
+                // explicitly ("middle aligned"). Swaps between states use statusSwap, not blurIn:
+                // the outgoing text moves up and fades out, and the incoming one doesn't start
+                // (also moving up, into place) until that exit has fully finished -- a real
+                // sequence, not a simultaneous crossfade (asked for explicitly: "the text should
+                // finish moving up before the swap happens").
+                //
+                // Horizontal alignment stays LEADING: a trailing alignment put each word's own
+                // START position at the mercy of its own length ("Queued" vs "Done" vs
+                // "Downloading" are all different widths), so the text visibly shifted left/right
+                // on every status change even though the BOX itself never moved -- reported live
+                // as "the status section moves left or right." Anchoring to the leading edge
+                // means every status word starts at the exact same point regardless of length;
+                // only the TRAILING edge of the text (nothing is anchored to it) varies now.
+                ZStack(alignment: .leading) {
+                    if let queuedStatus { queuedStatus.transition(.statusSwap()) }
+                    if let inlineStatus { inlineStatus.transition(.statusSwap()) }
+                    if let statusLabel { statusLabel.transition(.statusSwap()) }
+                }
+                // A static box, not a tight wrap: Downloading (icon+label, then a percentage+bar
+                // row below) is the tallest state, every other state is one line -- without a
+                // fixed size the card itself grew/shrank with whichever was showing. The frame
+                // sets the CONTENT size; padding is added on top of that fixed size, not squeezed
+                // inside it, so the padded total is also always the same -- see
+                // CardMetrics.statusCardContentWidth's own doc comment for why 92pt specifically
+                // (the old width truncated "Cancelled" to "Cancele…", reported live).
+                .frame(width: CardMetrics.statusCardContentWidth, height: CardMetrics.statusCardContentHeight, alignment: .center)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
                 VerticalGlassDivider()
             }
 
@@ -589,9 +598,9 @@ struct PreviewCard<Settings: View>: View {
 
     /// Same question as `primaryTrailingControl`, minus its `!isAnalyzing` gate -- whether this
     /// card is EVER going to show that button, regardless of whether it's showing one right now.
-    /// `statusSlotWidth` reserves room from this instead of `primaryTrailingControl`'s live value
-    /// specifically so that width never has to change the instant analyzing finishes (see its own
-    /// doc comment for why that matters).
+    /// `trailingAreaWidth` reserves room from this instead of `primaryTrailingControl`'s live
+    /// value specifically so that width never has to change the instant analyzing finishes (see
+    /// its own doc comment for why that matters).
     private var primaryTrailingControlCapable: Bool {
         primaryControl != nil || (collapseButtonInHeader && isExpanded != nil && !collapseLocked)
     }
@@ -603,8 +612,8 @@ struct PreviewCard<Settings: View>: View {
     /// The header's buttons, side by side: [primary] [remove], remove always last. Reverted back
     /// from a stacked column (see git history) -- that was chasing a problem it didn't actually
     /// own. It was built to stop the progress indicator shifting when a button appears/disappears,
-    /// but that's a WIDTH-reservation question (statusSlotWidth, below), orthogonal to whether the
-    /// buttons themselves sit in a row or a column; stacking never actually fixed the real
+    /// but that's a WIDTH-reservation question (trailingAreaWidth, below), orthogonal to whether
+    /// the buttons themselves sit in a row or a column; stacking never actually fixed the real
     /// mechanism (variable-width status TEXT being trailing-aligned -- see the .leading alignment
     /// above) and just cost a taller card plus a lot of size/shape tuning for nothing. Every one is
     /// the same 28pt capsule, and the primary one stays put while its icon changes
@@ -613,23 +622,30 @@ struct PreviewCard<Settings: View>: View {
     private var trailingArea: some View {
         HStack(spacing: 12) {
             if let headerAccessory { headerAccessory }
-            if let primary = primaryTrailingControl {
-                controlButton(primary).transition(.blurIn)
-            }
-            if isAnalyzing {
-                // Spinner -> X on hover, in the remove button's own slot.
-                SkeletonCancelButton(action: onCancelAnalyze).transition(.blurIn)
-            } else {
-                // Remove, or Cancel while the card's work is in flight -- one button either
-                // way, its icon swapping in place (see CompletedCard.removeOrCancelButton).
-                let cancelling = onCancel != nil
-                HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 16,
-                               color: cancelling ? .orange : .red, help: cancelling ? "Cancel" : "Remove",
-                               expandable: true) {
-                    if let onCancel { onCancel() } else { onRemove() }
+            // Only the two button slots get the fixed-width reservation below -- headerAccessory
+            // (Convert's file switcher, a different size entirely) sits outside it unconstrained;
+            // it never appears alongside a status card, so it was never part of the bug being
+            // fixed here.
+            HStack(spacing: 12) {
+                if let primary = primaryTrailingControl {
+                    controlButton(primary).transition(.blurIn)
                 }
-                .transition(.blurIn)
+                if isAnalyzing {
+                    // Spinner -> X on hover, in the remove button's own slot.
+                    SkeletonCancelButton(action: onCancelAnalyze).transition(.blurIn)
+                } else {
+                    // Remove, or Cancel while the card's work is in flight -- one button either
+                    // way, its icon swapping in place (see CompletedCard.removeOrCancelButton).
+                    let cancelling = onCancel != nil
+                    HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 16,
+                                   color: cancelling ? .orange : .red, help: cancelling ? "Cancel" : "Remove",
+                                   expandable: true) {
+                        if let onCancel { onCancel() } else { onRemove() }
+                    }
+                    .transition(.blurIn)
+                }
             }
+            .frame(width: trailingAreaWidth, alignment: .trailing)
         }
     }
 }

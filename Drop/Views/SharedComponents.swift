@@ -1437,11 +1437,11 @@ struct MetaCell: View {
                 Text("~").opacity(estimated ? 1 : 0)
                 Text(estimated ? String(raw.dropFirst()) : raw)
             }
-            .font(.appMono(size: 10.5, weight: .medium))
+            .font(.appMono(size: 12, weight: .medium))
             .foregroundColor(primary)
         } else {
             Text(raw)
-                .font(.appMono(size: 10.5, weight: .medium))
+                .font(.appMono(size: 12, weight: .medium))
                 .foregroundColor(primary)
         }
     }
@@ -1454,12 +1454,12 @@ struct MetaCell: View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             if let icon = chip.icon {
                 Image(systemName: icon)
-                    .font(.appMono(size: 10, weight: .bold))
+                    .font(.appMono(size: 11, weight: .bold))
                     .foregroundColor(chip.metaIconColor)
             }
             if !chip.label.isEmpty {
                 Text(chip.label)
-                    .font(.appMono(size: 10, weight: .bold))
+                    .font(.appMono(size: 11, weight: .bold))
                     .foregroundColor(chip.metaIconColor)
             }
             if chip.icon == "internaldrive", chip.icon2 == nil {
@@ -1467,12 +1467,12 @@ struct MetaCell: View {
                 sizeText(chip.value)
             } else {
                 text(chip.value, dimTail: chip.metaColumn == .audio)
-                    .font(.appMono(size: 10.5, weight: .medium))
+                    .font(.appMono(size: 12, weight: .medium))
                     .foregroundColor(primary)
             }
             if let icon2 = chip.icon2, let value2 = chip.value2 {
                 Image(systemName: icon2)
-                    .font(.appMono(size: 10, weight: .bold))
+                    .font(.appMono(size: 11, weight: .bold))
                     .foregroundColor(chip.metaIconColor)
                     .padding(.leading, 3)
                 sizeText(value2)
@@ -1684,10 +1684,10 @@ struct NoteContent: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Image(systemName: icon)
-                .font(.appMono(size: 9, weight: .semibold))
+                .font(.appMono(size: 10, weight: .semibold))
                 .foregroundColor(DesignTokens.Accent.warning)
             Text(text)
-                .font(.appMono(size: 10))
+                .font(.appMono(size: 11))
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1821,9 +1821,9 @@ struct PersistentCapsule: View {
             // doc comment for why that matters.
             HStack(spacing: 5) {
                 Image(systemName: "hourglass")
-                    .font(.appMono(size: 10, weight: .bold))
+                    .font(.appMono(size: 11, weight: .bold))
                 Text("Analyzing\u{2026}")
-                    .font(.appMono(size: 10.5, weight: .medium))
+                    .font(.appMono(size: 12, weight: .medium))
             }
             .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
             .lineLimit(1)
@@ -2038,7 +2038,7 @@ struct MetaLine: View {
 /// The thin vertical rule between two kinds of metadata.
 struct MetaDivider: View {
     var body: some View {
-        Rectangle().fill(Color.white.opacity(0.2)).frame(width: 0.75, height: 10)
+        Rectangle().fill(Color.white.opacity(0.2)).frame(width: 0.75, height: 11)
     }
 }
 

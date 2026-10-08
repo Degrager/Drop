@@ -511,24 +511,25 @@ struct PreviewCard<Settings: View>: View {
                 // vs. "in progress" spatial distinction -- a deliberate tradeoff, not an
                 // oversight.
                 //
-                // Flanked by its own dividers on both sides -- a real bounded section, not just
-                // text floating in open space before the buttons (asked for explicitly: "have
-                // its own section"). The room it reserves is worked out from the primary button's
-                // CAPABILITY to appear, not whether it actually has yet (see statusSlotWidth's own
-                // doc comment) -- without that, this box's own width would shrink the instant the
-                // button showed up, which is what let the two overlap at the analyzing -> analyzed
-                // transition (reported live).
+                // A real bounded section, not just text floating in open space before the
+                // buttons (asked for explicitly: "have its own section") -- its own small card,
+                // same fill/border recipe DropdownField's rest state uses, rather than a divider
+                // on the leading side (removed per request; the card's own fill is boundary
+                // enough there, the divider stayed on the trailing side toward the buttons). The
+                // room it reserves is worked out from the primary button's CAPABILITY to appear,
+                // not whether it actually has yet (see statusSlotWidth's own doc comment) --
+                // without that, this box's own width would shrink the instant the button showed
+                // up, which is what let the two overlap at the analyzing -> analyzed transition
+                // (reported live).
                 //
                 // Content is LEADING-aligned within the box, not trailing: a trailing alignment
                 // put each word's own START position at the mercy of its own length ("Queued" vs
                 // "Done" vs "Downloading" are all different widths), so the text visibly shifted
                 // left/right on every status change even though the BOX itself never moved --
                 // reported live as "the status section moves left or right," which traced back to
-                // this, not to the buttons beside it. Anchoring to the leading edge (flush against
-                // the divider that starts this section) means every status word starts at the
-                // exact same point regardless of how long it is; only the TRAILING edge of the
-                // text (which nothing else is anchored to) varies now.
-                VerticalGlassDivider()
+                // this, not to the buttons beside it. Anchoring to the leading edge means every
+                // status word starts at the exact same point regardless of how long it is; only
+                // the TRAILING edge of the text (which nothing else is anchored to) varies now.
                 Color.clear
                     .frame(width: statusSlotWidth, height: 1)
                     .animation(nil, value: statusSlotWidth)
@@ -538,6 +539,11 @@ struct PreviewCard<Settings: View>: View {
                             if let inlineStatus { inlineStatus.transition(.blurIn) }
                             if let statusLabel { statusLabel.transition(.blurIn) }
                         }
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Color.white.opacity(DesignTokens.Field.fillRest))
+                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                            .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: DesignTokens.Field.borderWidth))
                     }
                 VerticalGlassDivider()
             }

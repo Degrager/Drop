@@ -589,7 +589,10 @@ struct CardFacade: View {
     }
 
     /// The progress column of a downloading card: a status line over a slim bar. Leading-aligned
-    /// to match the real card (see PreviewCard's own status slot doc comment for why).
+    /// to match the real card (see PreviewCard's own status card doc comment for why). Sized to
+    /// PreviewCard's own status card padded total (content width + 10pt padding each side) -- that
+    /// width is now a flat constant there regardless of button state, so this mirrors it exactly
+    /// rather than deriving from button count the way it used to.
     private var statusColumn: some View {
         VStack(alignment: .leading, spacing: 5) {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -597,18 +600,19 @@ struct CardFacade: View {
                 .frame(width: 70, height: 8)
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Color.white.opacity(0.06))
-                .frame(width: CardMetrics.statusWidth, height: 4)
+                .frame(width: CardMetrics.statusCardContentWidth, height: 4)
         }
-        .frame(width: CardMetrics.statusWidth, alignment: .leading)
+        .frame(width: CardMetrics.statusCardContentWidth + 20, alignment: .leading)
     }
 
-    /// The outcome label of a finished download, beside the button row -- same width
-    /// PreviewCard's own statusSlotWidth reserves for the real card.
+    /// The outcome label of a finished download, beside the button row -- same padded total
+    /// width as `statusColumn` above, since the real card now gives every status state
+    /// (Downloading included) the exact same fixed box regardless of what's inside it.
     private var statusLabel: some View {
         RoundedRectangle(cornerRadius: 3, style: .continuous)
             .fill(Color.white.opacity(0.07))
             .frame(width: 52, height: 8)
-            .frame(width: CardMetrics.statusWidth - (metrics.buttonCount >= 2 ? CardMetrics.buttonSlot : 0), alignment: .leading)
+            .frame(width: CardMetrics.statusCardContentWidth + 20, alignment: .leading)
     }
 
     /// The only piece that stretches with the card while frozen: one plain rounded shape per

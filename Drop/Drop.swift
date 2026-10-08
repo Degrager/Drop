@@ -3629,6 +3629,21 @@ extension AnyTransition {
         )
     }
 
+    /// A status-ticker swap (Queued -> Downloading -> Done, etc): the outgoing text moves up and
+    /// fades out, and the incoming text doesn't start moving up into place until that exit has
+    /// fully finished -- a genuine sequence, not `blurIn`'s simultaneous crossfade (asked for
+    /// explicitly: "the text should finish moving up before the swap happens"). Built on the same
+    /// idiom as `blurInAfter` (delay the insertion by the removal's own duration) but with a
+    /// vertical move instead of blur/scale, since the request was specifically "move up."
+    static func statusSwap(exitDuration: Double = 0.16) -> AnyTransition {
+        .asymmetric(
+            insertion: AnyTransition.move(edge: .bottom).combined(with: .opacity)
+                .animation(.easeOut(duration: 0.18).delay(exitDuration)),
+            removal: AnyTransition.move(edge: .top).combined(with: .opacity)
+                .animation(.easeIn(duration: exitDuration))
+        )
+    }
+
     /// Same as `blurIn`, anchored on the top edge -- for sections that unfold
     /// downward inside a card (Options, the format chips) so the content
     /// grows out of the header instead of scaling from its own centre while
@@ -8020,7 +8035,7 @@ struct ContentView: View {
     /// indicator should be "made up of 3 elements, the status, progress bar, and percentage").
     /// The percentage sits beside the BAR, not beside the label -- putting all three on the
     /// label's own row left it competing with icon + percentage for the same narrow
-    /// CardMetrics.statusWidth, truncating status text that used to fit (reported live: "i dont
+    /// CardMetrics.statusCardContentWidth, truncating status text that used to fit (reported live: "i dont
     /// like that status text is getting cut off and it has to be shortened"). The status row is
     /// left-aligned within the box (reported live: "the label text should be left aligned") --
     /// trailing alignment made the icon itself jump left/right as the label's own length changed

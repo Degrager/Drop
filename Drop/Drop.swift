@@ -4782,19 +4782,19 @@ struct SkeletonCancelButton: View {
     var body: some View {
         // The finished card's remove button, in its place and at its size: the same red
         // capsule, with the spinner where the X will be until the pointer is over it.
-        // Matches CardMetrics.buttonBoxSize (10pt content + 3.5pt padding = 17pt box).
+        // Matches CardMetrics.buttonBoxSize (12pt content + 4.5pt padding = 21pt box).
         GlassInteractive(shape: .roundedRect(DesignTokens.Radius.small), tint: .red, action: action) {
             ZStack {
                 ProgressView()
                     .controlSize(.small)
-                    .scaleEffect(0.7)
+                    .scaleEffect(0.85)
                     .opacity(hovering ? 0 : 1)
                 Image(systemName: "xmark.circle.fill")
-                    .font(.appMono(size: 10))
+                    .font(.appMono(size: 12))
                     .opacity(hovering ? 1 : 0)
             }
-            .frame(width: 10, height: 10)
-            .padding(3.5)
+            .frame(width: 12, height: 12)
+            .padding(4.5)
         }
         .onHover { h in
             withAnimation(.easeOut(duration: 0.15)) { hovering = h }

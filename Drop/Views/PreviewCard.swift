@@ -334,6 +334,20 @@ struct PreviewCard<Settings: View>: View {
             - (primaryTrailingControlCapable ? CardMetrics.buttonSlot : 0)
     }
 
+    /// The other half of the same budget: statusSlotWidth above only kept the status slot's OWN
+    /// width from changing the instant a button appeared -- it never stopped trailingArea's
+    /// width from changing, so the whole right-side group (status slot + buttons) still grew or
+    /// shrank, and so visibly SHIFTED, whenever Reveal/Redownload actually joined the remove
+    /// button (reported live: "they still move according to the buttons next it that appear and
+    /// disappear"). Same CAPABILITY booleans as statusSlotWidth -- not secondaryControl/
+    /// primaryTrailingControl's live presence -- so this box is exactly as wide while a button is
+    /// still capable-but-not-yet-visible as it is once the button actually renders inside it.
+    private var trailingAreaWidth: CGFloat {
+        CardMetrics.buttonSlot // remove/cancel (or the analyzing spinner), always present
+            + (secondaryControlCapable ? CardMetrics.buttonSlot : 0)
+            + (primaryTrailingControlCapable ? CardMetrics.buttonSlot : 0)
+    }
+
     // MARK: Shared header
 
     /// The thumbnail comes out of its blur once the card has been up long enough not to flash.
@@ -585,31 +599,38 @@ struct PreviewCard<Settings: View>: View {
 
     /// The header's buttons, each in its own place: [secondary] [primary] [remove], remove
     /// always last. Every one is the same 28pt capsule, and the primary one stays put while its
-    /// icon changes (collapse -> cancel -> redownload).
+    /// icon changes (collapse -> cancel -> redownload). The capability-gated group is pinned to
+    /// trailingAreaWidth (see its own doc comment) so Reveal/Redownload joining Remove doesn't
+    /// shift the status slot before it -- headerAccessory (Convert's file switcher, arbitrary
+    /// width, not gated by any download-progress capability) stays outside that fixed box,
+    /// naturally sized, same as before.
     @ViewBuilder
     private var trailingArea: some View {
         HStack(spacing: 12) {
             if let headerAccessory { headerAccessory }
-            if let secondaryControl {
-                controlButton(secondaryControl).transition(.blurIn)
-            }
-            if let primary = primaryTrailingControl {
-                controlButton(primary).transition(.blurIn)
-            }
-            if isAnalyzing {
-                // Spinner -> X on hover, in the remove button's own slot.
-                SkeletonCancelButton(action: onCancelAnalyze).transition(.blurIn)
-            } else {
-                // Remove, or Cancel while the card's work is in flight -- one button either
-                // way, its icon swapping in place (see CompletedCard.removeOrCancelButton).
-                let cancelling = onCancel != nil
-                HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 16,
-                               color: cancelling ? .orange : .red, help: cancelling ? "Cancel" : "Remove",
-                               expandable: true) {
-                    if let onCancel { onCancel() } else { onRemove() }
+            HStack(spacing: 12) {
+                if let secondaryControl {
+                    controlButton(secondaryControl).transition(.blurIn)
                 }
-                .transition(.blurIn)
+                if let primary = primaryTrailingControl {
+                    controlButton(primary).transition(.blurIn)
+                }
+                if isAnalyzing {
+                    // Spinner -> X on hover, in the remove button's own slot.
+                    SkeletonCancelButton(action: onCancelAnalyze).transition(.blurIn)
+                } else {
+                    // Remove, or Cancel while the card's work is in flight -- one button either
+                    // way, its icon swapping in place (see CompletedCard.removeOrCancelButton).
+                    let cancelling = onCancel != nil
+                    HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 16,
+                                   color: cancelling ? .orange : .red, help: cancelling ? "Cancel" : "Remove",
+                                   expandable: true) {
+                        if let onCancel { onCancel() } else { onRemove() }
+                    }
+                    .transition(.blurIn)
+                }
             }
+            .frame(width: trailingAreaWidth, alignment: .trailing)
         }
     }
 }

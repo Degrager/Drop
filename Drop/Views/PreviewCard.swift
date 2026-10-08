@@ -555,6 +555,7 @@ struct PreviewCard<Settings: View>: View {
                     }
             }
 
+            VerticalGlassDivider()
             trailingArea
         }
     }

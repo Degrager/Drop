@@ -5472,6 +5472,18 @@ struct GlassDivider: View {
     }
 }
 
+/// Same hairline as GlassDivider, turned 90 degrees -- stretches to fill whatever height its
+/// container offers (a card header row, say), rather than GlassDivider's own full-width/fixed-
+/// height shape.
+struct VerticalGlassDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.12))
+            .frame(width: 0.5)
+            .frame(maxHeight: .infinity)
+    }
+}
+
 extension View {
     func glassCard(cornerRadius: CGFloat = DesignTokens.Radius.large, opacity: Double = 0.55, isActive: Bool = false) -> some View {
         modifier(GlassCard(cornerRadius: cornerRadius, opacity: opacity, isActive: isActive))

@@ -555,10 +555,10 @@ struct PreviewCard<Settings: View>: View {
                         // squeezed inside it, so the padded total is also always the same.
                         .frame(width: statusSlotWidth - 20, height: CardMetrics.statusCardContentHeight, alignment: .topLeading)
                         .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(Color.white.opacity(DesignTokens.Field.fillRest))
-                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))
+                        // Outline only, no fill -- same hairline weight as VerticalGlassDivider
+                        // (0.5pt, 12% white) rather than a filled field background.
                         .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                            .stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: DesignTokens.Field.borderWidth))
+                            .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
                     }
                 VerticalGlassDivider()
             }

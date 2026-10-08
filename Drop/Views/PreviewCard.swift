@@ -26,7 +26,10 @@ enum CardMetrics {
     static let statusWidth: CGFloat = 128
     /// One header button's own rendered box -- HoverIconButton's default `size + 12` at the
     /// header's `size: 16`. trailingArea's buttons stack in a column exactly this wide.
-    static let buttonBoxSize: CGFloat = 28
+    /// Sized so the whole two-button stack (2x this + buttonStackGap) fits inside
+    /// thumbHeight -- the card's own original collapsed height, from before buttons stacked --
+    /// instead of making the row taller. See trailingArea's own doc comment.
+    static let buttonBoxSize: CGFloat = 17
     /// Vertical gap between trailingArea's two stacked buttons.
     static let buttonStackGap: CGFloat = 4
 }
@@ -586,7 +589,7 @@ struct PreviewCard<Settings: View>: View {
     }
 
     private func controlButton(_ control: CardControl) -> some View {
-        HoverIconButton(icon: control.icon, size: 16, color: control.color, help: control.help, expandable: true) { control.action() }
+        HoverIconButton(icon: control.icon, size: 10, boxSize: CardMetrics.buttonBoxSize, color: control.color, help: control.help, expandable: true) { control.action() }
     }
 
     /// The header's buttons, stacked in one column instead of side by side -- there are at most
@@ -610,7 +613,8 @@ struct PreviewCard<Settings: View>: View {
                     // Remove, or Cancel while the card's work is in flight -- one button either
                     // way, its icon swapping in place (see CompletedCard.removeOrCancelButton).
                     let cancelling = onCancel != nil
-                    HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 16,
+                    HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 10,
+                                   boxSize: CardMetrics.buttonBoxSize,
                                    color: cancelling ? .orange : .red, help: cancelling ? "Cancel" : "Remove",
                                    expandable: true) {
                         if let onCancel { onCancel() } else { onRemove() }

@@ -27,6 +27,10 @@ enum CardMetrics {
     /// One header button (28pt) and the 12pt gap that follows it -- buttons sit side by side
     /// again (see trailingArea's own doc comment for why the stacked version was reverted).
     static let buttonSlot: CGFloat = 40
+    /// The status card's own fixed CONTENT height (before its padding) -- sized for the tallest
+    /// state (Downloading: icon+label, then a percentage+bar row below) so the card never
+    /// resizes as the status changes. Every shorter state just has empty room below it.
+    static let statusCardContentHeight: CGFloat = 32
 }
 
 /// A control in a card's header, in the button slot beside the remove button. The same
@@ -534,11 +538,22 @@ struct PreviewCard<Settings: View>: View {
                     .frame(width: statusSlotWidth, height: 1)
                     .animation(nil, value: statusSlotWidth)
                     .overlay(alignment: .leading) {
-                        ZStack(alignment: .leading) {
+                        ZStack(alignment: .topLeading) {
                             if let queuedStatus { queuedStatus.transition(.blurIn) }
                             if let inlineStatus { inlineStatus.transition(.blurIn) }
                             if let statusLabel { statusLabel.transition(.blurIn) }
                         }
+                        // A static box, not a tight wrap: Downloading (icon+label, then a
+                        // percentage+bar row below) is the tallest state, every other state is
+                        // one line -- without a fixed size the card itself grew/shrank with
+                        // whichever was showing. topLeading keeps the icon+label row pinned to
+                        // the same top-left corner regardless of whether anything's below it,
+                        // rather than the whole block recentering vertically depending on
+                        // content -- same "nothing should move" reasoning as the text alignment
+                        // above, just applied to the card's own size this time. The frame sets
+                        // the CONTENT size; padding is added on top of that fixed size, not
+                        // squeezed inside it, so the padded total is also always the same.
+                        .frame(width: statusSlotWidth - 20, height: CardMetrics.statusCardContentHeight, alignment: .topLeading)
                         .padding(.horizontal, 10).padding(.vertical, 6)
                         .background(Color.white.opacity(DesignTokens.Field.fillRest))
                         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous))

@@ -8058,7 +8058,6 @@ struct ContentView: View {
         AnyView(
             progressIndicator(icon: "hourglass", label: "Analyzing", color: .white,
                                iconColor: .white.opacity(DesignTokens.Text.secondary))
-                .frame(width: CardMetrics.statusWidth, alignment: .leading)
         )
     }
 
@@ -8082,7 +8081,6 @@ struct ContentView: View {
                                iconColor: .white.opacity(DesignTokens.Text.secondary),
                                percentage: percentage,
                                bar: AnyView(downloadProgressBar(dl).frame(maxWidth: .infinity)))
-                .frame(width: CardMetrics.statusWidth, alignment: .leading)
         )
     }
 

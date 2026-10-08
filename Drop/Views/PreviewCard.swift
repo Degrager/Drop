@@ -24,14 +24,25 @@ enum CardMetrics {
     /// the download has finished, for the outcome label plus the Reveal button that joins the
     /// buttons then: the total is the same either way, so the title never has to give way.
     static let statusWidth: CGFloat = 128
-    /// One header button's own rendered box. trailingArea's buttons stack in a column exactly
-    /// this wide. 17pt (fitting the two-button stack inside thumbHeight, the card's original
-    /// collapsed height) read as too small to comfortably see/click -- 21pt is the deliberate
-    /// tradeoff instead: the card's header row is a little taller than thumbHeight now (2x this
-    /// + buttonStackGap = 46 vs. thumbHeight's 38), rather than squeezing the buttons further.
-    static let buttonBoxSize: CGFloat = 21
+    /// One header button's own rendered box -- wider than tall, so there's more room for a
+    /// bigger glyph without the stacked pair needing to be any taller (2x this + buttonStackGap
+    /// = 52, a little more than thumbHeight's 38 -- the same deliberate tradeoff as before,
+    /// just leaning on width too instead of height alone).
+    static let buttonBoxWidth: CGFloat = 32
+    static let buttonBoxHeight: CGFloat = 24
     /// Vertical gap between trailingArea's two stacked buttons.
     static let buttonStackGap: CGFloat = 4
+    /// The stacked pair's OUTWARD corners (the ones nearest the card's own rounded corner --
+    /// top-trailing for the top button, bottom-trailing for the bottom one) use the card's
+    /// larger radius instead of the normal small button radius, so the pair reads as nested
+    /// into the card's own curvature. Shared with SkeletonCancelButton (the analyzing-state
+    /// stand-in for the top button) so the swap between them doesn't also pop the shape.
+    static let topButtonShape = GlassInteractiveShape.unevenRoundedRect(
+        topLeading: DesignTokens.Radius.small, bottomLeading: DesignTokens.Radius.small,
+        bottomTrailing: DesignTokens.Radius.small, topTrailing: DesignTokens.Radius.medium)
+    static let bottomButtonShape = GlassInteractiveShape.unevenRoundedRect(
+        topLeading: DesignTokens.Radius.small, bottomLeading: DesignTokens.Radius.small,
+        bottomTrailing: DesignTokens.Radius.medium, topTrailing: DesignTokens.Radius.small)
 }
 
 /// A control in a card's header, in the button slot beside the remove button. The same
@@ -324,7 +335,7 @@ struct PreviewCard<Settings: View>: View {
     /// width button column beside it (buttons stack vertically now -- see trailingArea -- so
     /// that column is always exactly one button wide, never two side by side).
     private var statusSlotWidth: CGFloat {
-        CardMetrics.statusWidth - CardMetrics.buttonBoxSize
+        CardMetrics.statusWidth - CardMetrics.buttonBoxWidth
     }
 
     /// trailingArea's buttons stack vertically in ONE fixed-width column, so unlike the old
@@ -339,8 +350,8 @@ struct PreviewCard<Settings: View>: View {
     /// it is once that button actually renders inside it.
     private var trailingAreaHeight: CGFloat {
         primaryTrailingControlCapable
-            ? CardMetrics.buttonBoxSize * 2 + CardMetrics.buttonStackGap
-            : CardMetrics.buttonBoxSize
+            ? CardMetrics.buttonBoxHeight * 2 + CardMetrics.buttonStackGap
+            : CardMetrics.buttonBoxHeight
     }
 
     // MARK: Shared header
@@ -590,7 +601,8 @@ struct PreviewCard<Settings: View>: View {
     }
 
     private func controlButton(_ control: CardControl) -> some View {
-        HoverIconButton(icon: control.icon, size: 12, boxSize: CardMetrics.buttonBoxSize, color: control.color, help: control.help, expandable: true) { control.action() }
+        HoverIconButton(icon: control.icon, size: 14, boxSize: CardMetrics.buttonBoxHeight, boxWidth: CardMetrics.buttonBoxWidth,
+                        color: control.color, help: control.help, expandable: true, shape: CardMetrics.bottomButtonShape) { control.action() }
     }
 
     /// The header's buttons, stacked in one column instead of side by side -- there are at most
@@ -600,8 +612,12 @@ struct PreviewCard<Settings: View>: View {
     /// NOT the other way around, so the one button that's always present never changes position
     /// as the one below it comes and goes. The column is pinned to trailingAreaHeight (see its
     /// own doc comment) so that second button joining doesn't shift the status slot beside it.
-    /// headerAccessory (Convert's file switcher, unrelated to any of this) stays outside the
-    /// column, naturally sized, same as before.
+    /// Each button's OUTWARD corner (the one nearest the card's own rounded corner -- top-trailing
+    /// for the top button, bottom-trailing for the bottom one) uses the card's larger radius
+    /// instead of the normal small button radius, so the pair reads as nested into the card's own
+    /// curvature rather than two small rounded rects sitting independently inside it. headerAccessory
+    /// (Convert's file switcher, unrelated to any of this) stays outside the column, naturally
+    /// sized, same as before.
     @ViewBuilder
     private var trailingArea: some View {
         HStack(spacing: 12) {
@@ -614,10 +630,10 @@ struct PreviewCard<Settings: View>: View {
                     // Remove, or Cancel while the card's work is in flight -- one button either
                     // way, its icon swapping in place (see CompletedCard.removeOrCancelButton).
                     let cancelling = onCancel != nil
-                    HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 12,
-                                   boxSize: CardMetrics.buttonBoxSize,
+                    HoverIconButton(icon: cancelling ? "stop.circle.fill" : "xmark.circle.fill", size: 14,
+                                   boxSize: CardMetrics.buttonBoxHeight, boxWidth: CardMetrics.buttonBoxWidth,
                                    color: cancelling ? .orange : .red, help: cancelling ? "Cancel" : "Remove",
-                                   expandable: true) {
+                                   expandable: true, shape: CardMetrics.topButtonShape) {
                         if let onCancel { onCancel() } else { onRemove() }
                     }
                     .transition(.blurIn)
@@ -626,7 +642,7 @@ struct PreviewCard<Settings: View>: View {
                     controlButton(primary).transition(.blurIn)
                 }
             }
-            .frame(width: CardMetrics.buttonBoxSize, height: trailingAreaHeight, alignment: .top)
+            .frame(width: CardMetrics.buttonBoxWidth, height: trailingAreaHeight, alignment: .top)
         }
     }
 }

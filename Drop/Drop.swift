@@ -2870,7 +2870,17 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                                                 let speedEta = atParts[1].trimmingCharacters(in: .whitespaces)
                                                 let etaParts = speedEta.components(separatedBy: " ETA ")
                                                 let speed = etaParts[0].trimmingCharacters(in: .whitespaces)
-                                                let eta   = etaParts.count > 1 ? etaParts[1].trimmingCharacters(in: .whitespaces) : ""
+                                                // A fragmented stream (HLS/DASH) appends its own
+                                                // "(frag 11/50)" counter straight onto the ETA
+                                                // with no further delimiter -- yt-dlp's own
+                                                // diagnostic text, not part of the countdown. Left
+                                                // in, it made etaText long enough to truncate in
+                                                // the status card (reported live: "02:55 (frag
+                                                // 11…"), so it's stripped before the ETA is ever
+                                                // used for the ticking countdown or for display.
+                                                let rawEta = etaParts.count > 1 ? etaParts[1].trimmingCharacters(in: .whitespaces) : ""
+                                                let eta = (rawEta.components(separatedBy: " (").first ?? rawEta)
+                                                    .trimmingCharacters(in: .whitespaces)
                                                 // Only show ETA when it's a real, meaningful countdown.
                                                 // On fast connections small files finish in under a
                                                 // second, so yt-dlp reports "00:00" or "Unknown" almost
@@ -3635,12 +3645,20 @@ extension AnyTransition {
     /// explicitly: "the text should finish moving up before the swap happens"). Built on the same
     /// idiom as `blurInAfter` (delay the insertion by the removal's own duration) but with a
     /// vertical move instead of blur/scale, since the request was specifically "move up."
-    static func statusSwap(exitDuration: Double = 0.16) -> AnyTransition {
+    ///
+    /// Total duration (and curve) matches PreviewCard's own card-wide `.animation(.easeInOut
+    /// (duration: 0.35), value: StateKey(...))` -- that's what slides trailingArea's button into
+    /// its new reserved slot on the very same status change, since its `.frame(width:
+    /// trailingAreaWidth)` has no animation of its own and just inherits that ambient one. The
+    /// two used to run on different curves at a shorter total (0.16+0.18=0.34s, easeIn/easeOut)
+    /// than the button's 0.35s easeInOut, so the text visibly finished its move before the button
+    /// did -- reported live as "it moves faster than the card rather than with it."
+    static func statusSwap(exitDuration: Double = 0.17) -> AnyTransition {
         .asymmetric(
             insertion: AnyTransition.move(edge: .bottom).combined(with: .opacity)
-                .animation(.easeOut(duration: 0.18).delay(exitDuration)),
+                .animation(.easeInOut(duration: 0.18).delay(exitDuration)),
             removal: AnyTransition.move(edge: .top).combined(with: .opacity)
-                .animation(.easeIn(duration: exitDuration))
+                .animation(.easeInOut(duration: exitDuration))
         )
     }
 

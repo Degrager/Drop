@@ -28,13 +28,14 @@ enum CardMetrics {
     /// capability. It used to be `statusWidth - (capable ? buttonSlot : 0)`, which meant the
     /// card's own width changed the instant a button's capability flipped (entering/leaving
     /// Downloading, which has no primary button) -- reported live as "the card expands to the
-    /// right" at exactly that transition. 108pt is what Downloading's own bar+percentage row used
-    /// to get under that old formula (statusWidth=128 minus nothing, since Downloading was never
-    /// "capable") -- going narrower than that (92pt, sized for "Cancelled" alone) made the bar
-    /// overflow the box, which read live as "the progress bar is cutoff" and the status text
-    /// looking detached from the divider beside it. 108pt comfortably fits both: "Cancelled" and
-    /// Downloading's own bar.
-    static let statusCardContentWidth: CGFloat = 108
+    /// right" at exactly that transition. Sized for the widest thing this box ever has to hold:
+    /// not the short outcome words ("Cancelled", "Done") but yt-dlp's own longer activity labels
+    /// shown in the same slot while a download is getting started ("Embedding thumbnail…",
+    /// "Solving challenges…", "Starting download…", 19-20 characters, semibold) -- at 108pt those
+    /// truncated (reported live, e.g. "reading stream and starting download" getting cut off).
+    /// 140pt fits the longest of those with room to spare, well short of ballooning the row (the
+    /// box is a flat constant regardless of state, so "Done"/"Queued" just sit in extra room).
+    static let statusCardContentWidth: CGFloat = 140
     /// The status card's own fixed CONTENT height (before its padding) -- sized for the tallest
     /// state (Downloading: icon+label, then a percentage+bar row below) so the card never
     /// resizes as the status changes. Every shorter state just has empty room below it.

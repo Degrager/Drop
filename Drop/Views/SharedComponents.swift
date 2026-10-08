@@ -588,9 +588,10 @@ struct CardFacade: View {
         .fixedSize()
     }
 
-    /// The progress column of a downloading card: a status line over a slim bar.
+    /// The progress column of a downloading card: a status line over a slim bar. Leading-aligned
+    /// to match the real card (see PreviewCard's own status slot doc comment for why).
     private var statusColumn: some View {
-        VStack(alignment: .trailing, spacing: 5) {
+        VStack(alignment: .leading, spacing: 5) {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(Color.white.opacity(0.07))
                 .frame(width: 70, height: 8)
@@ -598,16 +599,16 @@ struct CardFacade: View {
                 .fill(Color.white.opacity(0.06))
                 .frame(width: CardMetrics.statusWidth, height: 4)
         }
-        .frame(width: CardMetrics.statusWidth, alignment: .trailing)
+        .frame(width: CardMetrics.statusWidth, alignment: .leading)
     }
 
-    /// The outcome label of a finished download, beside the now-stacked button column -- same
-    /// width PreviewCard's own statusSlotWidth reserves for the real card.
+    /// The outcome label of a finished download, beside the button row -- same width
+    /// PreviewCard's own statusSlotWidth reserves for the real card.
     private var statusLabel: some View {
         RoundedRectangle(cornerRadius: 3, style: .continuous)
             .fill(Color.white.opacity(0.07))
             .frame(width: 52, height: 8)
-            .frame(width: CardMetrics.statusWidth - CardMetrics.buttonBoxWidth, alignment: .trailing)
+            .frame(width: CardMetrics.statusWidth - (metrics.buttonCount >= 2 ? CardMetrics.buttonSlot : 0), alignment: .leading)
     }
 
     /// The only piece that stretches with the card while frozen: one plain rounded shape per

@@ -3843,11 +3843,6 @@ enum GlassInteractiveShape {
     case capsule
     case circle
     case roundedRect(CGFloat)
-    /// A rounded rect whose corners don't all match -- e.g. a button stacked at a card's trailing
-    /// edge, where the outward-facing corner echoes the card's own larger radius while the other
-    /// three stay at the normal small button radius. Matches UnevenRoundedRectangle's own corner
-    /// naming/order.
-    case unevenRoundedRect(topLeading: CGFloat, bottomLeading: CGFloat, bottomTrailing: CGFloat, topTrailing: CGFloat)
 }
 
 /// A capsule whose corners use .continuous (squircle-style smooth curvature) instead of plain
@@ -4039,10 +4034,6 @@ struct GlassInteractive<Content: View>: View {
             return AnyShape(Circle())
         case .roundedRect(let r):
             return AnyShape(RoundedRectangle(cornerRadius: r, style: .continuous))
-        case .unevenRoundedRect(let topLeading, let bottomLeading, let bottomTrailing, let topTrailing):
-            return AnyShape(UnevenRoundedRectangle(topLeadingRadius: topLeading, bottomLeadingRadius: bottomLeading,
-                                                    bottomTrailingRadius: bottomTrailing, topTrailingRadius: topTrailing,
-                                                    style: .continuous))
         }
     }
 }
@@ -4571,11 +4562,6 @@ final class PulsingRingView: NSView {
             // is already .continuous (see its clipShape), so the glow should trace the same path.
             let r = min(radius, min(bounds.width, bounds.height) / 2)
             ring.path = RoundedRectangle(cornerRadius: r, style: .continuous).path(in: bounds).cgPath
-        case .unevenRoundedRect(let topLeading, let bottomLeading, let bottomTrailing, let topTrailing):
-            // Same reasoning as .roundedRect above.
-            ring.path = UnevenRoundedRectangle(topLeadingRadius: topLeading, bottomLeadingRadius: bottomLeading,
-                                                bottomTrailingRadius: bottomTrailing, topTrailingRadius: topTrailing,
-                                                style: .continuous).path(in: bounds).cgPath
         }
         CATransaction.commit()
     }
@@ -4795,20 +4781,18 @@ struct SkeletonCancelButton: View {
 
     var body: some View {
         // The finished card's remove button, in its place and at its size: the same red
-        // capsule, with the spinner where the X will be until the pointer is over it. Matches
-        // CardMetrics.buttonBoxWidth/buttonBoxHeight and topButtonShape -- it IS the top button,
-        // visually, for as long as the card is analyzing.
-        GlassInteractive(shape: CardMetrics.topButtonShape, tint: .red, action: action) {
+        // capsule, with the spinner where the X will be until the pointer is over it.
+        GlassInteractive(shape: .roundedRect(DesignTokens.Radius.small), tint: .red, action: action) {
             ZStack {
                 ProgressView()
                     .controlSize(.small)
-                    .scaleEffect(0.85)
                     .opacity(hovering ? 0 : 1)
                 Image(systemName: "xmark.circle.fill")
-                    .font(.appMono(size: 14))
+                    .font(.appMono(size: 16))
                     .opacity(hovering ? 1 : 0)
             }
-            .frame(width: CardMetrics.buttonBoxWidth, height: CardMetrics.buttonBoxHeight)
+            .frame(width: 16, height: 16)
+            .padding(6)
         }
         .onHover { h in
             withAnimation(.easeOut(duration: 0.15)) { hovering = h }
@@ -4863,15 +4847,8 @@ struct HoverIconButton: View {
     /// capsule) WITHOUT scaling the glyph and hover caption up too, which
     /// bumping `size` alone would do (reported live: "the symbol inside
     /// should be the same height as it was... the hover labels should be
-    /// the same size they were before"). Also the box's HEIGHT whenever
-    /// `boxWidth` gives it a separate width.
+    /// the same size they were before").
     var boxSize: CGFloat? = nil
-    /// Overrides the box's WIDTH only, independent of its height (`boxSize`/
-    /// `size + 12`) -- a wider-than-tall pill instead of a square, e.g. a
-    /// stacked pair of buttons that want more room for the glyph without
-    /// the pair needing to be any taller. nil (the default) keeps the
-    /// existing square-box behavior for every other call site.
-    var boxWidth: CGFloat? = nil
     var color: Color = .white
     var activeColor: Color? = nil
     var isActive: Bool = false
@@ -4931,7 +4908,7 @@ struct HoverIconButton: View {
                 // square remove button, though both use the identical .roundedRect shape and
                 // radius. Every icon now centers in the same size box regardless of its own
                 // proportions.
-                .frame(width: boxWidth ?? boxSize ?? size + 12, height: boxSize ?? size + 12)
+                .frame(width: boxSize ?? size + 12, height: boxSize ?? size + 12)
         }
         // Only the hover caption needs the width, and only `expandable` buttons
         // have one -- every other button skipped a GeometryReader + @State
@@ -8081,7 +8058,7 @@ struct ContentView: View {
         AnyView(
             progressIndicator(icon: "hourglass", label: "Analyzing", color: .white,
                                iconColor: .white.opacity(DesignTokens.Text.secondary))
-                .frame(width: CardMetrics.statusWidth, alignment: .trailing)
+                .frame(width: CardMetrics.statusWidth, alignment: .leading)
         )
     }
 
@@ -8105,7 +8082,7 @@ struct ContentView: View {
                                iconColor: .white.opacity(DesignTokens.Text.secondary),
                                percentage: percentage,
                                bar: AnyView(downloadProgressBar(dl).frame(maxWidth: .infinity)))
-                .frame(width: CardMetrics.statusWidth, alignment: .trailing)
+                .frame(width: CardMetrics.statusWidth, alignment: .leading)
         )
     }
 

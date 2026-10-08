@@ -15,8 +15,8 @@ private struct WidthPreferenceKey: PreferenceKey {
 /// Sizes shared by every card header so a card doesn't change shape as it moves
 /// between states (analyzing, queued, downloading, done).
 enum CardMetrics {
-    static let thumbWidth: CGFloat = 68
-    static let thumbHeight: CGFloat = 46
+    static let thumbWidth: CGFloat = 56
+    static let thumbHeight: CGFloat = 38
     /// Height of the IN / OUT metadata capsule (two rows). The analyzing placeholder is drawn
     /// at the same height, so a card keeps its size as it resolves.
     static let metaCapsuleHeight: CGFloat = 41
@@ -450,16 +450,16 @@ struct PreviewCard<Settings: View>: View {
             // already the size of the bar, and a card whose title was known from the start (a
             // redownload) has no bar at all. The capsule below is one persistent capsule too (see
             // PersistentCapsule): its contents change, it does not get replaced.
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                 ZStack(alignment: .leading) {
                     if showsTitleBar {
                         SkeletonFill(cornerRadius: 4)
-                            .frame(width: titlePhase >= 1 ? min(max(measuredTitleWidth, 60), Self.titleMaxWidth) : Self.defaultTitleBarWidth, height: 16)
+                            .frame(width: titlePhase >= 1 ? min(max(measuredTitleWidth, 60), Self.titleMaxWidth) : Self.defaultTitleBarWidth, height: 14)
                             .opacity(titleRevealed ? 0 : 1)
                     }
                     Text(title.isEmpty ? "Fetching title metadata" : title)
-                        .font(.appMono(size: 14.5, weight: .semibold))
+                        .font(.appMono(size: 13, weight: .semibold))
                         .foregroundColor(.white.opacity(
                             !titleRevealed ? 0 :
                             (isAnalyzing ? DesignTokens.Text.secondary :
@@ -478,7 +478,7 @@ struct PreviewCard<Settings: View>: View {
                         // the length the title will have.
                         .background(
                             Text(title.isEmpty ? "Fetching title metadata" : title)
-                                .font(.appMono(size: 14.5, weight: .semibold))
+                                .font(.appMono(size: 13, weight: .semibold))
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
                                 .hidden()

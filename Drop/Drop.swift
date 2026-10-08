@@ -7639,7 +7639,7 @@ struct ContentView: View {
         }()
         // The pasted link stands in for the title until a real one arrives.
         let titleKnown = !analyzing || (!p.title.isEmpty && p.title != p.url)
-        let controls = dl.map { downloadControls($0, preview: p) }
+        let primaryControl = dl.flatMap { downloadControls($0, preview: p) }
         let cardLocked = isBatchMode || failedAnalyze || dl != nil
         // Only while a job is actually in flight -- once it's set, the card's remove button
         // becomes Cancel instead (see PreviewCard.onCancel), so onRemove below is never called
@@ -7697,13 +7697,7 @@ struct ContentView: View {
             queuedStatus: (!analyzing && !failedAnalyze && (dl == nil || dl?.status == .pending)) ? queuedProgressColumn() : nil,
             inlineStatus: analyzing ? analyzeProgressColumn() : dl.flatMap { downloadProgressColumn($0) },
             statusLabel: dl.flatMap { downloadOutcomeLabel($0) },
-            primaryControl: controls?.primary,
-            secondaryControl: controls?.secondary,
-            // Reserved for the whole life of a real download, not just once Reveal in Finder
-            // actually appears at .done -- otherwise the status box's width changes at the exact
-            // instant the button does, which is what let them overlap (reported live). See
-            // secondaryControlCapable's own doc comment.
-            secondaryControlCapable: dl != nil,
+            primaryControl: primaryControl,
             onCancel: cancelDownload,
             showsSettings: dl == nil && !failedAnalyze
         ) {
@@ -8141,28 +8135,21 @@ struct ContentView: View {
     /// Finder appears to its left once the file is there. While a job is still in flight,
     /// neither slot is used -- Cancel lives in the card's own remove/cancel button instead (see
     /// downloadCard's onCancel).
-    private func downloadControls(_ dl: Download, preview p: LinkPreview) -> (primary: CardControl?, secondary: CardControl?) {
+    /// Redownload/Retry only -- Reveal in Finder used to be the card's own secondary button too,
+    /// but that's redundant with the bottom bar's own Reveal (which opens the destination folder
+    /// already), so it's gone from here; the bottom bar is the one place it lives now.
+    private func downloadControls(_ dl: Download, preview p: LinkPreview) -> CardControl? {
         switch dl.status {
         case .pending, .downloading:
-            return (nil, nil)
-        case .done:
-            return (CardControl(icon: "arrow.uturn.down", color: DesignTokens.Accent.warning, help: "Redownload") {
+            return nil
+        case .done, .cancelled:
+            return CardControl(icon: "arrow.uturn.down", color: DesignTokens.Accent.warning, help: "Redownload") {
                 restorePreviewCard(from: dl, replacing: p.id)
-            }, CardControl(icon: "folder.fill", color: DesignTokens.Accent.primaryLight, help: "Reveal in Finder") {
-                if let filePath = dl.outputFilePath {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: filePath)])
-                } else {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dl.outputDir)])
-                }
-            })
-        case .cancelled:
-            return (CardControl(icon: "arrow.uturn.down", color: DesignTokens.Accent.warning, help: "Redownload") {
-                restorePreviewCard(from: dl, replacing: p.id)
-            }, nil)
+            }
         case .error:
-            return (CardControl(icon: "arrow.uturn.down", color: DesignTokens.Accent.danger, help: "Retry") {
+            return CardControl(icon: "arrow.uturn.down", color: DesignTokens.Accent.danger, help: "Retry") {
                 restorePreviewCard(from: dl, replacing: p.id)
-            }, nil)
+            }
         }
     }
 

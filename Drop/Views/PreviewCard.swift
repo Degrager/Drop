@@ -132,11 +132,12 @@ struct PreviewCard<Settings: View>: View {
     /// link is analyzed. Until then the title bar waits at a default length; when it is true the
     /// bar first takes the title's length and only then gives way to the title.
     var titleKnown: Bool = true
-    /// A status that hasn't reached the active slot yet (a download still waiting its turn) --
-    /// sits right after the title/capsule group instead of sharing inlineStatus's spot beside the
-    /// buttons, so "waiting in line" reads as a different place than "in progress." Moves into
-    /// inlineStatus's position the instant the caller's real status advances (e.g. a download
-    /// starting transferring).
+    /// A status that hasn't reached the active slot yet (a download still waiting its turn).
+    /// Shares the same trailing slot as inlineStatus/statusLabel (see the body) rather than its
+    /// own spot near the title -- an earlier version kept it separate so "waiting" read as a
+    /// different place than "in progress," but moving between two layout positions is exactly
+    /// the kind of transition this codebase has had repeated trouble with elsewhere; one fixed
+    /// spot that swaps content was the more reliable tradeoff.
     var queuedStatus: AnyView? = nil
     /// A status column between the text and the buttons on the header's trailing side (a
     /// download's progress while it runs).
@@ -285,7 +286,9 @@ struct PreviewCard<Settings: View>: View {
             expanded: expanded && showsSettings,
             analyzing: isAnalyzing,
             buttonCount: buttonCount,
-            hasStatus: inlineStatus != nil,
+            // Queued now lives in the same trailing slot as inlineStatus (see the real card's
+            // body), so the resize facade's generic status skeleton needs to draw for it too.
+            hasStatus: inlineStatus != nil || queuedStatus != nil,
             hasStatusLabel: statusLabel != nil,
             hasLink: expanded && showsSettings && !isAnalyzing && !secondaryTitle.isEmpty,
             reported: true
@@ -499,20 +502,28 @@ struct PreviewCard<Settings: View>: View {
                 if !narrow { capsuleSlot }
             }
 
-            if let queuedStatus {
-                queuedStatus.transition(.blurIn)
-            }
-
             Spacer()
 
-            if inlineStatus != nil || statusLabel != nil {
-                // A download's progress column, then (in its place) its outcome label. The room
-                // they share is worked out from the buttons that come after it -- the Reveal button
-                // that joins them when a download finishes takes 40pt of it -- so the whole
-                // trailing side is the same width in every download state and the title never
-                // gets more or less room. That width is a spacer that never animates; the two
-                // views swap inside it (as an overlay, so the outgoing one takes no room while it
-                // fades) and stay right-aligned against the buttons.
+            if queuedStatus != nil || inlineStatus != nil || statusLabel != nil {
+                // One fixed spot for every progress state (Queued, Analyzing, Downloading,
+                // Done/Failed/Cancelled) -- Queued used to sit in its own position right after
+                // the title instead of sharing this slot, so the Queued -> Downloading
+                // transition was a jump from one layout position to another rather than an
+                // in-place swap. That's exactly the shape of bug this codebase has been bitten
+                // by before (the dropdown-menu "ghosting" saga -- see AnyTransition.glassPop's
+                // own history): animating a view's position between two different anchors is
+                // fragile, especially inside a LazyVStack of frequently-recreated cards. Folding
+                // Queued into this same slot means it reuses the proven blurIn in-place swap
+                // instead of needing new motion code, at the cost of losing the old "waiting"
+                // vs. "in progress" spatial distinction -- a deliberate tradeoff, not an
+                // oversight.
+                //
+                // The room these three share is worked out from the buttons that come after it --
+                // the Reveal button that joins them when a download finishes takes 40pt of it --
+                // so the whole trailing side is the same width in every download state and the
+                // title never gets more or less room. That width is a spacer that never animates;
+                // the views swap inside it (as an overlay, so the outgoing one takes no room while
+                // it fades) and stay right-aligned against the buttons.
                 //
                 // statusSlotWidth is deliberately STATIC across the analyzing -> analyzed
                 // transition (see its own doc comment for why): a view mid-removal-transition
@@ -528,6 +539,7 @@ struct PreviewCard<Settings: View>: View {
                     .animation(nil, value: statusSlotWidth)
                     .overlay(alignment: .trailing) {
                         ZStack(alignment: .trailing) {
+                            if let queuedStatus { queuedStatus.transition(.blurIn) }
                             if let inlineStatus { inlineStatus.transition(.blurIn) }
                             if let statusLabel { statusLabel.transition(.blurIn) }
                         }

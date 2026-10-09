@@ -40,14 +40,23 @@ enum CardMetrics {
     /// state (Downloading: icon+label, then a percentage+bar row below) so the card never
     /// resizes as the status changes. Every shorter state just has empty room below it.
     static let statusCardContentHeight: CGFloat = 32
-    /// One header button (28pt) and the 12pt gap that follows it -- buttons sit side by side
-    /// again (see trailingArea's own doc comment for why the stacked version was reverted).
-    /// trailingArea reserves room for up to two of these from CAPABILITY (primaryTrailingControl
-    /// might not be live yet, e.g. during Downloading, which has none) rather than live count --
-    /// without that, the button row's own width changed exactly when the status card's width
-    /// used to, compounding the same "card expands" bug from a second direction (the divider
-    /// position depends on where trailingArea starts, which depends on its own width).
-    static let buttonSlot: CGFloat = 40
+    /// One header button's own box -- buttons sit side by side again (see trailingArea's own doc
+    /// comment for why the stacked version was reverted). trailingArea reserves room for up to
+    /// two of these from CAPABILITY (primaryTrailingControl might not be live yet, e.g. during
+    /// Downloading, which has none) rather than live count -- without that, the button row's own
+    /// width changed exactly when the status card's width used to, compounding the same "card
+    /// expands" bug from a second direction (the divider position depends on where trailingArea
+    /// starts, which depends on its own width).
+    static let buttonWidth: CGFloat = 28
+    /// Gap between two adjacent header buttons -- matches trailingArea's own HStack spacing.
+    /// trailingAreaWidth adds exactly one of these per button BEYOND the first, never one after
+    /// the last button: an earlier version folded a gap into every slot including the final one
+    /// (`buttonSlot = 40 = 28 + 12`, reserved per button), which meant even a fully-populated
+    /// 2-button box was always 12pt wider than its own trailing-aligned content actually needed
+    /// -- the gap had nothing after it to separate from, it just sat as dead space before the
+    /// first button, right after the divider (reported live: "too much space between the
+    /// divider's right side and the buttons").
+    static let buttonGap: CGFloat = 12
 }
 
 /// A control in a card's header, in the button slot beside the remove button. The same
@@ -336,14 +345,16 @@ struct PreviewCard<Settings: View>: View {
         return (primaryTrailingControl != nil ? 1 : 0) + 1
     }
 
-    /// trailingArea's own reserved width -- up to two button slots, from CAPABILITY to appear
-    /// (primaryTrailingControl might not be live yet, e.g. during Downloading, which has none)
-    /// rather than live count. Without this, the button row's natural width changed exactly when
-    /// Downloading started/ended, which shifted the divider and status card beside it even once
-    /// their OWN widths were made static (reported live as "the card expands... before the
-    /// divider finishes moving").
+    /// trailingArea's own reserved width -- up to two buttons plus the one gap between them, from
+    /// CAPABILITY to appear (primaryTrailingControl might not be live yet, e.g. during
+    /// Downloading, which has none) rather than live count. Without this, the button row's
+    /// natural width changed exactly when Downloading started/ended, which shifted the divider
+    /// and status card beside it even once their OWN widths were made static (reported live as
+    /// "the card expands... before the divider finishes moving"). One gap only -- never one past
+    /// the last button, which is what the box is trailing-aligned against.
     private var trailingAreaWidth: CGFloat {
-        CardMetrics.buttonSlot + (primaryTrailingControlCapable ? CardMetrics.buttonSlot : 0)
+        let buttons: CGFloat = primaryTrailingControlCapable ? 2 : 1
+        return buttons * CardMetrics.buttonWidth + (buttons - 1) * CardMetrics.buttonGap
     }
 
     // MARK: Shared header

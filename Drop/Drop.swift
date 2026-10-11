@@ -8504,6 +8504,35 @@ struct ContentView: View {
         return !cancelled
     }
 
+    /// Caps how long a single yt-dlp analyze attempt can leave a card sitting on "Analyzing"
+    /// with nothing else happening. Neither analyze Process below had any timeout at all --
+    /// `waitUntilExit()` just blocks forever -- so a stalled network request (one that never
+    /// cleanly fails, just never answers) left the card wedged indefinitely with no error and
+    /// nothing in the Log tab. Reported by another user via two exported logs: one card stuck
+    /// on "Analyzing 1 URL(s)..." as the very last line, no further log entry ever, no way to
+    /// tell it apart from the app having silently died. 45s is generous for yt-dlp's own
+    /// PyInstaller startup plus a real network fetch, short enough that a genuinely stuck card
+    /// recovers inside one visible wait instead of needing a force-quit.
+    private static let analyzeTimeoutSeconds: Double = 45
+
+    /// Starts a watchdog that kills `proc` if it's still running after `analyzeTimeoutSeconds`.
+    /// Cancel the returned work item the moment `proc.waitUntilExit()` returns on its own, then
+    /// call `didTimeOut()` to tell a genuine timeout apart from every other way an analyze
+    /// attempt can end empty-handed (a clean yt-dlp failure, a 403, cancellation) -- those all
+    /// reach the same "waitUntilExit returned" point, so only this flag says *why*.
+    private func startAnalyzeTimeoutWatchdog(for proc: Process) -> (workItem: DispatchWorkItem, didTimeOut: () -> Bool) {
+        let flagLock = NSLock()
+        var timedOut = false
+        let workItem = DispatchWorkItem {
+            if proc.isRunning {
+                flagLock.lock(); timedOut = true; flagLock.unlock()
+                DownloadManager.terminateProcessTree(proc)
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.analyzeTimeoutSeconds, execute: workItem)
+        return (workItem, { flagLock.lock(); defer { flagLock.unlock() }; return timedOut })
+    }
+
     private func fetchInstantPreview(for url: String, cardID: UUID) {
         guard let videoID = Self.youTubeVideoID(from: url) else { return }
         let thumbnailURL = "https://i.ytimg.com/vi/\(videoID)/hqdefault.jpg"
@@ -8712,6 +8741,7 @@ struct ContentView: View {
                 // the entry afterward -- letting this yt-dlp run to completion
                 // for a card that was already gone.
                 if !registerAnalyzeProcess(proc, cardID: cardID) { group.leave(); return }
+                let watchdog1 = startAnalyzeTimeoutWatchdog(for: proc)
                 // Read stderr concurrently to prevent pipe buffer deadlock.
                 // Captured (not discarded) so a persistent-block signal like
                 // HTTP 403 at analyze time can be detected and surfaced --
@@ -8725,6 +8755,8 @@ struct ContentView: View {
                 }
                 let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
                 proc.waitUntilExit()
+                watchdog1.workItem.cancel()
+                var analyzeTimedOut = watchdog1.didTimeOut()
                 errSem.wait()
                 // Check if this URL was cancelled while we were waiting
                 var wasCancelled = false
@@ -8733,8 +8765,11 @@ struct ContentView: View {
                 var output = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 var lastStderr = String(data: errData1, encoding: .utf8) ?? ""
 
-                // Fallback: if bestvideo* failed (audio-only source), retry with bestaudio
-                if proc.terminationStatus != 0 || output.isEmpty {
+                // Fallback: if bestvideo* failed (audio-only source), retry with bestaudio.
+                // Skipped once the primary attempt already timed out -- retrying the same
+                // network call that just stalled for analyzeTimeoutSeconds would most likely
+                // just stall again, doubling the wait before the card can show any result.
+                if !analyzeTimedOut && (proc.terminationStatus != 0 || output.isEmpty) {
                     let proc2 = Process()
                     proc2.executableURL = URL(fileURLWithPath: ytdlp)
                     var fallbackArgs = [
@@ -8759,6 +8794,7 @@ struct ContentView: View {
                     proc2.standardError  = errPipe2
                     try? proc2.run()
                     if !registerAnalyzeProcess(proc2, cardID: cardID) { group.leave(); return }
+                    let watchdog2 = startAnalyzeTimeoutWatchdog(for: proc2)
                     var errData2 = Data()
                     let errSem2 = DispatchSemaphore(value: 0)
                     DispatchQueue.global().async {
@@ -8767,6 +8803,8 @@ struct ContentView: View {
                     }
                     let outData2 = outPipe2.fileHandleForReading.readDataToEndOfFile()
                     proc2.waitUntilExit()
+                    watchdog2.workItem.cancel()
+                    if watchdog2.didTimeOut() { analyzeTimedOut = true }
                     errSem2.wait()
                     var wasCancelled2 = false
                     DispatchQueue.main.sync { wasCancelled2 = self.analyzeProcesses[cardID] == nil }
@@ -8995,6 +9033,19 @@ struct ContentView: View {
                     lp.analyzeError = "Blocked by source (HTTP 403) — this link can't be read, even with browser impersonation."
                     lp.analyzeErrorIsForbidden = true
                     preview = lp
+                    manager.appendLog("Analyze failed (blocked, HTTP 403): \(url)")
+                } else if analyzeTimedOut {
+                    // The watchdog killed a hung yt-dlp process -- distinct from every other
+                    // empty-output case below so the card (and the Log tab) say what actually
+                    // happened instead of implying the source itself is unsupported.
+                    var lp = LinkPreview(
+                        url: url, title: url, thumbnailURL: "",
+                        hasVideo: false, duration: "",
+                        mediaMode: .audioOnly
+                    )
+                    lp.analyzeError = "Couldn't read this link — the request timed out."
+                    preview = lp
+                    manager.appendLog("Analyze timed out after \(Int(Self.analyzeTimeoutSeconds))s: \(url)")
                 } else {
                     // Empty output and not a detected 403 -- most commonly
                     // an unsupported/incompatible source (a syntactically
@@ -9016,6 +9067,16 @@ struct ContentView: View {
                     )
                     lp.analyzeError = "Couldn't read this link — the source may not be supported."
                     preview = lp
+                    // Previously nothing about this failure ever reached the Log tab --
+                    // stderr was read (to detect 403s) but otherwise thrown away, so a report
+                    // like "random links fail to analyze" arrived with an exported log that
+                    // just stopped after "Analyzing N URL(s)...", no clue why. The last
+                    // non-empty stderr line is usually yt-dlp's own ERROR summary.
+                    let stderrSummary = lastStderr
+                        .split(separator: "\n")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .last { !$0.isEmpty } ?? "no stderr output"
+                    manager.appendLog("Analyze failed for \(url): \(stderrSummary)")
                 }
                 lock.lock()
                 results.append((i, preview))

@@ -1160,9 +1160,12 @@ struct ConvertView: View {
     @Environment(\.isCompactHeight) private var compactHeight
     @Environment(\.isTinyHeight) private var tinyHeight
 
-    /// Convert Queue drawer collapse state -- the item-count subtext stays
-    /// visible either way; collapsing only hides the row list beneath it.
-    @State private var isQueueExpanded = true
+    /// Convert Queue drawer collapse state -- independent of whether the
+    /// queue actually has anything in it (the row list is expandable even
+    /// while empty; see queueDrawer's own doc comment for why). Starts
+    /// collapsed: there's nothing worth showing open by default before the
+    /// user has queued anything.
+    @State private var isQueueExpanded = false
 
     /// Bumped whenever a job's own @Published state changes in a way this
     /// view needs to react to (isSelected, status) -- `queue`/`stagingJobs`
@@ -1800,24 +1803,31 @@ struct ConvertView: View {
     private var queueDrawerHeight: CGFloat { queueRowStride * 2.5 }
 
     /// Collapsible drawer rendered inside the bottom bar's extraControls
-    /// slot, above the SAVE TO row. Card within a card: this whole drawer is
-    /// its own nested glass surface. The row list (when expanded) sits on
-    /// top with the select toolbar (collapse toggle, count, Clear Queue)
-    /// pinned as a bottom bar beneath it, separated by a divider -- so
-    /// expanding grows the list upward from that fixed bottom edge rather
-    /// than pushing content down from a fixed top.
+    /// slot, above the SAVE TO row. The row list (when expanded) sits on top
+    /// with the select toolbar (collapse toggle, count, Clear Queue) pinned
+    /// beneath it, separated by a divider -- so expanding grows the list
+    /// upward from that fixed bottom edge rather than pushing content down
+    /// from a fixed top.
+    ///
+    /// The row list's own visibility is driven by `isQueueExpanded` ALONE,
+    /// never by `hasQueue` -- the two used to be ANDed together, which meant
+    /// clearing the queue (hasQueue true -> false) tore this whole Group
+    /// down via its own mount/unmount transition at the EXACT same instant
+    /// the controls strip below was ALSO tearing down and rebuilding its
+    /// chevron and Clear Queue button (both used to be gated on `hasQueue`
+    /// too). Three independent insertion/removal animations competing for
+    /// the same few square inches of screen at once is what read as the row
+    /// list "ghosting" behind the controls strip and the count label
+    /// appearing to travel down from the queue area into its final spot,
+    /// reported live. Now the row list is the ONLY thing that cares about
+    /// isQueueExpanded, the controls strip is the only thing that cares
+    /// about hasQueue (and never mounts/unmounts for it -- see its own
+    /// section below), and a queue going empty while still expanded is just
+    /// the row list's own content shrinking from N rows to zero within its
+    /// already-clipped frame, nothing else on screen so much as blinks.
     private var queueDrawer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Grouped so ONE .transition() covers the row list and its trailing
-            // divider together -- with no transition at all this fell back to
-            // SwiftUI's default animated opacity removal, which kept the
-            // outgoing rows in the layout, fading, for the whole spring
-            // duration WHILE the bar is already collapsing to its emptied
-            // height -- the rows' icons visibly "ghost" at the old position
-            // as the bar shrinks out from under them. Reported live: Clear
-            // Queue. The transition below (see its own comment) keeps removal
-            // instant (.identity), so there's nothing left to ghost.
-            if isQueueExpanded && hasQueue {
+            if isQueueExpanded {
                 Group {
                 // Plain ScrollView + LazyVStack (not List) -- same container
                 // pattern already proven throughout the rest of the app, and
@@ -1903,74 +1913,51 @@ struct ConvertView: View {
                 GlassDivider()
                 }
                 // Plain opacity, not glassPopInOnly's scale+blur: that scale (0.95->1,
-                // anchored top) made the FIRST queued item look like it was growing the
-                // row-list container itself into existence around it, rather than
-                // landing inside an already-correctly-sized queue area -- visible only
-                // on the very first item (hasQueue false->true mounts this Group fresh);
-                // adding a 2nd+ item to an already-open queue was already clean, since
-                // the Group doesn't remount then. Reported live: "the queued items
-                // [should] appear from within the bounds of the queue."
-                //
-                // Symmetric now -- removal used to be .identity (instant) as a
-                // workaround for the ghosting bug, then a flat .easeOut(duration: 0.2)
-                // of its own. Both were wrong for the same reason: this Group's fade
-                // raced the surrounding VStack's own height collapse (which repositions
-                // the controls HStack below it) on a DIFFERENT timeline than whichever
-                // withAnimation(...) actually triggered the removal (spring(0.3) for a
-                // row's own remove/Clear Queue, spring(0.25) for a plain Collapse
-                // click) -- so the row kept fading at its OLD position for up to 0.2s
-                // after the controls section (and "No items in queue") had already
-                // snapped into its NEW, already-collapsed layout. Reported live: the
-                // outgoing row "ghosting" above the controls section instead of
-                // shrinking out from under it in place. No explicit .animation() here
-                // means this transition just inherits whichever withAnimation wraps
-                // the actual mutation, so the fade and the collapse are always the
-                // same motion instead of two independently-timed ones.
+                // anchored top) made expanding look like the row-list container was
+                // growing into existence around its own content, rather than content
+                // landing inside an already-correctly-sized queue area. This Group now
+                // only ever mounts/unmounts on a manual chevron toggle (isQueueExpanded
+                // alone gates it -- see this property's own doc comment) -- clearing or
+                // adding to an already-expanded queue no longer touches this transition
+                // at all, it's just the row count changing within the Group's own
+                // clipped, continuously-mounted frame.
                 .transition(.opacity)
             }
+            // The controls strip: collapse chevron, item count, Clear Queue. Always
+            // fully mounted regardless of hasQueue -- neither control disappears when
+            // the queue empties, they just go disabled/inert, exactly like the chevron
+            // and Clear Queue button already needed to stay put for the row list above
+            // to be independently expandable while empty (see queueDrawer's own doc
+            // comment for the fuller reasoning: three independent mount/unmount
+            // transitions racing each other is what used to read as this strip getting
+            // "replaced" rather than updating in place).
             HStack(spacing: 8) {
-                if hasQueue {
-                    HoverIconButton(
-                        icon: isQueueExpanded ? "chevron.down" : "chevron.up",
-                        size: 11,
-                        help: isQueueExpanded ? "Collapse" : "Expand",
-                        expandable: true
-                    ) {
-                        withAnimation(.spring(response: 0.25)) { isQueueExpanded.toggle() }
-                    }
-                    // Plain opacity, not blurInOnly -- blurInOnly's removal is .identity
-                    // (instant) and its insertion carries its own fixed .easeOut(duration:
-                    // 0.2), both independent of whatever withAnimation actually drives
-                    // hasQueue (spring(0.3) for a remove, spring(0.35) for adding to
-                    // queue). This button vanishing/appearing instantly while the row
-                    // list above took its own ~0.2-0.3s to fade was the other half of the
-                    // controls section reading as "replaced" rather than updating in
-                    // place -- same root cause as the row list's own fix just above.
-                    .transition(.opacity)
+                HoverIconButton(
+                    icon: isQueueExpanded ? "chevron.down" : "chevron.up",
+                    size: 11,
+                    help: isQueueExpanded ? "Collapse" : "Expand",
+                    expandable: true
+                ) {
+                    withAnimation(.spring(response: 0.25)) { isQueueExpanded.toggle() }
                 }
                 Text(queueCountLabel)
                     .font(.appMono(size: 11, weight: .semibold))
                     .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 Spacer()
-                if hasQueue {
-                    // .fixedSize() locks this to its own natural size --
-                    // without it, the Text inside GlassButton has a
-                    // minimumScaleFactor that can shrink the label if
-                    // anything upstream ever proposes it less width than it
-                    // wants, which is what made it visibly shrink when the
-                    // row list above pushed this bar's layout around.
-                    GlassButton(label: "Clear Queue", icon: "trash", tint: .red, fitContent: true) {
-                        withAnimation(.spring(response: 0.3)) {
-                            for job in queue where job.status == .converting { job.cancel() }
-                            queue.removeAll()
-                        }
+                // .fixedSize() locks this to its own natural size -- without it, the
+                // Text inside GlassButton has a minimumScaleFactor that can shrink the
+                // label if anything upstream ever proposes it less width than it wants,
+                // which is what made it visibly shrink when the row list above pushed
+                // this bar's layout around. Disabled (greyed, inert) rather than hidden
+                // when the queue is empty -- asked for explicitly, so the strip's own
+                // shape never changes based on queue content.
+                GlassButton(label: "Clear Queue", icon: "trash", tint: .red, fitContent: true, disabled: !hasQueue) {
+                    withAnimation(.spring(response: 0.3)) {
+                        for job in queue where job.status == .converting { job.cancel() }
+                        queue.removeAll()
                     }
-                    .fixedSize()
-                    // Same reasoning as the collapse chevron above: plain opacity so this
-                    // appears/disappears on hasQueue's own ambient animation instead of
-                    // blurInOnly's independent, fixed timing.
-                    .transition(.opacity)
                 }
+                .fixedSize()
             }
         }
     }

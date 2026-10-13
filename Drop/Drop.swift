@@ -6224,8 +6224,10 @@ struct ContentView: View {
                         // for why.
                         Color.clear
                     } else if activeTab == .convert {
-                        ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
-                            .transition(.identity)
+                        // Real content is convertOverlay below, kept permanently
+                        // mounted instead of created fresh here -- see its comment
+                        // for why.
+                        Color.clear
                     } else if activeTab == .devRelease {
                         // Real content is devReleaseOverlay below, kept
                         // permanently mounted instead of created fresh
@@ -6293,6 +6295,22 @@ struct ContentView: View {
                 }
                     .opacity(activeTab == .history ? 1 : 0)
                     .allowsHitTesting(activeTab == .history)
+                    .transaction(value: activeTab) { $0.animation = nil }
+
+                // Same reasoning as History above: Convert used to be mounted fresh on
+                // every switch (the if/else-if pattern), which tore its queue drawer down
+                // and rebuilt it from scratch each time -- every visible item replayed its
+                // own insertion transition, and TabBottomBar's own .glassBar(anchor: .bottom)
+                // mount transition played too, reading as a visible "pop in" (reported live)
+                // that Download's equivalent bar doesn't show. ActiveOnlyLayout keeps it
+                // permanently mounted instead, so both only ever animate when something
+                // actually changes, never just from switching tabs back to them.
+                ActiveOnlyLayout(isActive: activeTab == .convert) {
+                    ConvertView(ffmpegPath: manager.ffmpegPath, toolsReady: readyToDownload, history: manager.history, stagingJobs: $convertStagingJobs, queue: $convertQueue, selectedStagingID: $convertSelectedStagingID, config: config, manager: manager)
+                        .transaction(value: activeTab) { $0.animation = nil }
+                }
+                    .opacity(activeTab == .convert ? 1 : 0)
+                    .allowsHitTesting(activeTab == .convert)
                     .transaction(value: activeTab) { $0.animation = nil }
 
                 // Dev tab, unlike the others above, keeps essentially

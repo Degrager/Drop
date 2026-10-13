@@ -1900,15 +1900,21 @@ struct ConvertView: View {
                 // [should] appear from within the bounds of the queue."
                 //
                 // Symmetric now -- removal used to be .identity (instant) as a
-                // workaround for the ghosting bug, but that fought against a plain
-                // Collapse click (isQueueExpanded -> false with the queue still
-                // populated): the inner/main card should resize smoothly around the
-                // shrinking queue, not snap. The actual ghosting fix lives
-                // separately, in bottomBarHasItems's delayed collapse (see its own
-                // doc comment) -- that's what keeps the bar from collapsing out
-                // from under this row's fade, so instant removal here was likely
-                // redundant once that landed.
-                .transition(.opacity.animation(.easeOut(duration: 0.2)))
+                // workaround for the ghosting bug, then a flat .easeOut(duration: 0.2)
+                // of its own. Both were wrong for the same reason: this Group's fade
+                // raced the surrounding VStack's own height collapse (which repositions
+                // the controls HStack below it) on a DIFFERENT timeline than whichever
+                // withAnimation(...) actually triggered the removal (spring(0.3) for a
+                // row's own remove/Clear Queue, spring(0.25) for a plain Collapse
+                // click) -- so the row kept fading at its OLD position for up to 0.2s
+                // after the controls section (and "No items in queue") had already
+                // snapped into its NEW, already-collapsed layout. Reported live: the
+                // outgoing row "ghosting" above the controls section instead of
+                // shrinking out from under it in place. No explicit .animation() here
+                // means this transition just inherits whichever withAnimation wraps
+                // the actual mutation, so the fade and the collapse are always the
+                // same motion instead of two independently-timed ones.
+                .transition(.opacity)
             }
             HStack(spacing: 8) {
                 if hasQueue {
@@ -1920,7 +1926,15 @@ struct ConvertView: View {
                     ) {
                         withAnimation(.spring(response: 0.25)) { isQueueExpanded.toggle() }
                     }
-                    .transition(.blurInOnly)
+                    // Plain opacity, not blurInOnly -- blurInOnly's removal is .identity
+                    // (instant) and its insertion carries its own fixed .easeOut(duration:
+                    // 0.2), both independent of whatever withAnimation actually drives
+                    // hasQueue (spring(0.3) for a remove, spring(0.35) for adding to
+                    // queue). This button vanishing/appearing instantly while the row
+                    // list above took its own ~0.2-0.3s to fade was the other half of the
+                    // controls section reading as "replaced" rather than updating in
+                    // place -- same root cause as the row list's own fix just above.
+                    .transition(.opacity)
                 }
                 Text(queueCountLabel)
                     .font(.appMono(size: 11, weight: .semibold))
@@ -1940,7 +1954,10 @@ struct ConvertView: View {
                         }
                     }
                     .fixedSize()
-                    .transition(.blurInOnly)
+                    // Same reasoning as the collapse chevron above: plain opacity so this
+                    // appears/disappears on hasQueue's own ambient animation instead of
+                    // blurInOnly's independent, fixed timing.
+                    .transition(.opacity)
                 }
             }
         }

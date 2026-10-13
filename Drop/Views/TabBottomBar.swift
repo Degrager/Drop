@@ -3,9 +3,12 @@ import AppKit
 
 // MARK: - TabBottomBar
 //
-// Shared bottom bar used by both the Download and Convert tabs.
+// Shared bottom bar used by both the Download and Convert tabs. Always
+// mounted -- it never disappears just because the tab's queue is empty;
+// each tab's own disabled/greyed states (see primaryActionEnabled,
+// primaryActionDisabledLabel) communicate "nothing to do yet" instead.
 //
-// Shared chrome (always rendered when hasItems == true):
+// Shared chrome:
 //   • Top row: leftControls (COOKIES FROM) + Clear All button
 //   • Extra controls row: SAVE TO field + AUTO-OPEN FOLDER toggle
 //   • Primary action button (Download / Convert)
@@ -19,7 +22,7 @@ import AppKit
 // it now renders above the toolbar, at the top of each tab's main panel.
 //
 // Usage (download):
-//   TabBottomBar(config: config, hasItems: !linkPreviews.isEmpty,
+//   TabBottomBar(config: config,
 //                primaryActionLabel: "Download as MP3", primaryActionIcon: "arrow.down.circle",
 //                onClearAll: { ... }, onPrimaryAction: { download() }) {
 //       cookiesPicker   // leftControls
@@ -28,7 +31,7 @@ import AppKit
 //   }
 //
 // Usage (convert):
-//   TabBottomBar(config: config, hasItems: hasJobs,
+//   TabBottomBar(config: config,
 //                primaryActionLabel: "Convert Audio", primaryActionIcon: "arrow.triangle.2.circlepath",
 //                showPrimaryAction: hasSelectedQueued,
 //                onClearAll: { jobs.removeAll() }, onPrimaryAction: { convertSelected() }) {
@@ -43,7 +46,6 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
     @ObservedObject var config: Config
 
     // Visibility
-    var hasItems: Bool
     var showPrimaryAction: Bool = true
 
     // Gate — when false, primary action is disabled/greyed and shows a setup hint
@@ -144,212 +146,203 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
 
     var body: some View {
         VStack(spacing: 0) {
-            // Settings area — only when there are items. Floats as its own
-            // card, inset and rounded like every other section (media card,
-            // list header, paste bar) instead of docking flush to the
-            // window's edges with no margin -- previously this was the one
-            // section that broke the app's card-based language.
-            if hasItems {
-                VStack(spacing: compactHeight ? 8 : 10) {
+            VStack(spacing: compactHeight ? 8 : 10) {
 
-                    // Everything that isn't the primary action, now part of the
-                    // bar's own main card rather than a second grey card nested
-                    // inside it (removed per request). Convert's queue sits at
-                    // the top (its slot is `extraControls`), a divider line
-                    // separates it from the destination row below -- so it
-                    // reads as "queue, then destination" top to bottom.
-                    // Download never populates the queue slot, so its card is
-                    // just the destination row.
-                    VStack(alignment: .leading, spacing: compactHeight ? 8 : 10) {
-                        let extra = extraControls()
-                        if showExtraControls && !(extra is EmptyView) {
-                            // Own transition, separate from the Main Card's glassBar
-                            // below -- without this, the queue's mount/unmount had no
-                            // explicit transition of its own and fell back to
-                            // SwiftUI's default (a plain opacity fade sharing
-                            // whatever animation context the surrounding VStack
-                            // reflow was already in), which is what let it visually
-                            // bleed through the rest of the bar instead of animating
-                            // on its own.
-                            Group {
-                                extra
-                                GlassDivider()
-                            }
-                            .transition(.glassBar(anchor: .top))
-                            // Padded out before clipping, then pulled back in by the
-                            // same amount after -- widens the clip boundary past the
-                            // toolbar buttons' own tight bounds (room for their hover
-                            // scale/glow) without changing this section's actual
-                            // layout footprint. Plain .clipped() on the tight bounds
-                            // cut the collapse chevron's hover highlight off flat on
-                            // its left edge -- reported live, directly confirmed by
-                            // zooming in on it.
-                            .padding(8)
-                            .clipped()
-                            .padding(-8)
-                        }
-
-                        // Directory row (destination field, Browse/Reveal, Auto-Open,
-                        // Clear All) -- its own isolated section, same as the queue
-                        // above it: one container, its own transition between the
-                        // narrow/wide layouts, clipped to its own bounds so nothing
-                        // from the queue above (or anything else) can bleed into it.
+                // Everything that isn't the primary action, now part of the
+                // bar's own main card rather than a second grey card nested
+                // inside it (removed per request). Convert's queue sits at
+                // the top (its slot is `extraControls`), a divider line
+                // separates it from the destination row below -- so it
+                // reads as "queue, then destination" top to bottom.
+                // Download never populates the queue slot, so its card is
+                // just the destination row.
+                VStack(alignment: .leading, spacing: compactHeight ? 8 : 10) {
+                    let extra = extraControls()
+                    if showExtraControls && !(extra is EmptyView) {
+                        // Own transition, separate from the Main Card's glassBar
+                        // below -- without this, the queue's mount/unmount had no
+                        // explicit transition of its own and fell back to
+                        // SwiftUI's default (a plain opacity fade sharing
+                        // whatever animation context the surrounding VStack
+                        // reflow was already in), which is what let it visually
+                        // bleed through the rest of the bar instead of animating
+                        // on its own.
                         Group {
-                            // In a narrow column the toggle and the folder field can't share
-                            // one row without the field collapsing, so they stack.
-                            if narrow {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    leftControls()
-                                        .frame(height: DropGrid.controlHeight)
-                                    HStack(spacing: DropGrid.rowSpacing) {
-                                        batchDirectoryControl()
-                                        autoOpenToggle
-                                    }
-                                    if showClearAll {
-                                        GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
-                                            .frame(height: DropGrid.controlHeight)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            } else {
-                                // The destination (folder, Browse, Reveal), a divider,
-                                // then the Auto-Open Folder icon button. All controls in
-                                // the row share DropGrid.controlHeight so nothing sits a
-                                // pixel off from its neighbor.
-                                HStack(alignment: .center, spacing: DropGrid.rowSpacing + 4) {
-                                    leftControls()
-                                        .frame(height: DropGrid.controlHeight)
-
-                                    batchDirectoryControl()
-                                        .layoutPriority(1)
-
-                                    Rectangle()
-                                        .fill(Color.white.opacity(0.14))
-                                        .frame(width: 0.75, height: DropGrid.controlHeight - 8)
-
-                                    autoOpenToggle
-
-                                    if showClearAll {
-                                        Spacer(minLength: 0)
-                                        GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
-                                            .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
-                                    }
-                                }
-                            }
+                            extra
+                            GlassDivider()
                         }
-                        .transition(.opacity)
-                        // Same padded-out/pulled-back-in clip as the queue above --
-                        // Browse/Reveal/Auto-Open's hover highlight was getting the
-                        // same flat cut at the tight bounds. Reported live.
+                        .transition(.glassBar(anchor: .top))
+                        // Padded out before clipping, then pulled back in by the
+                        // same amount after -- widens the clip boundary past the
+                        // toolbar buttons' own tight bounds (room for their hover
+                        // scale/glow) without changing this section's actual
+                        // layout footprint. Plain .clipped() on the tight bounds
+                        // cut the collapse chevron's hover highlight off flat on
+                        // its left edge -- reported live, directly confirmed by
+                        // zooming in on it.
                         .padding(8)
                         .clipped()
                         .padding(-8)
                     }
 
-                    // Primary action button.
-                    // Deliberately the ONE control in the entire app that isn't glass --
-                    // a solid accent-blue gradient instead of the translucent Interactive
-                    // fills everything else uses. This is the strongest form of functional
-                    // differentiation available: the single most important commit action
-                    // per tab (Download / Convert) must outrank every chip, toggle, and
-                    // chrome button around it at a glance. Radius/spacing still pull from
-                    // DesignTokens so it stays proportionally consistent with the rest of
-                    // the UI even while its material language differs on purpose.
-                    if showPrimaryAction {
-                        // Danger mode is always enabled (you can always
-                        // cancel) and ignores toolsReady/primaryActionEnabled
-                        // entirely -- it's a different control, not a
-                        // disabled/enabled variant of the normal one.
-                        let enabled = primaryActionDangerMode || (toolsReady && primaryActionEnabled)
-                        // Hover only registers real feedback while actually
-                        // enabled -- a disabled button greying out further
-                        // on hover would read as broken/inconsistent rather
-                        // than helpful, so the glow/scale bump is reserved
-                        // for the clickable state only.
-                        let hovering = enabled && primaryActionHovering
-                        let accentColor = primaryActionDangerMode ? DesignTokens.Accent.danger : DesignTokens.Accent.primary
-                        Button(action: onPrimaryAction) {
-                            HStack(spacing: 8) {
-                                Image(systemName: primaryActionDangerMode ? "stop.fill" : (!toolsReady ? "lock.fill" : (enabled ? primaryActionIcon : (primaryActionDisabledIcon ?? primaryActionIcon))))
-                                    .font(.appMono(size: 15, weight: .semibold))
-                                // Keyed on the string so a label change (mode switch,
-                                // Download -> Cancel All) blurs one label out and the next
-                                // in, in place, rather than SwiftUI cross-fading two
-                                // overlapping strings.
-                                let label = primaryActionDangerMode ? "Cancel All" : (!toolsReady ? "Setup Needed" : (enabled ? primaryActionLabel : (primaryActionDisabledLabel ?? primaryActionLabel)))
-                                ZStack {
-                                    Text(label)
-                                        .font(.appMono(size: 15, weight: .semibold))
-                                        .id(label)
-                                        .transition(.blurIn)
+                    // Directory row (destination field, Browse/Reveal, Auto-Open,
+                    // Clear All) -- its own isolated section, same as the queue
+                    // above it: one container, its own transition between the
+                    // narrow/wide layouts, clipped to its own bounds so nothing
+                    // from the queue above (or anything else) can bleed into it.
+                    Group {
+                        // In a narrow column the toggle and the folder field can't share
+                        // one row without the field collapsing, so they stack.
+                        if narrow {
+                            VStack(alignment: .leading, spacing: 8) {
+                                leftControls()
+                                    .frame(height: DropGrid.controlHeight)
+                                HStack(spacing: DropGrid.rowSpacing) {
+                                    batchDirectoryControl()
+                                    autoOpenToggle
                                 }
-                                .animation(.easeOut(duration: 0.2), value: label)
+                                if showClearAll {
+                                    GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                                        .frame(height: DropGrid.controlHeight)
+                                }
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, compactHeight ? 8 : 11)
-                            .background(
-                                RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
-                                    .fill(enabled ?
-                                        LinearGradient(
-                                            // Brightens slightly on hover -- same two-stop
-                                            // gradient, just nudged toward a lighter blue
-                                            // (or red, in danger mode) rather than swapping
-                                            // in a translucent glass wash (this button
-                                            // intentionally stays solid).
-                                            colors: primaryActionDangerMode
-                                                ? (hovering
-                                                    ? [Color(red: 1.0, green: 0.42, blue: 0.38), Color(red: 0.85, green: 0.18, blue: 0.16)]
-                                                    : [DesignTokens.Accent.danger, Color(red: 0.70, green: 0.12, blue: 0.12)])
-                                                : (hovering
-                                                    ? [Color(red: 0.30, green: 0.58, blue: 1.0), Color(red: 0.16, green: 0.46, blue: 0.98)]
-                                                    : [DesignTokens.Accent.primary, Color(red: 0.10, green: 0.38, blue: 0.90)]),
-                                            startPoint: .topLeading, endPoint: .bottomTrailing
-                                        ) :
-                                        LinearGradient(
-                                            colors: [Color.white.opacity(DesignTokens.Interactive.fillRest), Color.white.opacity(DesignTokens.Interactive.fillRest)],
-                                            startPoint: .topLeading, endPoint: .bottomTrailing
-                                        )
-                                    )
-                                    .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
-                                        .stroke(enabled ? Color.white.opacity(hovering ? 0.85 : DesignTokens.Interactive.strokeHover) : Color.white.opacity(DesignTokens.Interactive.strokeDisabled), lineWidth: 0.75))
-                                    .shadow(color: enabled ? accentColor.opacity(hovering ? 0.6 : 0.4) : .clear, radius: hovering ? 16 : 12, y: 4)
-                            )
-                            .foregroundColor(enabled ? .white.opacity(DesignTokens.Text.primary) : .white.opacity(DesignTokens.Text.disabled))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!enabled)
-                        .help(!toolsReady ? "Install yt-dlp and ffmpeg from the Tools menu first" : "")
-                        .onHover { h in
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                primaryActionHovering = h
-                            }
-                        }
-                        .animation(.easeOut(duration: 0.18), value: hovering)
-                        .overlay {
-                            if primaryActionInProgress {
-                                RimBeam(cornerRadius: DesignTokens.Radius.medium)
-                            }
-                        }
-                        // Own transition for the button's own mount/unmount (when
-                        // showPrimaryAction itself toggles -- Download's tab does
-                        // this, Convert's doesn't). Previously unset, falling back
-                        // to SwiftUI's default plain-opacity fade -- the same
-                        // unscoped pattern already fixed for the queue above. Not
-                        // clipped like the queue/directory row: the hover glow/
-                        // shadow is meant to extend past the button's own edge, and
-                        // clipping would cut that off.
-                        .transition(.glassBar(anchor: .bottom))
-                    }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            // The destination (folder, Browse, Reveal), a divider,
+                            // then the Auto-Open Folder icon button. All controls in
+                            // the row share DropGrid.controlHeight so nothing sits a
+                            // pixel off from its neighbor.
+                            HStack(alignment: .center, spacing: DropGrid.rowSpacing + 4) {
+                                leftControls()
+                                    .frame(height: DropGrid.controlHeight)
 
+                                batchDirectoryControl()
+                                    .layoutPriority(1)
+
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.14))
+                                    .frame(width: 0.75, height: DropGrid.controlHeight - 8)
+
+                                autoOpenToggle
+
+                                if showClearAll {
+                                    Spacer(minLength: 0)
+                                    GlassButton(label: clearAllLabel, icon: "trash", tint: .red, fillHeight: true, action: onClearAll)
+                                        .frame(width: DropGrid.buttonColumnWidth, height: DropGrid.controlHeight)
+                                }
+                            }
+                        }
+                    }
+                    .transition(.opacity)
+                    // Same padded-out/pulled-back-in clip as the queue above --
+                    // Browse/Reveal/Auto-Open's hover highlight was getting the
+                    // same flat cut at the tight bounds. Reported live.
+                    .padding(8)
+                    .clipped()
+                    .padding(-8)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, compactHeight ? 8 : 12)
-                .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
-                .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
-                .contentColumn()
-                .padding(.bottom, compactHeight ? 8 : 14)
-                .transition(.glassBar(anchor: .bottom))
+
+                // Primary action button.
+                // Deliberately the ONE control in the entire app that isn't glass --
+                // a solid accent-blue gradient instead of the translucent Interactive
+                // fills everything else uses. This is the strongest form of functional
+                // differentiation available: the single most important commit action
+                // per tab (Download / Convert) must outrank every chip, toggle, and
+                // chrome button around it at a glance. Radius/spacing still pull from
+                // DesignTokens so it stays proportionally consistent with the rest of
+                // the UI even while its material language differs on purpose.
+                if showPrimaryAction {
+                    // Danger mode is always enabled (you can always
+                    // cancel) and ignores toolsReady/primaryActionEnabled
+                    // entirely -- it's a different control, not a
+                    // disabled/enabled variant of the normal one.
+                    let enabled = primaryActionDangerMode || (toolsReady && primaryActionEnabled)
+                    // Hover only registers real feedback while actually
+                    // enabled -- a disabled button greying out further
+                    // on hover would read as broken/inconsistent rather
+                    // than helpful, so the glow/scale bump is reserved
+                    // for the clickable state only.
+                    let hovering = enabled && primaryActionHovering
+                    let accentColor = primaryActionDangerMode ? DesignTokens.Accent.danger : DesignTokens.Accent.primary
+                    Button(action: onPrimaryAction) {
+                        HStack(spacing: 8) {
+                            Image(systemName: primaryActionDangerMode ? "stop.fill" : (!toolsReady ? "lock.fill" : (enabled ? primaryActionIcon : (primaryActionDisabledIcon ?? primaryActionIcon))))
+                                .font(.appMono(size: 15, weight: .semibold))
+                            // Keyed on the string so a label change (mode switch,
+                            // Download -> Cancel All) blurs one label out and the next
+                            // in, in place, rather than SwiftUI cross-fading two
+                            // overlapping strings.
+                            let label = primaryActionDangerMode ? "Cancel All" : (!toolsReady ? "Setup Needed" : (enabled ? primaryActionLabel : (primaryActionDisabledLabel ?? primaryActionLabel)))
+                            ZStack {
+                                Text(label)
+                                    .font(.appMono(size: 15, weight: .semibold))
+                                    .id(label)
+                                    .transition(.blurIn)
+                            }
+                            .animation(.easeOut(duration: 0.2), value: label)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, compactHeight ? 8 : 11)
+                        .background(
+                            RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
+                                .fill(enabled ?
+                                    LinearGradient(
+                                        // Brightens slightly on hover -- same two-stop
+                                        // gradient, just nudged toward a lighter blue
+                                        // (or red, in danger mode) rather than swapping
+                                        // in a translucent glass wash (this button
+                                        // intentionally stays solid).
+                                        colors: primaryActionDangerMode
+                                            ? (hovering
+                                                ? [Color(red: 1.0, green: 0.42, blue: 0.38), Color(red: 0.85, green: 0.18, blue: 0.16)]
+                                                : [DesignTokens.Accent.danger, Color(red: 0.70, green: 0.12, blue: 0.12)])
+                                            : (hovering
+                                                ? [Color(red: 0.30, green: 0.58, blue: 1.0), Color(red: 0.16, green: 0.46, blue: 0.98)]
+                                                : [DesignTokens.Accent.primary, Color(red: 0.10, green: 0.38, blue: 0.90)]),
+                                        startPoint: .topLeading, endPoint: .bottomTrailing
+                                    ) :
+                                    LinearGradient(
+                                        colors: [Color.white.opacity(DesignTokens.Interactive.fillRest), Color.white.opacity(DesignTokens.Interactive.fillRest)],
+                                        startPoint: .topLeading, endPoint: .bottomTrailing
+                                    )
+                                )
+                                .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.medium, style: .continuous)
+                                    .stroke(enabled ? Color.white.opacity(hovering ? 0.85 : DesignTokens.Interactive.strokeHover) : Color.white.opacity(DesignTokens.Interactive.strokeDisabled), lineWidth: 0.75))
+                                .shadow(color: enabled ? accentColor.opacity(hovering ? 0.6 : 0.4) : .clear, radius: hovering ? 16 : 12, y: 4)
+                        )
+                        .foregroundColor(enabled ? .white.opacity(DesignTokens.Text.primary) : .white.opacity(DesignTokens.Text.disabled))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!enabled)
+                    .help(!toolsReady ? "Install yt-dlp and ffmpeg from the Tools menu first" : "")
+                    .onHover { h in
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            primaryActionHovering = h
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.18), value: hovering)
+                    .overlay {
+                        if primaryActionInProgress {
+                            RimBeam(cornerRadius: DesignTokens.Radius.medium)
+                        }
+                    }
+                    // Own transition for the button's own mount/unmount (when
+                    // showPrimaryAction itself toggles -- Download's tab does
+                    // this, Convert's doesn't). Previously unset, falling back
+                    // to SwiftUI's default plain-opacity fade -- the same
+                    // unscoped pattern already fixed for the queue above. Not
+                    // clipped like the queue/directory row: the hover glow/
+                    // shadow is meant to extend past the button's own edge, and
+                    // clipping would cut that off.
+                    .transition(.glassBar(anchor: .bottom))
+                }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, compactHeight ? 8 : 12)
+            .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
+            .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
+            .contentColumn()
+            .padding(.bottom, compactHeight ? 8 : 14)
         }
     }
 }

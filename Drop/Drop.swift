@@ -7234,7 +7234,6 @@ struct ContentView: View {
             // ── Pinned bottom bar ─────────────────────────────────────
             TabBottomBar(
                     config: config,
-                    hasItems: linkPreviews.contains(where: { !$0.isPending }),
                     showPrimaryAction: selectedPreviews.contains { $0.downloadID == nil },
                     toolsReady: readyToDownload,
                     // Blocks Download until every link currently in the

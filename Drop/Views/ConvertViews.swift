@@ -1781,7 +1781,7 @@ struct ConvertView: View {
 
     // MARK: - Convert Queue drawer (lives in the bottom bar, above SAVE TO)
 
-    /// Real row height (including the LazyVStack's own inter-row spacing),
+    /// Real row height (including the row VStack's own inter-row spacing),
     /// measured live off the first rendered row rather than hardcoded --
     /// used as the drag-swap threshold below, and to derive the drawer's
     /// fixed viewport height. This used to be a hardcoded guess that had to
@@ -1810,30 +1810,32 @@ struct ConvertView: View {
     /// from a fixed top.
     ///
     /// The row list's own visibility is driven by `isQueueExpanded` ALONE,
-    /// never by `hasQueue` -- the two used to be ANDed together, which meant
-    /// clearing the queue (hasQueue true -> false) tore this whole Group
-    /// down via its own mount/unmount transition at the EXACT same instant
-    /// the controls strip below was ALSO tearing down and rebuilding its
-    /// chevron and Clear Queue button (both used to be gated on `hasQueue`
-    /// too). Three independent insertion/removal animations competing for
-    /// the same few square inches of screen at once is what read as the row
-    /// list "ghosting" behind the controls strip and the count label
-    /// appearing to travel down from the queue area into its final spot,
-    /// reported live. Now the row list is the ONLY thing that cares about
-    /// isQueueExpanded, the controls strip is the only thing that cares
-    /// about hasQueue (and never mounts/unmounts for it -- see its own
-    /// section below), and a queue going empty while still expanded is just
-    /// the row list's own content shrinking from N rows to zero within its
-    /// already-clipped frame, nothing else on screen so much as blinks.
+    /// never by `hasQueue` -- the controls strip below cares only about
+    /// `hasQueue` and never mounts/unmounts for it (see its own section
+    /// below). And `isQueueExpanded` itself no longer mounts/unmounts this
+    /// Group at all -- it's permanently in the tree, animating its own
+    /// height and opacity instead (see the Group's own trailing comment for
+    /// the full reasoning: a removed view's fade-out doesn't hold back its
+    /// siblings' layout, which is what let the controls strip visibly land
+    /// on top of still-fading rows on collapse).
     private var queueDrawer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if isQueueExpanded {
-                Group {
-                // Plain ScrollView + LazyVStack (not List) -- same container
-                // pattern already proven throughout the rest of the app, and
-                // avoids List's native macOS drag visual (a free-floating
-                // snapshot of the row) that doesn't match the confined,
-                // swap-in-place behavior implemented in QueueRowView below.
+            Group {
+                // Plain ScrollView + VStack (not List, and not LazyVStack) --
+                // ScrollView+something-not-List is the established pattern (avoids
+                // List's native macOS drag visual, a free-floating snapshot of the
+                // row, that doesn't match QueueRowView's own confined swap-in-place
+                // behavior) -- but LazyVStack specifically lagged behind a bulk
+                // removal (Clear Queue, or clearing the last couple of items): the
+                // controls strip below updated instantly (hasQueue/queueCountLabel
+                // read straight off `queue`), while the LazyVStack's own rows stayed
+                // fully opaque and in place for a visible beat before snapping away,
+                // rather than animating out with everything else -- reported live as
+                // rows overlapping the already-updated controls strip. A plain
+                // VStack has no lazy instantiation to lag behind; the queue is
+                // small and scroll-bounded (queueDrawerHeight caps it at ~2.5 visible
+                // rows regardless of real count) so laziness was never buying
+                // anything here.
                 //
                 // Fixed .frame(height:) instead of a GeometryReader-derived
                 // size -- the previous GeometryReader approach reported
@@ -1845,35 +1847,52 @@ struct ConvertView: View {
                 // scroll viewport are now sized off the exact same number.
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 0) {
+                        VStack(spacing: 0) {
                             ForEach(Array(queue.enumerated()), id: \.element.id) { index, job in
-                                if index > 0 {
-                                    GlassDivider().padding(.vertical, 3)
-                                }
-                                QueueRowView(
-                                    job: job, index: index, position: index + 1, queue: $queue, config: config,
-                                    onSelectionChange: { selectionVersion += 1 },
-                                    // Editing waits for the queue to stop: nothing in it can be pulled back
-                                    // to the Analyze panel while a conversion is running.
-                                    onEditRequested: (!isConverting && (job.status == .queued || job.status == .failed || job.status == .cancelled))
-                                        ? { editFromQueue(job) } : nil
-                                )
-                                .id(job.id)
-                                // Measures the real on-screen stride (row
-                                // height + the LazyVStack's own 6pt
-                                // spacing) so queueDrawerHeight always
-                                // matches reality instead of a hand-tuned
-                                // guess. Every row reports this, not just
-                                // the first -- harmless (rows are visually
-                                // uniform, and onChange only fires on an
-                                // actual value change).
-                                .background(
-                                    GeometryReader { geo in
-                                        Color.clear
-                                            .onAppear { queueRowStride = geo.size.height + 7 }
-                                            .onChange(of: geo.size.height) { _, h in queueRowStride = h + 7 }
+                                // Explicit .opacity transition on the WHOLE per-row unit
+                                // (divider + row together) -- without an explicit
+                                // transition here, a bulk removal (Clear Queue, or
+                                // clearing the last items) left every outgoing row fully
+                                // opaque and in place for the whole withAnimation
+                                // duration, then cut instantly at the very end, instead
+                                // of fading out across it -- reported live as rows
+                                // overlapping the controls strip below, which updates
+                                // (hasQueue/queueCountLabel) the instant `queue` changes
+                                // since those are plain computed reads, not animated
+                                // removals. Giving SwiftUI a concrete per-row transition
+                                // to animate, instead of leaving it to infer one for a
+                                // disappearing ForEach child, is what actually makes the
+                                // row fade out on the same timeline as everything else.
+                                Group {
+                                    if index > 0 {
+                                        GlassDivider().padding(.vertical, 3)
                                     }
-                                )
+                                    QueueRowView(
+                                        job: job, index: index, position: index + 1, queue: $queue, config: config,
+                                        onSelectionChange: { selectionVersion += 1 },
+                                        // Editing waits for the queue to stop: nothing in it can be pulled back
+                                        // to the Analyze panel while a conversion is running.
+                                        onEditRequested: (!isConverting && (job.status == .queued || job.status == .failed || job.status == .cancelled))
+                                            ? { editFromQueue(job) } : nil
+                                    )
+                                    // Measures the real on-screen stride (row
+                                    // height + the row VStack's own 6pt
+                                    // spacing) so queueDrawerHeight always
+                                    // matches reality instead of a hand-tuned
+                                    // guess. Every row reports this, not just
+                                    // the first -- harmless (rows are visually
+                                    // uniform, and onChange only fires on an
+                                    // actual value change).
+                                    .background(
+                                        GeometryReader { geo in
+                                            Color.clear
+                                                .onAppear { queueRowStride = geo.size.height + 7 }
+                                                .onChange(of: geo.size.height) { _, h in queueRowStride = h + 7 }
+                                        }
+                                    )
+                                }
+                                .id(job.id)
+                                .transition(.opacity)
                             }
                         }
                         .padding(.vertical, 2)
@@ -1896,8 +1915,13 @@ struct ConvertView: View {
                 // window ~150pt and it never shrank back). The ScrollView is
                 // greedy, so with room to spare it still fills to the max; the bar
                 // is given layoutPriority in the queue-only state (see body) so it
-                // claims that room ahead of the empty state.
-                .frame(minHeight: hasStaging ? nil : queueRowStride, maxHeight: queueDrawerHeight)
+                // claims that room ahead of the empty state. Collapsed
+                // (!isQueueExpanded) forces both to 0 -- see this whole Group's own
+                // trailing comment for why collapsing is driven by an animated
+                // height/opacity on an always-mounted Group now, rather than an
+                // if-gated mount/unmount.
+                .frame(minHeight: isQueueExpanded ? (hasStaging ? nil : queueRowStride) : 0,
+                       maxHeight: isQueueExpanded ? queueDrawerHeight : 0)
                 // Without this, the ScrollView's own content isn't confined to the
                 // frame above AS IT ANIMATES -- a SwiftUI .frame() constrains layout,
                 // not painting, so while this frame is mid-spring (growing from
@@ -1911,18 +1935,27 @@ struct ConvertView: View {
                 // from within its own bounds, it was painting past them from the start.
                 .clipped()
                 GlassDivider()
-                }
-                // Plain opacity, not glassPopInOnly's scale+blur: that scale (0.95->1,
-                // anchored top) made expanding look like the row-list container was
-                // growing into existence around its own content, rather than content
-                // landing inside an already-correctly-sized queue area. This Group now
-                // only ever mounts/unmounts on a manual chevron toggle (isQueueExpanded
-                // alone gates it -- see this property's own doc comment) -- clearing or
-                // adding to an already-expanded queue no longer touches this transition
-                // at all, it's just the row count changing within the Group's own
-                // clipped, continuously-mounted frame.
-                .transition(.opacity)
             }
+            // Opacity fades alongside the height above so collapsed content doesn't
+            // read as "crushed into a sliver" mid-animation, same reasoning as the
+            // growing case.
+            .opacity(isQueueExpanded ? 1 : 0)
+            // THE fix for collapsing (or Clear Queue) visibly overlapping the controls
+            // strip below: this Group used to be wrapped in `if isQueueExpanded { ... }`,
+            // which MOUNTS/UNMOUNTS it -- and a removed view's own fade-out transition
+            // does NOT hold back its SIBLINGS' layout. The moment isQueueExpanded went
+            // false, the VStack below (controls strip, destination row, Convert button)
+            // recomputed its position as though this Group were ALREADY GONE and jumped
+            // there instantly, while the Group itself kept painting its last real
+            // content, fully opaque, for the whole fade -- landing the controls strip
+            // directly on top of still-visible rows. Confirmed live, with a 3-item
+            // queue, clicking the collapse chevron: the item count and Clear Queue
+            // button appeared instantly, overlapping rows 1 and 2 beneath them.
+            // Keeping this Group permanently mounted and animating its own height/
+            // opacity instead means there is no mount/unmount event for siblings to
+            // race -- the VStack's total height changes exactly in step with what's
+            // actually painted, every frame, because it's driven by the same single
+            // animated frame value instead of a structural add/remove.
             // The controls strip: collapse chevron, item count, Clear Queue. Always
             // fully mounted regardless of hasQueue -- neither control disappears when
             // the queue empties, they just go disabled/inert, exactly like the chevron

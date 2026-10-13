@@ -1888,6 +1888,18 @@ struct ConvertView: View {
                 // is given layoutPriority in the queue-only state (see body) so it
                 // claims that room ahead of the empty state.
                 .frame(minHeight: hasStaging ? nil : queueRowStride, maxHeight: queueDrawerHeight)
+                // Without this, the ScrollView's own content isn't confined to the
+                // frame above AS IT ANIMATES -- a SwiftUI .frame() constrains layout,
+                // not painting, so while this frame is mid-spring (growing from
+                // queueRowStride toward queueDrawerHeight, or shrinking back), the row
+                // list's real content size painted past whatever height the frame had
+                // reached at that instant, bleeding into the controls HStack below it.
+                // Confirmed live with animation durations deliberately slowed ~6x for
+                // review: adding the first item showed "No items in queue" still
+                // visible, directly overlapping the incoming row's title, for a
+                // visible stretch of the reveal -- the row's content wasn't growing
+                // from within its own bounds, it was painting past them from the start.
+                .clipped()
                 GlassDivider()
                 }
                 // Plain opacity, not glassPopInOnly's scale+blur: that scale (0.95->1,

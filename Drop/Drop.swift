@@ -7231,10 +7231,20 @@ struct ContentView: View {
 
     @ViewBuilder
     private var mainPanelBottomBar: some View {
+            // Whether there's actually something the Download button could
+            // start right now -- previously this was also what gated whether
+            // the button showed up AT ALL (showPrimaryAction below). Now the
+            // button always shows (matching Convert's queue button), so this
+            // becomes an enablement check instead, same as Convert's
+            // hasSelectedQueued.
+            let eligibleToDownload = selectedPreviews.contains { $0.downloadID == nil }
             // ── Pinned bottom bar ─────────────────────────────────────
             TabBottomBar(
                     config: config,
-                    showPrimaryAction: selectedPreviews.contains { $0.downloadID == nil },
+                    // Always shown now, even with nothing queued (matches
+                    // Convert's Convert button) -- it reads "No Links to
+                    // Download" (greyed, disabled) instead of disappearing.
+                    showPrimaryAction: true,
                     toolsReady: readyToDownload,
                     // Blocks Download until every link currently in the
                     // queue has finished analyzing (isPending == false),
@@ -7246,8 +7256,10 @@ struct ContentView: View {
                     // just selectedPreviews since an in-flight card could be
                     // selected the moment it resolves -- the queue as a
                     // whole needs to settle first.
-                    primaryActionEnabled: !linkPreviews.contains(where: { $0.isPending }),
-                    primaryActionDisabledLabel: linkPreviews.contains(where: { $0.isPending }) ? "Analyzing…" : nil,
+                    primaryActionEnabled: eligibleToDownload && !linkPreviews.contains(where: { $0.isPending }),
+                    primaryActionDisabledLabel: linkPreviews.contains(where: { $0.isPending })
+                        ? "Analyzing…"
+                        : (linkPreviews.isEmpty ? "No Links to Download" : "Nothing to Download"),
                     primaryActionDisabledIcon: linkPreviews.contains(where: { $0.isPending }) ? "hourglass" : nil,
                     primaryActionInProgress: manager.downloads.contains { $0.status == .downloading },
                     primaryActionLabel: downloadButton_label,

@@ -1390,7 +1390,6 @@ struct SidebarTabItem: View {
 //  - MetaLines / MetaLine: compact metadata with colored symbols
 //  - SegmentedCapsule / FormRow: labelled "choose one" rows
 //  - FieldCapsule: a path/text field in a capsule
-//  - innerCard(): the grey card nested inside a glass card
 
 extension ChipData {
     enum MetaColumn { case time, video, audio, other }
@@ -3055,15 +3054,5 @@ struct FolderSizeLabel: View {
             .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
             .fixedSize()
         }
-    }
-}
-
-extension View {
-    /// The grey card nested inside a glass card (the bottom bar's controls, the
-    /// sidebar's update block): the same recipe the bottom bar's SAVE TO
-    /// section has always used, so utility zones read as separate from the
-    /// black content cards around them.
-    func innerCard(cornerRadius: CGFloat = DesignTokens.Radius.medium) -> some View {
-        glassCard(cornerRadius: cornerRadius, opacity: 0.35)
     }
 }

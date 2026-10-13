@@ -152,12 +152,14 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
             if hasItems {
                 VStack(spacing: compactHeight ? 8 : 10) {
 
-                    // The grey inner card: everything that isn't the primary
-                    // action. Convert's queue sits at the top (its slot is
-                    // `extraControls`), a divider line separates it from the
-                    // destination row below -- so it reads as "queue, then
-                    // destination" top to bottom. Download never populates the
-                    // queue slot, so its card is just the destination row.
+                    // Everything that isn't the primary action, now part of the
+                    // bar's own main card rather than a second grey card nested
+                    // inside it (removed per request). Convert's queue sits at
+                    // the top (its slot is `extraControls`), a divider line
+                    // separates it from the destination row below -- so it
+                    // reads as "queue, then destination" top to bottom.
+                    // Download never populates the queue slot, so its card is
+                    // just the destination row.
                     VStack(alignment: .leading, spacing: compactHeight ? 8 : 10) {
                         let extra = extraControls()
                         if showExtraControls && !(extra is EmptyView) {
@@ -243,8 +245,6 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                         .clipped()
                         .padding(-8)
                     }
-                    .padding(8)
-                    .innerCard()
 
                     // Primary action button.
                     // Deliberately the ONE control in the entire app that isn't glass --

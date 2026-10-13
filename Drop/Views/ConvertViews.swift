@@ -1380,10 +1380,22 @@ struct ConvertView: View {
                     }
                 }
             } else {
+                // Absorbs the leftover space itself instead of a separate
+                // Spacer(minLength: 0) below it -- a bare Spacer has zero
+                // ideal size, so it was claiming ALL the surplus regardless
+                // of what analyzePanel contained, leaving the empty-state
+                // hint stranded near the top with a disproportionate void
+                // beneath it before the (now always-visible, often
+                // collapsed) bottom bar. With a staged file, settingsCard
+                // still hugs the top exactly as before (alignment: .top,
+                // and the card itself has no reason to grow); with nothing
+                // staged, EmptyStateView's own internal maxHeight: .infinity
+                // now actually gets the room to center the hint in the
+                // middle of whatever space remains above the bar, instead
+                // of sitting pinned to the top of it.
                 analyzePanel
+                    .frame(maxHeight: .infinity, alignment: .top)
                     .zIndex(99)
-
-                Spacer(minLength: 0)
 
                 // With no Analyze card to compete with, the bar (queue drawer,
                 // SAVE TO, Convert) takes priority for space -- but only down to

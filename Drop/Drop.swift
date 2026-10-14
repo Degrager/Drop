@@ -4126,9 +4126,22 @@ struct DitherNoise: View {
 /// curve so it follows the card's SwiftUI `.continuous` rounded rectangle.
 struct GlassRim: NSViewRepresentable {
     var cornerRadius: CGFloat
+    /// For a card that grows and shrinks upward from a fixed bottom edge (the bottom
+    /// bar): shade the rim by distance from the bottom edge, measured against the
+    /// card's smallest height, instead of as a fraction of its current height. The
+    /// gradient is stretched to the card's size, so on a card whose height changes a
+    /// point on its edge would otherwise change colour every time it resizes.
+    var anchoredToBottom: Bool = false
 
-    func makeNSView(context: Context) -> GlassRimView { GlassRimView(cornerRadius: cornerRadius) }
-    func updateNSView(_ view: GlassRimView, context: Context) { view.cornerRadius = cornerRadius }
+    func makeNSView(context: Context) -> GlassRimView {
+        let v = GlassRimView(cornerRadius: cornerRadius)
+        v.anchoredToBottom = anchoredToBottom
+        return v
+    }
+    func updateNSView(_ view: GlassRimView, context: Context) {
+        view.cornerRadius = cornerRadius
+        view.anchoredToBottom = anchoredToBottom
+    }
 }
 
 final class GlassRimView: NSView {
@@ -4138,6 +4151,11 @@ final class GlassRimView: NSView {
     var cornerRadius: CGFloat {
         didSet { if cornerRadius != oldValue { needsLayout = true } }
     }
+    var anchoredToBottom = false {
+        didSet { if anchoredToBottom != oldValue { needsLayout = true } }
+    }
+    /// The smallest height this rim has been laid out at -- the bar's collapsed height.
+    private var referenceHeight: CGFloat = 0
 
     init(cornerRadius: CGFloat) {
         self.cornerRadius = cornerRadius
@@ -4166,7 +4184,28 @@ final class GlassRimView: NSView {
         gradient.frame = bounds
         ring.frame = bounds
         ring.cornerRadius = cornerRadius
+        updateGradientPoints()
         CATransaction.commit()
+    }
+
+    /// Default: corner to corner in the layer's unit space. Anchored: the same
+    /// gradient, but its vertical part is measured in points from the bottom edge
+    /// against `referenceHeight`, so it matches the default at that height and stays
+    /// put at any other. With rho = height / referenceHeight, a linear gradient
+    /// t = x/2 + (1 - rho*y)/2 over the unit square (y up) has axis from (0, 1/rho)
+    /// to (2, 1/rho - 2 rho) / (1 + rho^2), i.e. exactly the default at rho = 1.
+    private func updateGradientPoints() {
+        guard anchoredToBottom, bounds.height > 0 else {
+            gradient.startPoint = CGPoint(x: 0, y: 1)
+            gradient.endPoint = CGPoint(x: 1, y: 0)
+            return
+        }
+        referenceHeight = referenceHeight == 0 ? bounds.height : min(referenceHeight, bounds.height)
+        let rho = bounds.height / referenceHeight
+        let c = 1 + rho * rho
+        let start = CGPoint(x: 0, y: 1 / rho)
+        gradient.startPoint = start
+        gradient.endPoint = CGPoint(x: start.x + 2 / c, y: start.y - 2 * rho / c)
     }
 
     override func viewDidChangeBackingProperties() {
@@ -4360,6 +4399,8 @@ extension View {
 struct GlassCard: ViewModifier {
     var cornerRadius: CGFloat = DesignTokens.Radius.large
     var opacity: Double = 0.55
+    /// See GlassRim.anchoredToBottom.
+    var rimAnchoredToBottom: Bool = false
     // When true, a Tron-style light beam travels around the card's rim --
     // reserved for active/in-progress states (e.g. a link being analyzed),
     // not a resting decoration. Cards are calm and still until something is
@@ -4382,7 +4423,7 @@ struct GlassCard: ViewModifier {
                 // about a fifth of the main thread's time during a drag with
                 // several cards on screen. A gradient layer is composited on the
                 // GPU and just resizes.
-                GlassRim(cornerRadius: cornerRadius)
+                GlassRim(cornerRadius: cornerRadius, anchoredToBottom: rimAnchoredToBottom)
                     .allowsHitTesting(false)
             )
             .overlay {
@@ -5516,8 +5557,8 @@ struct VerticalGlassDivider: View {
 }
 
 extension View {
-    func glassCard(cornerRadius: CGFloat = DesignTokens.Radius.large, opacity: Double = 0.55, isActive: Bool = false) -> some View {
-        modifier(GlassCard(cornerRadius: cornerRadius, opacity: opacity, isActive: isActive))
+    func glassCard(cornerRadius: CGFloat = DesignTokens.Radius.large, opacity: Double = 0.55, isActive: Bool = false, rimAnchoredToBottom: Bool = false) -> some View {
+        modifier(GlassCard(cornerRadius: cornerRadius, opacity: opacity, rimAnchoredToBottom: rimAnchoredToBottom, isActive: isActive))
     }
 }
 

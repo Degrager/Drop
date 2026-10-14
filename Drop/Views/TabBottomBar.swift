@@ -339,7 +339,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
             }
             .padding(.horizontal, 12)
             .padding(.vertical, compactHeight ? 8 : 12)
-            .glassCard(cornerRadius: DesignTokens.Radius.xlarge)
+            .glassCard(cornerRadius: DesignTokens.Radius.xlarge, rimAnchoredToBottom: true)
             .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
             .contentColumn()
             .padding(.bottom, compactHeight ? 8 : 14)

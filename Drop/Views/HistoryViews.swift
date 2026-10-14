@@ -94,16 +94,16 @@ struct HistoryView: View {
                     label: "Clear all",
                     icon: "trash",
                     tint: .white,
-                    horizontalPadding: 14,
+                    horizontalPadding: 16,
                     fillHeight: true,
-                    fitContent: true,
+                    fitContent: false,
                     embedded: true,
                     activeFillOverride: (rest: 0.12, active: 0.12, hover: 0.12, press: 0.12),
                     embeddedGlowStroke: true,
                     scaleOverride: (hover: 1.0, press: 1.0),
                     action: { history.clear() }
                 )
-                .frame(height: innerPillHeight)
+                .frame(width: DropGrid.topBarButtonWidth, height: innerPillHeight)
                 .padding(.trailing, 5)
             } else {
                 // Keeps the capsule's trailing edge visually balanced

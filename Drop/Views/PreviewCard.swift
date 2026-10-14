@@ -36,7 +36,7 @@ enum CardMetrics {
     /// left, or an outcome ("Cancelled" is the longest), never yt-dlp's long activity labels, so it
     /// is narrower -- and a row's metadata chip is not squeezed onto an extra line (which makes
     /// every row, and so the drawer, taller).
-    static let queueStatusCardContentWidth: CGFloat = 88
+    static let queueStatusCardContentWidth: CGFloat = 108
     /// Its horizontal padding (Download's card uses 10).
     static let queueStatusCardPadding: CGFloat = 6
     /// The status card's own fixed CONTENT height (before its padding) -- sized for the tallest

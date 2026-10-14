@@ -20,10 +20,6 @@ enum CardMetrics {
     /// Height of the IN / OUT metadata capsule (two rows). The analyzing placeholder is drawn
     /// at the same height, so a card keeps its size as it resolves.
     static let metaCapsuleHeight: CGFloat = 41
-    /// CompletedCard's own status+buttons group width (StatusBesideButtons, a History row) --
-    /// unrelated to PreviewCard's own status card below; a separate component with its own
-    /// layout, not part of this round's fix.
-    static let statusWidth: CGFloat = 128
     /// The status card's own fixed CONTENT width -- a genuine constant, not derived from button
     /// capability. It used to be `statusWidth - (capable ? buttonSlot : 0)`, which meant the
     /// card's own width changed the instant a button's capability flipped (entering/leaving
@@ -36,6 +32,11 @@ enum CardMetrics {
     /// 140pt fits the longest of those with room to spare, well short of ballooning the row (the
     /// box is a flat constant regardless of state, so "Done"/"Queued" just sit in extra room).
     static let statusCardContentWidth: CGFloat = 140
+    /// The same box for a Convert queue row. Its words are only ever "Queued", "Converting", a time
+    /// left, or an outcome ("Cancelled" is the longest), never yt-dlp's long activity labels, so it
+    /// is narrower -- and a row's metadata chip is not squeezed onto an extra line (which makes
+    /// every row, and so the drawer, taller).
+    static let queueStatusCardContentWidth: CGFloat = 100
     /// The status card's own fixed CONTENT height (before its padding) -- sized for the tallest
     /// state (Downloading: icon+label, then a percentage+bar row below) so the card never
     /// resizes as the status changes. Every shorter state just has empty room below it.
@@ -739,72 +740,6 @@ struct CompactModeChip: View {
     }
 }
 
-// MARK: - StatusBesideButtons
-
-/// A row's trailing side: an optional status slot (a job's progress column while it runs, its
-/// outcome label after) followed by the buttons.
-///
-/// The whole side is `statusWidth + gap + the PERSISTENT buttons` wide in every state, however
-/// many others join them (Edit comes and goes with a queue row's status): the slot takes
-/// whatever they leave. So the text beside it never gets more or less room as the job moves on
-/// and its title never shifts. Mark the buttons that are always there `persistentButton()`
-/// (none marked: the last one counts). The slot is worked out from the buttons' own widths,
-/// which depend on their symbols, rather than from a number that only fits some of them. The
-/// status is one child (mark it `statusSlot()`), placed right-aligned against the buttons, so a
-/// view that is still fading out inside it takes no room.
-struct StatusBesideButtons: Layout {
-    var statusWidth: CGFloat
-    var gap: CGFloat
-    var buttonSpacing: CGFloat
-
-    struct IsStatus: LayoutValueKey { static let defaultValue = false }
-    struct IsPersistent: LayoutValueKey { static let defaultValue = false }
-
-    private func split(_ subviews: Subviews) -> (status: LayoutSubview?, buttons: [LayoutSubview]) {
-        (subviews.first { $0[IsStatus.self] }, subviews.filter { !$0[IsStatus.self] })
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let (status, buttons) = split(subviews)
-        let sizes = buttons.map { $0.sizeThatFits(.unspecified) }
-        let buttonsWidth = sizes.map(\.width).reduce(0, +) + buttonSpacing * CGFloat(max(sizes.count - 1, 0))
-        let height = max(sizes.map(\.height).max() ?? 0, status?.sizeThatFits(.unspecified).height ?? 0)
-        guard status != nil, !sizes.isEmpty else { return CGSize(width: buttonsWidth, height: height) }
-        var kept = buttons.indices.filter { buttons[$0][IsPersistent.self] }.map { sizes[$0].width }
-        if kept.isEmpty, let last = sizes.last { kept = [last.width] }
-        let keptWidth = kept.reduce(0, +) + buttonSpacing * CGFloat(kept.count - 1)
-        return CGSize(width: max(statusWidth + gap + keptWidth, gap + buttonsWidth), height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let (status, buttons) = split(subviews)
-        var x = bounds.maxX
-        for button in buttons.reversed() {
-            let size = button.sizeThatFits(.unspecified)
-            x -= size.width
-            button.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(size))
-            x -= buttonSpacing
-        }
-        if let status {
-            let size = status.sizeThatFits(.unspecified)
-            let right = buttons.isEmpty ? bounds.maxX : x + buttonSpacing - gap
-            status.place(at: CGPoint(x: right, y: bounds.midY), anchor: .trailing, proposal: ProposedViewSize(size))
-        }
-    }
-}
-
-extension View {
-    /// Marks the status child of a `StatusBesideButtons`.
-    func statusSlot() -> some View {
-        layoutValue(key: StatusBesideButtons.IsStatus.self, value: true)
-    }
-
-    /// Marks a button of a `StatusBesideButtons` that is there in every state.
-    func persistentButton() -> some View {
-        layoutValue(key: StatusBesideButtons.IsPersistent.self, value: true)
-    }
-}
-
 // MARK: - CompletedCard
 
 /// Universal status card. Used while a job is active (downloading /
@@ -834,6 +769,11 @@ struct CompletedCard<Status: View>: View {
     /// Finder). Unlike `trailingAccessory` it does not come and go, so it is part of the width
     /// the row keeps constant.
     var revealAccessory: AnyView? = nil
+    /// Keeps a flat row's button area wide enough for `trailingAccessory` even while it is
+    /// absent (Edit comes and goes with a queue row's status), so the buttons beside it never
+    /// move -- the same reserved-by-capability width PreviewCard.trailingAreaWidth gives
+    /// Download's cards.
+    var reservesTrailingSlot: Bool = false
     var thumbnail: AnyView?
     var thumbnailPlaceholder: String = "doc"
     var title: String
@@ -930,6 +870,12 @@ struct CompletedCard<Status: View>: View {
         }
     }
 
+    /// The flat row's button area, sized from what it can hold rather than what it holds right now.
+    private var flatButtonsWidth: CGFloat {
+        let slots = 1 + (revealAccessory != nil ? 1 : 0) + ((trailingAccessory != nil || reservesTrailingSlot) ? 1 : 0)
+        return CGFloat(slots) * CardMetrics.buttonWidth + CGFloat(slots - 1) * CardMetrics.buttonGap
+    }
+
     /// Remove, or Cancel while the row's work is in flight. One button either way, so the icon
     /// swaps in place (see HoverIconButton) instead of one button replacing another.
     private var removeOrCancelButton: some View {
@@ -997,21 +943,29 @@ struct CompletedCard<Status: View>: View {
             // directly beneath it rather than living in its own row/section.
             let removeButton = removeOrCancelButton
             if flat {
-                // Beside each other, so the row stays one line tall. The status (progress
-                // column, then the outcome label) and the buttons are one group of a constant
-                // width (see StatusBesideButtons): Edit comes and goes with the status, and the
-                // title must not.
-                StatusBesideButtons(statusWidth: CardMetrics.statusWidth, gap: compact ? 8 : 12, buttonSpacing: 6) {
+                // The same trailing design as Download's cards (PreviewCard.cardHeaderRow): the
+                // status in its own fixed-size outlined card, a hairline divider, then the buttons
+                // in an area of fixed width -- so nothing in the row moves as a job goes from
+                // Queued to Converting to Done, and the title never shifts. Edit comes and goes
+                // with the status; its slot is reserved either way (see reservesTrailingSlot).
+                HStack(spacing: 12) {
                     if inlineStatus != nil || statusLabel != nil {
-                        ZStack(alignment: .trailing) {
-                            if let inlineStatus { inlineStatus.transition(.blurIn) }
-                            if let statusLabel { statusLabel.transition(.blurIn) }
+                        ZStack(alignment: .leading) {
+                            if let inlineStatus { inlineStatus.transition(.statusSwap()) }
+                            if let statusLabel { statusLabel.transition(.statusSwap()) }
                         }
-                        .statusSlot()
+                        .frame(width: CardMetrics.queueStatusCardContentWidth, height: CardMetrics.statusCardContentHeight, alignment: .center)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+                        VerticalGlassDivider()
                     }
-                    if let trailingAccessory { trailingAccessory }
-                    if let revealAccessory { revealAccessory.persistentButton() }
-                    removeButton.persistentButton()
+                    HStack(spacing: CardMetrics.buttonGap) {
+                        if let trailingAccessory { trailingAccessory.transition(.blurIn) }
+                        if let revealAccessory { revealAccessory }
+                        removeButton
+                    }
+                    .frame(width: flatButtonsWidth, alignment: .trailing)
                 }
             } else {
                 if let inlineStatus { inlineStatus }

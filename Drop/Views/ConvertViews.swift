@@ -1199,6 +1199,11 @@ struct ConvertView: View {
     /// than Download's, and the two hints should line up between tabs.
     private var emptyHintBottomReserve: CGFloat { compactHeight ? 108 : 130 }
 
+    /// The staged settings card's own height, measured off the card (see analyzePanel). The bar
+    /// is capped to what is left below it while a file is staged, so an expanded drawer
+    /// compresses instead of covering the card's lower rows (and its Add to Queue button).
+    @State private var stagedPanelHeight: CGFloat = 0
+
     private var hasStaging: Bool { !stagingJobs.isEmpty }
     private var hasQueue: Bool { !queue.isEmpty }
     private var hasJobs: Bool { hasStaging || hasQueue }
@@ -1413,10 +1418,17 @@ struct ConvertView: View {
                     analyzePanel
                         .zIndex(isFileSwitcherOpen ? 101 : 98)
 
-                    convertBottomBar
-                        .followsSidebar()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                        .zIndex(100)
+                    // With a file staged, the bar may only use what the settings card
+                    // leaves free: the drawer's row list is flexible, so it compresses to
+                    // fit (as it did when the two shared a stack) rather than the bar
+                    // painting over the card. Nothing staged, nothing to protect.
+                    GeometryReader { geo in
+                        convertBottomBar
+                            .followsSidebar()
+                            .frame(maxHeight: hasStaging ? max(geo.size.height - stagedPanelHeight - 12, 0) : nil, alignment: .bottom)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    }
+                    .zIndex(100)
                 }
             }
         }
@@ -1753,6 +1765,13 @@ struct ConvertView: View {
             // The settings card is heavy: laid out once, for where the sidebar
             // is heading (see PinnedToSidebar).
             .pinnedToSidebar()
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { stagedPanelHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { _, h in stagedPanelHeight = h }
+                }
+            )
             // Fills the whole ZStack region (see body) and self-aligns --
             // pinned top, same as before: the card hugs its own content
             // regardless of how much extra room this grants it.
@@ -3027,23 +3046,39 @@ struct ConvertPreviewCard: View {
         )
     }
 
-    /// The progress column, only while the job runs: "Converting" (or its percentage and time
-    /// left) with a slim bar beneath. Where it goes next (Done, Failed...) is its own label
-    /// (queueOutcomeLabel) beside the buttons, not this column changing shape.
+    /// The progress column, only while the job runs: the status (its time left, or "Converting"
+    /// before that is known) over a slim bar with its percentage beside it -- the same shape as
+    /// Download's progress indicator (see Drop.swift progressIndicator), left-aligned in the
+    /// status card's fixed box. Where it goes next (Done, Failed...) is its own label
+    /// (queueOutcomeLabel), not this column changing shape.
     private var queueProgressColumn: AnyView? {
         guard job.visibleStatus == .converting else { return nil }
+        // Same threshold as the bar's own switch from shimmer to a real fill: progress starts at
+        // a bare 0, which would show a meaningless "0%" before any real data arrives.
+        let percentage = job.progressFraction.flatMap { $0 > 0 ? "\(Int(($0 * 100).rounded()))%" : nil }
+        // etaText reads "4%  ·  1m 19s left" (or just "4%" until a speed is known): the percentage
+        // has its own spot beside the bar, so only the time left goes on the status line.
+        let timeLeft = job.etaText.components(separatedBy: "·").dropFirst().first?.trimmingCharacters(in: .whitespaces) ?? ""
         return AnyView(
-            VStack(alignment: .trailing, spacing: 5) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.triangle.2.circlepath").foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                    Text(job.etaText.isEmpty ? queueStatusLabel : job.etaText)
+                    Text(timeLeft.isEmpty ? queueStatusLabel : timeLeft)
                         .foregroundColor(queueStatusColor)
                         .lineLimit(1)
                 }
                 .font(.appMono(size: 10, weight: .semibold))
-                inlineProgressBar
+                HStack(spacing: 6) {
+                    inlineProgressBar.frame(maxWidth: .infinity)
+                    if let percentage {
+                        Text(percentage)
+                            .font(.appMono(size: 10, weight: .semibold))
+                            .foregroundColor(queueStatusColor)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
             }
-            .frame(width: CardMetrics.statusWidth, alignment: .trailing)
         )
     }
 
@@ -3118,7 +3153,7 @@ struct ConvertPreviewCard: View {
     private var editAccessory: AnyView? {
         guard let onEditRequested, job.visibleStatus == .queued || job.visibleStatus == .failed || job.visibleStatus == .cancelled else { return nil }
         return AnyView(
-            HoverIconButton(icon: "slider.horizontal.3", size: 15, help: "Edit", expandable: true) {
+            HoverIconButton(icon: "slider.horizontal.3", size: 16, help: "Edit", expandable: true) {
                 onEditRequested()
             }
         )
@@ -3148,6 +3183,7 @@ struct ConvertPreviewCard: View {
             leadingAccessory: leadingAccessory,
             trailingAccessory: editAccessory,
             revealAccessory: isQueueRow ? revealAccessory : nil,
+            reservesTrailingSlot: isQueueRow,
             thumbnail: thumbView,
             thumbnailPlaceholder: job.isVideoFile ? "video" : "waveform",
             title: job.inputURL.deletingPathExtension().lastPathComponent,

@@ -594,15 +594,16 @@ struct CardFacade: View {
     /// width is now a flat constant there regardless of button state, so this mirrors it exactly
     /// rather than deriving from button count the way it used to.
     private var statusColumn: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        let content = metrics.flat ? CardMetrics.queueStatusCardContentWidth : CardMetrics.statusCardContentWidth
+        return VStack(alignment: .leading, spacing: 5) {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(Color.white.opacity(0.07))
                 .frame(width: 70, height: 8)
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Color.white.opacity(0.06))
-                .frame(width: CardMetrics.statusCardContentWidth, height: 4)
+                .frame(width: content, height: 4)
         }
-        .frame(width: CardMetrics.statusCardContentWidth + 20, alignment: .leading)
+        .frame(width: content + 20, alignment: .leading)
     }
 
     /// The outcome label of a finished download, beside the button row -- same padded total
@@ -612,7 +613,7 @@ struct CardFacade: View {
         RoundedRectangle(cornerRadius: 3, style: .continuous)
             .fill(Color.white.opacity(0.07))
             .frame(width: 52, height: 8)
-            .frame(width: CardMetrics.statusCardContentWidth + 20, alignment: .leading)
+            .frame(width: (metrics.flat ? CardMetrics.queueStatusCardContentWidth : CardMetrics.statusCardContentWidth) + 20, alignment: .leading)
     }
 
     /// The only piece that stretches with the card while frozen: one plain rounded shape per
@@ -813,17 +814,15 @@ struct CardFacade: View {
                 .padding(4)
             }
             .overlay(alignment: .topTrailing) {
-                HStack(spacing: 8) {
-                    if metrics.hasStatus {
-                        statusColumn
-                    } else if metrics.hasStatusLabel {
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(Color.white.opacity(0.07))
-                            .frame(width: 52, height: 8)
-                    }
-                    HStack(spacing: 6) {
+                // Mirrors CompletedCard's flat trailing layout: the status in its fixed-width
+                // box, then the buttons in an area reserved for all three slots (Edit, Reveal,
+                // Remove) whichever of them a row has right now.
+                HStack(spacing: 12) {
+                    if metrics.hasStatus { statusColumn } else if metrics.hasStatusLabel { statusLabel }
+                    HStack(spacing: CardMetrics.buttonGap) {
                         ForEach(0..<max(metrics.buttonCount, 1), id: \.self) { _ in button(28) }
                     }
+                    .frame(width: 3 * CardMetrics.buttonWidth + 2 * CardMetrics.buttonGap, alignment: .trailing)
                 }
                 .frame(height: flatHeaderHeight)
                 .padding(4)

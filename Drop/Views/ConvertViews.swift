@@ -1380,26 +1380,27 @@ struct ConvertView: View {
                     }
                 }
             } else {
-                // analyzePanel absorbs the leftover space itself now (each of
-                // its own branches below carries its own
-                // frame(maxHeight: .infinity, alignment:)), instead of a
-                // separate Spacer(minLength: 0) here -- a bare Spacer has
-                // zero ideal size, so it was claiming ALL the surplus
-                // regardless of what analyzePanel contained, leaving the
-                // empty-state hint stranded near the top with a
-                // disproportionate void beneath it before the (now
-                // always-visible, often collapsed) bottom bar.
-                analyzePanel
-                    .zIndex(99)
+                // ZStack, not a VStack + Spacer: analyzePanel and
+                // convertBottomBar used to be siblings sharing one pool of
+                // leftover space, which meant analyzePanel's size (and so its
+                // hint's position) reacted to however tall convertBottomBar
+                // currently was -- expanding/collapsing the queue drawer
+                // visibly shifted "Drop files to convert" up and down, even
+                // though the two have nothing to do with each other. Each
+                // child here independently fills the whole ZStack and
+                // self-aligns (top for the panel, bottom for the bar), the
+                // same overlay idiom Download already uses for its own
+                // placeholder -- the bar can grow or shrink against the
+                // bottom edge without the panel's own anchor ever moving.
+                ZStack {
+                    analyzePanel
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .zIndex(99)
 
-                // With no Analyze card to compete with, the bar (queue drawer,
-                // SAVE TO, Convert) takes priority for space -- but only down to
-                // its siblings' minimums, so a short window compresses the drawer
-                // instead of overflowing. With a staged file the panel and the bar
-                // share space as before.
-                convertBottomBar
-                    .followsSidebar()
-                    .layoutPriority(hasStaging ? 0 : 1)
+                    convertBottomBar
+                        .followsSidebar()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                }
             }
         }
     }
@@ -1735,12 +1736,6 @@ struct ConvertView: View {
             // The settings card is heavy: laid out once, for where the sidebar
             // is heading (see PinnedToSidebar).
             .pinnedToSidebar()
-            // Claims whatever space convertBottomBar's Spacer removal left
-            // on the table (see body), same as the empty branch below, but
-            // pinned to the top -- the card hugs its own content regardless
-            // of how much extra room this grants it, so it reads exactly as
-            // before.
-            .frame(maxHeight: .infinity, alignment: .top)
             // Both branches of this if/else take layout space, so the outgoing
             // one must leave instantly -- see AnyTransition.glassPopInOnly.
             .transition(.glassPopInOnly)
@@ -1753,24 +1748,16 @@ struct ConvertView: View {
             // Hard minimum kept low: it counts toward the window's minimum
             // height, and this state also holds the whole bottom bar.
             .frame(maxWidth: .infinity, minHeight: compactHeight ? 80 : 120)
-            // Overrides EmptyStateView's own internal maxHeight: .infinity,
-            // which would otherwise greedily fill however much space the
-            // frame below proposes -- fixedSize locks it back to its true
-            // content-driven height (icon + two lines of text) so IT doesn't
-            // do the centering; the frame's alignment below does instead.
+            // Overrides EmptyStateView's own internal maxHeight: .infinity --
+            // without this, the hint would fill and center in however much
+            // vertical room the ZStack in body happens to offer (the whole
+            // window, effectively), rather than sitting at its own true,
+            // content-driven height right under the drop zone where the
+            // outer .frame(alignment: .top) in body puts it.
             .fixedSize(horizontal: false, vertical: true)
             // Light, so the hint FOLLOWS the sidebar's edge frame by frame and
             // stays centered in what's visible.
             .followsSidebar()
-            // A little breathing room before the control strip, not flush
-            // against it.
-            .padding(.bottom, 24)
-            // Bottom-aligned rather than centered: keeps the hint close to
-            // the (now always-visible, often collapsed) bottom bar instead
-            // of leaving a large empty gap directly above the control strip
-            // -- any real slack collects up near the drop zone instead,
-            // where it reads as generous spacing rather than a void.
-            .frame(maxHeight: .infinity, alignment: .bottom)
             .transition(.blurInOnly)
         }
     }
@@ -1846,13 +1833,23 @@ struct ConvertView: View {
                         VStack(spacing: 0) {
                             // Expanding with nothing queued yet used to just show a
                             // blank scrollable rectangle -- this tip fills that same
-                            // row-height slot instead, so expanding always shows
-                            // something rather than an unexplained empty box.
+                            // slot instead, so expanding always shows something
+                            // rather than an unexplained empty box. Same icon-over-
+                            // text shape as the page-level "Drop files to convert"
+                            // hint (analyzePanel's own EmptyStateView), just scaled
+                            // down to fit the drawer's much smaller footprint, and
+                            // centered in the drawer's full expanded height rather
+                            // than hugging the top of it.
                             if queue.isEmpty {
-                                Text("Queue is empty")
-                                    .font(.appMono(size: 11))
-                                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-                                    .frame(maxWidth: .infinity, minHeight: queueRowStride)
+                                VStack(spacing: 6) {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                        .font(.appMono(size: 16, weight: .thin))
+                                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                                    Text("Queue is empty")
+                                        .font(.appMono(size: 11))
+                                        .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                                }
+                                .frame(maxWidth: .infinity, minHeight: queueDrawerHeight, alignment: .center)
                             }
                             ForEach(Array(queue.enumerated()), id: \.element.id) { index, job in
                                 // Explicit .opacity transition on the WHOLE per-row unit

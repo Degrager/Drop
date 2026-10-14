@@ -2031,6 +2031,12 @@ struct ConvertView: View {
                 Text(queueCountLabel)
                     .font(.appMono(size: 11, weight: .semibold))
                     .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                    // The count changes instantly: adding an item (or clearing the queue)
+                    // happens inside an animated transaction, and without this the text
+                    // cross-faded in a layer of its own, so the old count drifted up with the
+                    // bar while the new one waited to fade in, apart from the rest of the strip.
+                    // Only its CONTENT is exempt; its position still animates with the strip.
+                    .contentTransition(.identity)
                 Spacer()
                 // .fixedSize() locks this to its own natural size -- without it, the
                 // Text inside GlassButton has a minimumScaleFactor that can shrink the

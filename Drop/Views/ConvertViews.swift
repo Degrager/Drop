@@ -1193,19 +1193,11 @@ struct ConvertView: View {
     /// selectionVersion's own comment above for the same issue elsewhere).
     @State private var queueScrollProxy: ScrollViewProxy? = nil
 
-    /// The bottom bar's height with the queue drawer collapsed, measured off the
-    /// real bar. The empty-state hint reserves exactly this much at the bottom so
-    /// it centers in the space above the (collapsed) bar -- a constant, so the hint
-    /// stays put while the drawer opens and closes. Only ever shrinks after the
-    /// first reading (and only while collapsed), so the heights passing through
-    /// during a collapse animation never move it.
-    @State private var collapsedBarHeight: CGFloat = 0
-
-    private func noteBarHeight(_ h: CGFloat) {
-        if collapsedBarHeight == 0 || (!isQueueExpanded && h < collapsedBarHeight) {
-            collapsedBarHeight = h
-        }
-    }
+    /// Space the empty-state hint leaves free at the bottom of the tab, so it
+    /// centers at the same height as Download's hint (which centers above Download's
+    /// bar). A fixed number rather than Convert's own bar height: that bar is taller
+    /// than Download's, and the two hints should line up between tabs.
+    private var emptyHintBottomReserve: CGFloat { compactHeight ? 108 : 130 }
 
     private var hasStaging: Bool { !stagingJobs.isEmpty }
     private var hasQueue: Bool { !queue.isEmpty }
@@ -1416,13 +1408,6 @@ struct ConvertView: View {
 
                     convertBottomBar
                         .followsSidebar()
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear
-                                    .onAppear { noteBarHeight(geo.size.height) }
-                                    .onChange(of: geo.size.height) { _, h in noteBarHeight(h) }
-                            }
-                        )
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 }
             }
@@ -1784,10 +1769,10 @@ struct ConvertView: View {
             // Light, so the hint FOLLOWS the sidebar's edge frame by frame and
             // stays centered in what's visible.
             .followsSidebar()
-            // Reserves the collapsed bar's footprint so "centered" means centered
-            // in the space actually visible above it, not in the full region the
-            // bar overlaps the bottom of.
-            .padding(.bottom, collapsedBarHeight)
+            // Keeps the hint centered in the space above the bar, not in the full
+            // region the bar overlaps the bottom of -- and at the same height as
+            // Download's hint (see emptyHintBottomReserve).
+            .padding(.bottom, emptyHintBottomReserve)
             // Fills the whole ZStack region (see body) and centers within it
             // -- this region no longer shares space with convertBottomBar
             // (a ZStack, not a VStack sibling), so centering here is just as

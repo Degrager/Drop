@@ -3056,3 +3056,107 @@ struct FolderSizeLabel: View {
         }
     }
 }
+
+// MARK: - Drop mark
+
+/// The app icon's mark -- an outlined drop with a down arrow inside it -- as plain
+/// geometry, so the sidebar logo, the menu bar panel's header and the menu bar icon
+/// itself all draw exactly the same shape. Paths are y-down (SwiftUI's space; the
+/// status item image is drawn flipped to match) and are stroke centerlines: stroke
+/// them round-capped and round-joined.
+enum DropGlyph {
+    /// The drop's width over its height.
+    static let aspect: CGFloat = 0.68
+    static func dropStroke(forHeight h: CGFloat) -> CGFloat { h * 0.085 }
+    static func arrowStroke(forHeight h: CGFloat) -> CGFloat { h * 0.07 }
+
+    /// Fits the drop (outline included) inside `rect`, centered, and returns the
+    /// centerlines of the outline and of the arrow.
+    static func paths(in rect: CGRect, height: CGFloat) -> (drop: CGPath, arrow: CGPath) {
+        let sd = dropStroke(forHeight: height)
+        let H = height - sd
+        let W = H * aspect
+        let x0 = rect.midX - W / 2
+        let y0 = rect.midY - H / 2
+        let r = W / 2
+        let cy = H - r                      // the round bottom's center
+        let k: CGFloat = 0.5523 * r         // cubic approximation of a quarter circle
+
+        let drop = CGMutablePath()
+        drop.move(to: CGPoint(x: x0 + r, y: y0))
+        drop.addCurve(to: CGPoint(x: x0 + W, y: y0 + cy),
+                      control1: CGPoint(x: x0 + 0.62 * W, y: y0 + 0.19 * H),
+                      control2: CGPoint(x: x0 + W, y: y0 + 0.42 * H))
+        drop.addCurve(to: CGPoint(x: x0 + r, y: y0 + H),
+                      control1: CGPoint(x: x0 + W, y: y0 + cy + k),
+                      control2: CGPoint(x: x0 + r + k, y: y0 + H))
+        drop.addCurve(to: CGPoint(x: x0, y: y0 + cy),
+                      control1: CGPoint(x: x0 + r - k, y: y0 + H),
+                      control2: CGPoint(x: x0, y: y0 + cy + k))
+        drop.addCurve(to: CGPoint(x: x0 + r, y: y0),
+                      control1: CGPoint(x: x0, y: y0 + 0.42 * H),
+                      control2: CGPoint(x: x0 + 0.38 * W, y: y0 + 0.19 * H))
+        drop.closeSubpath()
+
+        let tip = CGPoint(x: x0 + r, y: y0 + 0.84 * H)
+        let arm = 0.21 * H
+        let arrow = CGMutablePath()
+        arrow.move(to: CGPoint(x: tip.x, y: y0 + 0.36 * H))
+        arrow.addLine(to: tip)
+        arrow.move(to: CGPoint(x: tip.x - arm, y: tip.y - arm))
+        arrow.addLine(to: tip)
+        arrow.addLine(to: CGPoint(x: tip.x + arm, y: tip.y - arm))
+        return (drop, arrow)
+    }
+
+    /// The menu bar icon: a template image, so macOS tints it for light/dark menu
+    /// bars and the pressed state.
+    static func statusImage(height: CGFloat = 17) -> NSImage {
+        let sd = dropStroke(forHeight: height)
+        let sa = arrowStroke(forHeight: height)
+        let size = NSSize(width: ceil(height * aspect + sd) + 2, height: height)
+        let image = NSImage(size: size, flipped: true) { rect in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            let p = paths(in: rect, height: height)
+            ctx.setStrokeColor(NSColor.black.cgColor)
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
+            ctx.setLineWidth(sd)
+            ctx.addPath(p.drop)
+            ctx.strokePath()
+            ctx.setLineWidth(sa)
+            ctx.addPath(p.arrow)
+            ctx.strokePath()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Drop"
+        return image
+    }
+}
+
+/// The drop mark as a SwiftUI view, `height` tall; colored by `foregroundColor`.
+struct DropMark: View {
+    var height: CGFloat
+
+    private struct Part: Shape {
+        let height: CGFloat
+        let arrow: Bool
+        func path(in rect: CGRect) -> Path {
+            let p = DropGlyph.paths(in: rect, height: height)
+            return Path(arrow ? p.arrow : p.drop)
+        }
+    }
+
+    var body: some View {
+        let sd = DropGlyph.dropStroke(forHeight: height)
+        let sa = DropGlyph.arrowStroke(forHeight: height)
+        ZStack {
+            Part(height: height, arrow: false)
+                .stroke(style: StrokeStyle(lineWidth: sd, lineCap: .round, lineJoin: .round))
+            Part(height: height, arrow: true)
+                .stroke(style: StrokeStyle(lineWidth: sa, lineCap: .round, lineJoin: .round))
+        }
+        .frame(width: height * DropGlyph.aspect + sd, height: height)
+    }
+}

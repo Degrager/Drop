@@ -152,8 +152,7 @@ struct MenuBarQuickView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "arrow.down.circle.fill")
-                .font(.appMono(size: 15, weight: .semibold))
+            DropMark(height: 17)
                 .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
             Text("Drop")
                 .font(.appMono(size: 13, weight: .semibold))
@@ -280,8 +279,7 @@ final class MenuBarController: NSObject {
     func install() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let button = statusItem?.button else { return }
-        button.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "Drop")
-        button.image?.isTemplate = true
+        button.image = DropGlyph.statusImage()
         button.action = #selector(statusItemClicked)
         button.target = self
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])

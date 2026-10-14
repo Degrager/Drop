@@ -5196,8 +5196,7 @@ struct ToolsStatusPill: View {
 struct SidebarBrandLabel: View {
     var body: some View {
         HStack(spacing: 7) {
-            Image(systemName: "arrow.down.circle.fill")
-                .font(.appMono(size: 14, weight: .semibold))
+            DropMark(height: 16)
                 .foregroundColor(DesignTokens.Accent.primary)
             TypedText("Drop")
                 .font(.appMono(size: 14, weight: .semibold))

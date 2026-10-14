@@ -1403,12 +1403,20 @@ struct ConvertView: View {
                     // alignment within this (see their trailing comments) --
                     // the staged card stays pinned top, the empty-state hint
                     // centers.
+                    //
+                    // The bar sits above the panel: an expanded queue grows up over
+                    // the panel's area, and the panel (its hint, or a tall settings
+                    // card) used to paint on top of it. The panel only goes above the
+                    // bar while its file-switcher popup is open -- that popup is an
+                    // overlay inside the panel and can extend down over the bar, and
+                    // it can't outrank the bar unless the whole panel does.
                     analyzePanel
-                        .zIndex(99)
+                        .zIndex(isFileSwitcherOpen ? 101 : 98)
 
                     convertBottomBar
                         .followsSidebar()
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .zIndex(100)
                 }
             }
         }

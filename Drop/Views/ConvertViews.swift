@@ -1294,14 +1294,14 @@ struct ConvertView: View {
                 tint: .white,
                 horizontalPadding: 16,
                 fillHeight: true,
-                fitContent: true,
+                fitContent: false,
                 embedded: true,
                 activeFillOverride: (rest: 0.12, active: 0.12, hover: 0.12, press: 0.12),
                 embeddedGlowStroke: true,
                 scaleOverride: (hover: 1.0, press: 1.0),
                 action: { openFilePicker() }
             )
-            .frame(height: innerPillHeight)
+            .frame(width: DropGrid.topBarButtonWidth, height: innerPillHeight)
             .padding(.trailing, 5)
         }
         .frame(height: fieldHeight)

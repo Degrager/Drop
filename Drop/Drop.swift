@@ -37,6 +37,7 @@ enum DropGrid {
     static let labelSpacing: CGFloat = 6           // gap between a micro-label and its control
     static let buttonColumnWidth: CGFloat = 120    // fixed width for Browse / Clear All / Paste & Analyze columns
     static let browseWidth: CGFloat = 96           // Browse next to a folder capsule
+    static let topBarButtonWidth: CGFloat = 132    // the embedded main button in the Download and Convert input bars (Analyze Link / Browse): one width for both
     static let microLabelSize: CGFloat = 10
     static let fieldFontSize: CGFloat = 12
 }
@@ -7340,7 +7341,7 @@ struct ContentView: View {
             // instead of hugging the label/icon's natural size and
             // floating centered with visible gaps top/bottom.
             fillHeight: true,
-            fitContent: true,
+            fitContent: false,
             isLoading: false,
             embedded: true,
             activeFillOverride: fillOverride,
@@ -7419,7 +7420,7 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(height: innerPillHeight)
+        .frame(width: DropGrid.topBarButtonWidth, height: innerPillHeight)
         .padding(.trailing, 5)
         // Deliberately NOT gated on isAnalyzing (see comment at call site)
         // -- only a genuine retry/invalid state or a missing yt-dlp/ffmpeg

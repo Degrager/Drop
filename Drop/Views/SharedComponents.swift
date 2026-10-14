@@ -25,7 +25,7 @@ enum WindowLayout {
     static let minimumSizeCollapsed = NSSize(width: 800, height: 800)
     static let minimumSizeExpanded = NSSize(width: 1000, height: 800)
     /// Every launch opens at this frame size (see DropAppDelegate).
-    static let defaultSize = NSSize(width: 1050, height: 800)
+    static let defaultSize = NSSize(width: 1100, height: 800)
 
     // MARK: Sidebar
 
@@ -603,7 +603,7 @@ struct CardFacade: View {
                 .fill(Color.white.opacity(0.06))
                 .frame(width: content, height: 4)
         }
-        .frame(width: content + 20, alignment: .leading)
+        .frame(width: content + (metrics.flat ? 2 * CardMetrics.queueStatusCardPadding : 20), alignment: .leading)
     }
 
     /// The outcome label of a finished download, beside the button row -- same padded total
@@ -613,7 +613,7 @@ struct CardFacade: View {
         RoundedRectangle(cornerRadius: 3, style: .continuous)
             .fill(Color.white.opacity(0.07))
             .frame(width: 52, height: 8)
-            .frame(width: (metrics.flat ? CardMetrics.queueStatusCardContentWidth : CardMetrics.statusCardContentWidth) + 20, alignment: .leading)
+            .frame(width: metrics.flat ? CardMetrics.queueStatusCardContentWidth + 2 * CardMetrics.queueStatusCardPadding : CardMetrics.statusCardContentWidth + 20, alignment: .leading)
     }
 
     /// The only piece that stretches with the card while frozen: one plain rounded shape per
@@ -815,14 +815,12 @@ struct CardFacade: View {
             }
             .overlay(alignment: .topTrailing) {
                 // Mirrors CompletedCard's flat trailing layout: the status in its fixed-width
-                // box, then the buttons in an area reserved for all three slots (Edit, Reveal,
-                // Remove) whichever of them a row has right now.
-                HStack(spacing: 12) {
+                // box, then the buttons the row has right now.
+                HStack(spacing: 6) {
                     if metrics.hasStatus { statusColumn } else if metrics.hasStatusLabel { statusLabel }
-                    HStack(spacing: CardMetrics.buttonGap) {
+                    HStack(spacing: 6) {
                         ForEach(0..<max(metrics.buttonCount, 1), id: \.self) { _ in button(28) }
                     }
-                    .frame(width: 3 * CardMetrics.buttonWidth + 2 * CardMetrics.buttonGap, alignment: .trailing)
                 }
                 .frame(height: flatHeaderHeight)
                 .padding(4)
@@ -1670,9 +1668,9 @@ struct MetaLinesContent: View {
 
 extension View {
     /// The rounded capsule every card's metadata sits in.
-    func metaCapsuleChrome() -> some View {
+    func metaCapsuleChrome(horizontalPadding: CGFloat = 12) -> some View {
         self
-            .padding(.horizontal, 12)
+            .padding(.horizontal, horizontalPadding)
             .padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Color.white.opacity(0.05)))
             .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
@@ -2021,6 +2019,8 @@ struct MetaLine: View {
     let chips: [ChipData]
     /// Draws the line inside the same capsule MetaLines uses (Convert queue rows).
     var inCapsule: Bool = false
+    /// Less side padding in the capsule, for the dense queue rows.
+    var compact: Bool = false
 
     var body: some View {
         if chips.isEmpty {
@@ -2028,7 +2028,7 @@ struct MetaLine: View {
         } else if inCapsule {
             // The capsule hugs its content.
             MetaLineContent(chips: chips)
-                .metaCapsuleChrome()
+                .metaCapsuleChrome(horizontalPadding: compact ? 8 : 12)
                 .reportsFacadeMeta()
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {

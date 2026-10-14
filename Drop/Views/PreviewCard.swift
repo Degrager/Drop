@@ -36,7 +36,9 @@ enum CardMetrics {
     /// left, or an outcome ("Cancelled" is the longest), never yt-dlp's long activity labels, so it
     /// is narrower -- and a row's metadata chip is not squeezed onto an extra line (which makes
     /// every row, and so the drawer, taller).
-    static let queueStatusCardContentWidth: CGFloat = 100
+    static let queueStatusCardContentWidth: CGFloat = 88
+    /// Its horizontal padding (Download's card uses 10).
+    static let queueStatusCardPadding: CGFloat = 6
     /// The status card's own fixed CONTENT height (before its padding) -- sized for the tallest
     /// state (Downloading: icon+label, then a percentage+bar row below) so the card never
     /// resizes as the status changes. Every shorter state just has empty room below it.
@@ -765,15 +767,6 @@ struct CompletedCard<Status: View>: View {
     /// in the header's trailing corner -- e.g. Convert's per-row Edit icon.
     /// nil (the default) renders nothing extra.
     var trailingAccessory: AnyView? = nil
-    /// A control that is there in every state, beside the remove button (Convert's Reveal in
-    /// Finder). Unlike `trailingAccessory` it does not come and go, so it is part of the width
-    /// the row keeps constant.
-    var revealAccessory: AnyView? = nil
-    /// Keeps a flat row's button area wide enough for `trailingAccessory` even while it is
-    /// absent (Edit comes and goes with a queue row's status), so the buttons beside it never
-    /// move -- the same reserved-by-capability width PreviewCard.trailingAreaWidth gives
-    /// Download's cards.
-    var reservesTrailingSlot: Bool = false
     var thumbnail: AnyView?
     var thumbnailPlaceholder: String = "doc"
     var title: String
@@ -808,7 +801,7 @@ struct CompletedCard<Status: View>: View {
 
     /// Buttons on the header's trailing edge, for the resize facade.
     private var buttonCount: Int {
-        (trailingAccessory != nil ? 1 : 0) + (revealAccessory != nil ? 1 : 0) + 1
+        (trailingAccessory != nil ? 1 : 0) + 1
     }
 
     private var rowContent: some View {
@@ -870,12 +863,6 @@ struct CompletedCard<Status: View>: View {
         }
     }
 
-    /// The flat row's button area, sized from what it can hold rather than what it holds right now.
-    private var flatButtonsWidth: CGFloat {
-        let slots = 1 + (revealAccessory != nil ? 1 : 0) + ((trailingAccessory != nil || reservesTrailingSlot) ? 1 : 0)
-        return CGFloat(slots) * CardMetrics.buttonWidth + CGFloat(slots - 1) * CardMetrics.buttonGap
-    }
-
     /// Remove, or Cancel while the row's work is in flight. One button either way, so the icon
     /// swaps in place (see HoverIconButton) instead of one button replacing another.
     private var removeOrCancelButton: some View {
@@ -888,7 +875,7 @@ struct CompletedCard<Status: View>: View {
 
     @ViewBuilder
     private var cardHeaderRow: some View {
-        HStack(spacing: compact ? 8 : 12) {
+        HStack(spacing: compact ? 6 : 12) {
             if showCheckbox {
                 HoverIconButton(
                     icon: isSelected ? "checkmark.circle.fill" : "circle",
@@ -934,8 +921,10 @@ struct CompletedCard<Status: View>: View {
                 }
                 if let sub = subtitle, !narrow { sub }
             }
-
-            Spacer()
+            // Takes all the room the trailing side leaves, instead of a Spacer after it: a Spacer
+            // adds a gap of its own and shares the leftover width, which cost a one-line metadata
+            // chip just enough room to wrap onto a second line.
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             // Destructive action -- same red treatment as PreviewCard's
             // remove control, so "this deletes the item" reads identically
@@ -944,29 +933,29 @@ struct CompletedCard<Status: View>: View {
             let removeButton = removeOrCancelButton
             if flat {
                 // The same trailing design as Download's cards (PreviewCard.cardHeaderRow): the
-                // status in its own fixed-size outlined card, a hairline divider, then the buttons
-                // in an area of fixed width -- so nothing in the row moves as a job goes from
-                // Queued to Converting to Done, and the title never shifts. Edit comes and goes
-                // with the status; its slot is reserved either way (see reservesTrailingSlot).
-                HStack(spacing: 12) {
+                // status in its own fixed-size outlined card, a hairline divider, then the
+                // buttons. Unlike Download's, nothing is reserved for a button that is absent: when
+                // Edit leaves (a job starts converting) the status card and divider slide over
+                // with the buttons rather than leave a gap. The title column is wide enough for
+                // the narrowest state, so the row's height never changes with it.
+                HStack(spacing: 6) {
                     if inlineStatus != nil || statusLabel != nil {
                         ZStack(alignment: .leading) {
                             if let inlineStatus { inlineStatus.transition(.statusSwap()) }
                             if let statusLabel { statusLabel.transition(.statusSwap()) }
                         }
                         .frame(width: CardMetrics.queueStatusCardContentWidth, height: CardMetrics.statusCardContentHeight, alignment: .center)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .padding(.horizontal, CardMetrics.queueStatusCardPadding).padding(.vertical, 6)
                         .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                             .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
                         VerticalGlassDivider()
                     }
-                    HStack(spacing: CardMetrics.buttonGap) {
+                    HStack(spacing: 6) {
                         if let trailingAccessory { trailingAccessory.transition(.blurIn) }
-                        if let revealAccessory { revealAccessory }
                         removeButton
                     }
-                    .frame(width: flatButtonsWidth, alignment: .trailing)
                 }
+                .animation(.easeOut(duration: 0.25), value: trailingAccessory != nil)
             } else {
                 if let inlineStatus { inlineStatus }
                 VStack(spacing: 6) {

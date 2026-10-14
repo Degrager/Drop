@@ -3035,7 +3035,7 @@ struct ConvertPreviewCard: View {
         AnyView(
             VStack(alignment: .leading, spacing: 3) {
                 // What the file will become -- no input side, no OUT tag.
-                MetaLine(chips: job.outputChips, inCapsule: true)
+                MetaLine(chips: job.outputChips, inCapsule: true, compact: true)
                 if job.visibleStatus == .failed {
                     Text(job.progress)
                         .font(.appMono(size: 10))
@@ -3125,26 +3125,6 @@ struct ConvertPreviewCard: View {
         .frame(height: 4)
     }
 
-    /// Reveal in Finder, on every queue row: the converted file once the job is done, the source
-    /// file before that (there is no output yet, or it was cleaned up after a cancel).
-    private var revealAccessory: AnyView {
-        AnyView(
-            HoverIconButton(icon: "folder.fill", size: 16, color: DesignTokens.Accent.primaryLight,
-                            help: job.visibleStatus == .done ? "Reveal in Finder" : "Reveal source in Finder",
-                            expandable: true) {
-                revealInFinder()
-            }
-        )
-    }
-
-    private func revealInFinder() {
-        if job.status == .done, let output = job.outputURL, FileManager.default.fileExists(atPath: output.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([output])
-        } else {
-            NSWorkspace.shared.activateFileViewerSelecting([job.inputURL])
-        }
-    }
-
     /// Edit control -- pulls this job back to the Analyze panel for
     /// reconfiguring. Rendered by CompletedCard directly beneath the remove
     /// (x) button rather than down in the actions row, so it never sits in
@@ -3182,8 +3162,6 @@ struct ConvertPreviewCard: View {
             showCheckbox: false,
             leadingAccessory: leadingAccessory,
             trailingAccessory: editAccessory,
-            revealAccessory: isQueueRow ? revealAccessory : nil,
-            reservesTrailingSlot: isQueueRow,
             thumbnail: thumbView,
             thumbnailPlaceholder: job.isVideoFile ? "video" : "waveform",
             title: job.inputURL.deletingPathExtension().lastPathComponent,

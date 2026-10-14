@@ -1380,21 +1380,16 @@ struct ConvertView: View {
                     }
                 }
             } else {
-                // Absorbs the leftover space itself instead of a separate
-                // Spacer(minLength: 0) below it -- a bare Spacer has zero
-                // ideal size, so it was claiming ALL the surplus regardless
-                // of what analyzePanel contained, leaving the empty-state
-                // hint stranded near the top with a disproportionate void
-                // beneath it before the (now always-visible, often
-                // collapsed) bottom bar. With a staged file, settingsCard
-                // still hugs the top exactly as before (alignment: .top,
-                // and the card itself has no reason to grow); with nothing
-                // staged, EmptyStateView's own internal maxHeight: .infinity
-                // now actually gets the room to center the hint in the
-                // middle of whatever space remains above the bar, instead
-                // of sitting pinned to the top of it.
+                // analyzePanel absorbs the leftover space itself now (each of
+                // its own branches below carries its own
+                // frame(maxHeight: .infinity, alignment:)), instead of a
+                // separate Spacer(minLength: 0) here -- a bare Spacer has
+                // zero ideal size, so it was claiming ALL the surplus
+                // regardless of what analyzePanel contained, leaving the
+                // empty-state hint stranded near the top with a
+                // disproportionate void beneath it before the (now
+                // always-visible, often collapsed) bottom bar.
                 analyzePanel
-                    .frame(maxHeight: .infinity, alignment: .top)
                     .zIndex(99)
 
                 // With no Analyze card to compete with, the bar (queue drawer,
@@ -1740,6 +1735,12 @@ struct ConvertView: View {
             // The settings card is heavy: laid out once, for where the sidebar
             // is heading (see PinnedToSidebar).
             .pinnedToSidebar()
+            // Claims whatever space convertBottomBar's Spacer removal left
+            // on the table (see body), same as the empty branch below, but
+            // pinned to the top -- the card hugs its own content regardless
+            // of how much extra room this grants it, so it reads exactly as
+            // before.
+            .frame(maxHeight: .infinity, alignment: .top)
             // Both branches of this if/else take layout space, so the outgoing
             // one must leave instantly -- see AnyTransition.glassPopInOnly.
             .transition(.glassPopInOnly)
@@ -1752,9 +1753,24 @@ struct ConvertView: View {
             // Hard minimum kept low: it counts toward the window's minimum
             // height, and this state also holds the whole bottom bar.
             .frame(maxWidth: .infinity, minHeight: compactHeight ? 80 : 120)
+            // Overrides EmptyStateView's own internal maxHeight: .infinity,
+            // which would otherwise greedily fill however much space the
+            // frame below proposes -- fixedSize locks it back to its true
+            // content-driven height (icon + two lines of text) so IT doesn't
+            // do the centering; the frame's alignment below does instead.
+            .fixedSize(horizontal: false, vertical: true)
             // Light, so the hint FOLLOWS the sidebar's edge frame by frame and
             // stays centered in what's visible.
             .followsSidebar()
+            // A little breathing room before the control strip, not flush
+            // against it.
+            .padding(.bottom, 24)
+            // Bottom-aligned rather than centered: keeps the hint close to
+            // the (now always-visible, often collapsed) bottom bar instead
+            // of leaving a large empty gap directly above the control strip
+            // -- any real slack collects up near the drop zone instead,
+            // where it reads as generous spacing rather than a void.
+            .frame(maxHeight: .infinity, alignment: .bottom)
             .transition(.blurInOnly)
         }
     }
@@ -1828,6 +1844,16 @@ struct ConvertView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(spacing: 0) {
+                            // Expanding with nothing queued yet used to just show a
+                            // blank scrollable rectangle -- this tip fills that same
+                            // row-height slot instead, so expanding always shows
+                            // something rather than an unexplained empty box.
+                            if queue.isEmpty {
+                                Text("Queue is empty")
+                                    .font(.appMono(size: 11))
+                                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                                    .frame(maxWidth: .infinity, minHeight: queueRowStride)
+                            }
                             ForEach(Array(queue.enumerated()), id: \.element.id) { index, job in
                                 // Explicit .opacity transition on the WHOLE per-row unit
                                 // (divider + row together) -- without an explicit
@@ -2008,6 +2034,10 @@ struct ConvertView: View {
             stagingJobs.removeAll { $0.id == job.id }
             queue.append(job)
             selectedStagingID = stagingJobs.last?.id
+            // Auto-reveals what was just queued -- collapsed is only the
+            // resting default (nothing queued yet); landing an item while
+            // collapsed should show it, not require a separate click.
+            isQueueExpanded = true
         }
         selectionVersion += 1
     }
@@ -2019,6 +2049,7 @@ struct ConvertView: View {
             queue.append(contentsOf: stagingJobs)
             stagingJobs.removeAll()
             selectedStagingID = nil
+            isQueueExpanded = true
         }
         selectionVersion += 1
     }

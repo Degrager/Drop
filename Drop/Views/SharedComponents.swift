@@ -3098,10 +3098,10 @@ enum DropGlyph {
                       control2: CGPoint(x: x0 + 0.38 * W, y: y0 + 0.19 * H))
         drop.closeSubpath()
 
-        let tip = CGPoint(x: x0 + r, y: y0 + 0.84 * H)
-        let arm = 0.21 * H
+        let tip = CGPoint(x: x0 + r, y: y0 + 0.80 * H)
+        let arm = 0.17 * H
         let arrow = CGMutablePath()
-        arrow.move(to: CGPoint(x: tip.x, y: y0 + 0.36 * H))
+        arrow.move(to: CGPoint(x: tip.x, y: y0 + 0.41 * H))
         arrow.addLine(to: tip)
         arrow.move(to: CGPoint(x: tip.x - arm, y: tip.y - arm))
         arrow.addLine(to: tip)

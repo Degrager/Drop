@@ -1193,6 +1193,20 @@ struct ConvertView: View {
     /// selectionVersion's own comment above for the same issue elsewhere).
     @State private var queueScrollProxy: ScrollViewProxy? = nil
 
+    /// The bottom bar's height with the queue drawer collapsed, measured off the
+    /// real bar. The empty-state hint reserves exactly this much at the bottom so
+    /// it centers in the space above the (collapsed) bar -- a constant, so the hint
+    /// stays put while the drawer opens and closes. Only ever shrinks after the
+    /// first reading (and only while collapsed), so the heights passing through
+    /// during a collapse animation never move it.
+    @State private var collapsedBarHeight: CGFloat = 0
+
+    private func noteBarHeight(_ h: CGFloat) {
+        if collapsedBarHeight == 0 || (!isQueueExpanded && h < collapsedBarHeight) {
+            collapsedBarHeight = h
+        }
+    }
+
     private var hasStaging: Bool { !stagingJobs.isEmpty }
     private var hasQueue: Bool { !queue.isEmpty }
     private var hasJobs: Bool { hasStaging || hasQueue }
@@ -1393,12 +1407,22 @@ struct ConvertView: View {
                 // placeholder -- the bar can grow or shrink against the
                 // bottom edge without the panel's own anchor ever moving.
                 ZStack {
+                    // analyzePanel's own two branches each pick their own
+                    // alignment within this (see their trailing comments) --
+                    // the staged card stays pinned top, the empty-state hint
+                    // centers.
                     analyzePanel
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .zIndex(99)
 
                     convertBottomBar
                         .followsSidebar()
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear
+                                    .onAppear { noteBarHeight(geo.size.height) }
+                                    .onChange(of: geo.size.height) { _, h in noteBarHeight(h) }
+                            }
+                        )
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 }
             }
@@ -1736,6 +1760,10 @@ struct ConvertView: View {
             // The settings card is heavy: laid out once, for where the sidebar
             // is heading (see PinnedToSidebar).
             .pinnedToSidebar()
+            // Fills the whole ZStack region (see body) and self-aligns --
+            // pinned top, same as before: the card hugs its own content
+            // regardless of how much extra room this grants it.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             // Both branches of this if/else take layout space, so the outgoing
             // one must leave instantly -- see AnyTransition.glassPopInOnly.
             .transition(.glassPopInOnly)
@@ -1749,15 +1777,23 @@ struct ConvertView: View {
             // height, and this state also holds the whole bottom bar.
             .frame(maxWidth: .infinity, minHeight: compactHeight ? 80 : 120)
             // Overrides EmptyStateView's own internal maxHeight: .infinity --
-            // without this, the hint would fill and center in however much
-            // vertical room the ZStack in body happens to offer (the whole
-            // window, effectively), rather than sitting at its own true,
-            // content-driven height right under the drop zone where the
-            // outer .frame(alignment: .top) in body puts it.
+            // without this, IT would do its own filling and centering, which
+            // works out the same in practice, but ties the result to its
+            // implementation rather than to the explicit frame below.
             .fixedSize(horizontal: false, vertical: true)
             // Light, so the hint FOLLOWS the sidebar's edge frame by frame and
             // stays centered in what's visible.
             .followsSidebar()
+            // Reserves the collapsed bar's footprint so "centered" means centered
+            // in the space actually visible above it, not in the full region the
+            // bar overlaps the bottom of.
+            .padding(.bottom, collapsedBarHeight)
+            // Fills the whole ZStack region (see body) and centers within it
+            // -- this region no longer shares space with convertBottomBar
+            // (a ZStack, not a VStack sibling), so centering here is just as
+            // static as pinning to the top would be: the bar expanding or
+            // collapsing underneath doesn't change this region's size at all.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .transition(.blurInOnly)
         }
     }

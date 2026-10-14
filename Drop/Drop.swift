@@ -5776,10 +5776,31 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         UserDefaults.standard.bool(forKey: "sidebarCollapsed") ? WindowLayout.minimumSizeCollapsed : WindowLayout.minimumSizeExpanded
     }
 
-    /// minSize only constrains drags (and SwiftUI can rewrite it from its own
-    /// content minimum), so windowWillResize below enforces the same floor.
+    private var minSizeObservations: [NSKeyValueObservation] = []
+
+    /// The floor is `currentMinimumSize`, and nothing may raise it. (SwiftUI can also
+    /// rewrite the minimum DOWN to its content's, so windowWillResize below enforces the
+    /// same floor from the other side.) SwiftUI overwrites the
+    /// window's minimum with its own content minimum, and for a moment that is far above
+    /// ours: with Convert showing, the file dialog opening (Browse) made it 293 x 1005. A
+    /// dialog that was then cancelled never triggered another layout, so the window stayed
+    /// pinned at a 1005pt minimum and could not be dragged back down to 800. So any
+    /// minimum above the app's own is pulled straight back down. The window itself is
+    /// never grown: only its minimum changes.
     private func applyMinimumSize(to window: NSWindow) {
         window.minSize = currentMinimumSize
+        guard minSizeObservations.isEmpty else { return }
+        let capMinimum: (NSWindow) -> Void = { [weak self] window in
+            guard let self else { return }
+            let floor = self.currentMinimumSize
+            guard window.minSize.width > floor.width || window.minSize.height > floor.height else { return }
+            window.minSize = NSSize(width: min(window.minSize.width, floor.width),
+                                    height: min(window.minSize.height, floor.height))
+        }
+        minSizeObservations = [
+            window.observe(\.minSize, options: [.new]) { window, _ in capMinimum(window) },
+            window.observe(\.contentMinSize, options: [.new]) { window, _ in capMinimum(window) },
+        ]
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {

@@ -1838,8 +1838,11 @@ struct ConvertView: View {
     /// siblings' layout, which is what let the controls strip visibly land
     /// on top of still-fading rows on collapse).
     private var queueDrawer: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Group {
+        // Spacing lives on the row-list stack below, not here: the collapsed list
+        // is still in the layout (zero height, zero opacity), and a spacing here
+        // kept adding ~12pt of invisible gap above the controls strip.
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: isQueueExpanded ? 8 : 0) {
                 // Plain ScrollView + VStack (not List, and not LazyVStack) --
                 // ScrollView+something-not-List is the established pattern (avoids
                 // List's native macOS drag visual, a free-floating snapshot of the
@@ -1979,6 +1982,7 @@ struct ConvertView: View {
             // read as "crushed into a sliver" mid-animation, same reasoning as the
             // growing case.
             .opacity(isQueueExpanded ? 1 : 0)
+            .padding(.bottom, isQueueExpanded ? 8 : 0)
             // THE fix for collapsing (or Clear Queue) visibly overlapping the controls
             // strip below: this Group used to be wrapped in `if isQueueExpanded { ... }`,
             // which MOUNTS/UNMOUNTS it -- and a removed view's own fade-out transition

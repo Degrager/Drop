@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		TST4000000000000000000A1 /* CoreLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TST3000000000000000000A1 /* CoreLogicTests.swift */; };
 		BFA555EE51114B6EAE4DD04B /* Drop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B71349E9E0E461DA6C30234 /* Drop.swift */; };
 		7AE40FF723F1416084468121 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B44214C509D471095164925 /* main.swift */; };
 		EE112233445566778899AABB /* SharedComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF112233445566778899AABB /* SharedComponents.swift */; };
@@ -36,7 +37,19 @@
 		SPL107000000000000000000 /* AppEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL207000000000000000000 /* AppEntry.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		TSTC000000000000000000A1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E0CF5B085B194D2897965C0D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6BA06BDD624146EA85C6E116;
+			remoteInfo = Drop;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		TST3000000000000000000A1 /* CoreLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreLogicTests.swift; sourceTree = "<group>"; };
+		TST1000000000000000000A1 /* DropTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DropTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5B71349E9E0E461DA6C30234 /* Drop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Drop.swift; sourceTree = "<group>"; };
 		0B44214C509D471095164925 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		FF112233445566778899AABB /* SharedComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedComponents.swift; sourceTree = "<group>"; };
@@ -68,6 +81,13 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		TST6000000000000000000A1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CB76DB6B3995429383CF8236 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -101,10 +121,19 @@
 /* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXGroup section */
+		TST2000000000000000000A1 /* DropTests */ = {
+			isa = PBXGroup;
+			children = (
+				TST3000000000000000000A1 /* CoreLogicTests.swift */,
+			);
+			path = DropTests;
+			sourceTree = "<group>";
+		};
 		6D8BC2BD8B8F401BA0897C2B = {
 			isa = PBXGroup;
 			children = (
 				1A2B3C4D5E6F708192A3B4C5 /* Drop */,
+				TST2000000000000000000A1 /* DropTests */,
 				E0A82911BD0F484580E166D4 /* Frameworks */,
 				348FA9B50C884E45BD925C35 /* Products */,
 			);
@@ -150,6 +179,7 @@
 			isa = PBXGroup;
 			children = (
 				39531812BF6F459B9EAC1062 /* Drop.app */,
+				TST1000000000000000000A1 /* DropTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -187,6 +217,23 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		TST7000000000000000000A1 /* DropTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = TST8000000000000000000A1 /* Build configuration list for PBXNativeTarget "DropTests" */;
+			buildPhases = (
+				TST5000000000000000000A1 /* Sources */,
+				TST6000000000000000000A1 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				TSTD000000000000000000A1 /* PBXTargetDependency */,
+			);
+			name = DropTests;
+			productName = DropTests;
+			productReference = TST1000000000000000000A1 /* DropTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		6BA06BDD624146EA85C6E116 /* Drop */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C0903F1029FD423B8AE46E77 /* Build configuration list for PBXNativeTarget "Drop" */;
@@ -216,6 +263,10 @@
 				BuildIndependentTargets = 1;
 				LastUpgradeCheck = 1620;
 				TargetAttributes = {
+					TST7000000000000000000A1 = {
+						CreatedOnToolsVersion = 16.2;
+						TestTargetID = 6BA06BDD624146EA85C6E116;
+					};
 					6BA06BDD624146EA85C6E116 = {
 						CreatedOnToolsVersion = 16.2;
 						DevelopmentTeam = "";
@@ -240,6 +291,7 @@
 			projectRoot = "";
 			targets = (
 				6BA06BDD624146EA85C6E116 /* Drop */,
+				TST7000000000000000000A1 /* DropTests */,
 			);
 		};
 /* End PBXProject section */
@@ -256,6 +308,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		TST5000000000000000000A1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				TST4000000000000000000A1 /* CoreLogicTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C648CAE6BBA043B39598325B /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -286,7 +346,73 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		TSTD000000000000000000A1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6BA06BDD624146EA85C6E116 /* Drop */;
+			targetProxy = TSTC000000000000000000A1 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		TST9000000000000000000A1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGNING_REQUIRED = NO;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zanderriley.drop.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.9;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Drop.app/Contents/MacOS/Drop";
+				VALID_ARCHS = arm64;
+			};
+			name = Debug;
+		};
+		TSTA000000000000000000A1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGNING_REQUIRED = NO;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zanderriley.drop.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.9;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Drop.app/Contents/MacOS/Drop";
+				VALID_ARCHS = arm64;
+			};
+			name = Release;
+		};
 		CE2F3326721144E1A69E34B4 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -439,6 +565,7 @@
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.9;
 				ARCHS = arm64;
+				ENABLE_TESTABILITY = YES;
 				VALID_ARCHS = arm64;
 				ONLY_ACTIVE_ARCH = YES;
 			};
@@ -482,6 +609,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		TST8000000000000000000A1 /* Build configuration list for PBXNativeTarget "DropTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				TST9000000000000000000A1 /* Debug */,
+				TSTA000000000000000000A1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		4242A4A1475949AC8301F538 /* Build configuration list for PBXProject "Drop" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

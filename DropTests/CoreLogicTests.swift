@@ -1,0 +1,204 @@
+import XCTest
+@testable import Drop
+
+/// Tests for Drop's pure logic: the functions that turn input into text, sizes and command
+/// lines, and have no UI or process behind them. Past regressions (fractional durations, bitrate
+/// rounding, size estimates) were all in code like this.
+final class FormattingTests: XCTestCase {
+    func testDurationChip() {
+        XCTAssertNil(formatDurationChip(seconds: 0))
+        XCTAssertEqual(formatDurationChip(seconds: 45), "45s")
+        XCTAssertEqual(formatDurationChip(seconds: 90), "2m")        // 1.5 min rounds up
+        XCTAssertEqual(formatDurationChip(seconds: 3600), "1h")
+        XCTAssertEqual(formatDurationChip(seconds: 5400), "1.5h")
+    }
+
+    func testByteSizeUsesDecimalUnits() {
+        XCTAssertEqual(formatByteSize(0), "0 B")
+        XCTAssertEqual(formatByteSize(999), "999 B")
+        XCTAssertEqual(formatByteSize(637_031), "637 KB")
+        XCTAssertEqual(formatByteSize(13_500_000), "13.5 MB")
+        XCTAssertEqual(formatByteSize(1_390_000_000), "1.39 GB")
+        XCTAssertEqual(formatByteSize(-5), "0 B")
+    }
+
+    func testResolutionMarketingNames() {
+        XCTAssertEqual(resolutionMarketingName(forMaxHeight: 2160), "4K Ultra HD")
+        XCTAssertEqual(resolutionMarketingName(forMaxHeight: 1080), "Full HD")
+        XCTAssertEqual(resolutionMarketingName(forMaxHeight: 720), "HD")
+        XCTAssertNil(resolutionMarketingName(forMaxHeight: 999))
+    }
+
+    func testHighestQualityTierForASourceHeight() {
+        XCTAssertEqual(VideoQuality.highest(for: 2160), .q4k)
+        XCTAssertEqual(VideoQuality.highest(for: 1200), .q1080)
+        XCTAssertEqual(VideoQuality.highest(for: 719), .q480)
+    }
+
+    func testBitrateLabel() {
+        XCTAssertEqual(bitrateLabel(kbps: 160), "160kbps")
+        XCTAssertNil(bitrateLabel(kbps: 0))
+    }
+}
+
+final class FilenameSanitizerTests: XCTestCase {
+    func testRestrictedCharactersBecomeFullWidthLookalikes() {
+        XCTAssertEqual(ytdlpSanitizedFilename("a/b"), "a\u{29F8}b")
+        XCTAssertEqual(ytdlpSanitizedFilename("What: Now?"), "What\u{FF1A} Now\u{FF1F}")
+    }
+
+    func testTimestampColonsBecomeUnderscores() {
+        XCTAssertEqual(ytdlpSanitizedFilename("Live 12:34"), "Live 12_34")
+    }
+
+    func testEmptyStaysEmptyAndLeadingDotsAndHyphensAreFixed() {
+        XCTAssertEqual(ytdlpSanitizedFilename(""), "")
+        XCTAssertEqual(ytdlpSanitizedFilename(".hidden"), "hidden")
+        XCTAssertEqual(ytdlpSanitizedFilename("-x"), "_x")
+    }
+}
+
+final class URLValidationTests: XCTestCase {
+    func testSchemeIsAddedWhenMissing() {
+        XCTAssertEqual(normalizedDropURLLine("example.com/x"), "https://example.com/x")
+        XCTAssertEqual(normalizedDropURLLine("http://a.b"), "http://a.b")
+    }
+
+    func testOnlyRealWebLinksPass() {
+        XCTAssertTrue(dropAllLinesAreURLs("https://www.youtube.com/watch?v=aqz-KE-bpKQ"))
+        XCTAssertTrue(dropAllLinesAreURLs("https://a.com/x\nhttps://b.com/y"))
+        XCTAssertFalse(dropAllLinesAreURLs(""))
+        XCTAssertFalse(dropAllLinesAreURLs("hello this is not a link"))
+        XCTAssertFalse(dropAllLinesAreURLs("ftp://files.example.com/a"))
+        XCTAssertFalse(dropAllLinesAreURLs("https://a.com/x\nnot a link"))
+    }
+}
+
+final class StreamSizeEstimateTests: XCTestCase {
+    func testReportedSizeWins() {
+        let stream: [String: Any] = ["filesize": 5_000_000, "tbr": 9_999]
+        XCTAssertEqual(estimatedStreamBytes(stream, among: [stream], durationSeconds: 100), 5_000_000)
+    }
+
+    func testApproximateSizeIsUsedWhenExactIsMissing() {
+        let stream: [String: Any] = ["filesize_approx": 4_000_000]
+        XCTAssertEqual(estimatedStreamBytes(stream, among: [stream], durationSeconds: 100), 4_000_000)
+    }
+
+    func testManifestStreamBorrowsTheSizeOfItsDirectTwin() {
+        let hls: [String: Any] = ["height": 1080, "vcodec": "avc1.640028", "protocol": "m3u8_native", "tbr": 3000]
+        let direct: [String: Any] = ["height": 1080, "vcodec": "avc1.4d401f", "filesize": 77_151_406, "tbr": 2900]
+        XCTAssertEqual(estimatedStreamBytes(hls, among: [hls, direct], durationSeconds: 120), 77_151_406)
+    }
+
+    func testPremiumStreamDoesNotBorrowFromAnOrdinaryTwin() {
+        let premium: [String: Any] = ["height": 1080, "vcodec": "avc1.640028", "format_note": "Premium", "tbr": 2000, "protocol": "https"]
+        let ordinary: [String: Any] = ["height": 1080, "vcodec": "avc1.4d401f", "filesize": 5_000_000]
+        // 2000 kbps x 125 bytes per kbps-second x 100 s
+        XCTAssertEqual(estimatedStreamBytes(premium, among: [premium, ordinary], durationSeconds: 100), 25_000_000)
+    }
+
+    func testBitrateTimesDurationHalvedForAManifest() {
+        let direct: [String: Any] = ["tbr": 1000, "protocol": "https"]
+        let manifest: [String: Any] = ["tbr": 1000, "protocol": "m3u8_native"]
+        XCTAssertEqual(estimatedStreamBytes(direct, among: [direct], durationSeconds: 100), 12_500_000)
+        XCTAssertEqual(estimatedStreamBytes(manifest, among: [manifest], durationSeconds: 100), 6_250_000)
+    }
+
+    func testNoSizeAndNoBitrateGivesZero() {
+        let stream: [String: Any] = ["height": 720]
+        XCTAssertEqual(estimatedStreamBytes(stream, among: [stream], durationSeconds: 100), 0)
+    }
+}
+
+final class SyncTextTests: XCTestCase {
+    func testAppendsFromManyThreadsAreAllKept() {
+        let text = SyncText()
+        let group = DispatchGroup()
+        for _ in 0..<8 {
+            DispatchQueue.global().async(group: group) {
+                for _ in 0..<500 { text.append("x\n") }
+            }
+        }
+        group.wait()
+        XCTAssertEqual(text.value.count, 8 * 500 * 2)
+    }
+}
+
+final class HistoryEntryTests: XCTestCase {
+    private func entry(_ json: String) throws -> HistoryEntry {
+        try JSONDecoder().decode(HistoryEntry.self, from: Data(json.utf8))
+    }
+
+    /// Adding a field to HistoryEntry must never make saved history unreadable.
+    func testEmptyJSONDecodesToDefaults() throws {
+        let e = try entry("{}")
+        XCTAssertEqual(e.title, "")
+        XCTAssertEqual(e.entryType, "download")
+        XCTAssertFalse(e.failed)
+        XCTAssertEqual(e.outputFilePath, "")
+    }
+
+    func testFinishedFileURL() throws {
+        XCTAssertEqual(try entry(#"{"outputFilePath": "/tmp/a.mp4"}"#).finishedFileURL?.path, "/tmp/a.mp4")
+        XCTAssertNil(try entry(#"{"outputFilePath": "/tmp/a.mp4", "failed": true}"#).finishedFileURL)
+        XCTAssertNil(try entry("{}").finishedFileURL)
+    }
+}
+
+final class ConvertCommandTests: XCTestCase {
+    private let input = "/tmp/in.mp4", output = "/tmp/out.mp4"
+
+    /// A job whose source is H.264 + AAC at 1080p, the common case. ffprobe's codec names are
+    /// uppercased by the app ("H264", "AAC"), and the copy-or-encode rule matches on those.
+    private func job() -> ConvertJob {
+        let job = ConvertJob(inputURL: URL(fileURLWithPath: input))
+        job.mediaInfo = ConvertMediaInfo(
+            videoCodec: "H264", audioCodec: "AAC", audioChannelLabel: "2.0",
+            resolution: "1920x1080", duration: "1:00", fileSize: "10 MB",
+            durationSeconds: 60, pixelWidth: 1920, pixelHeight: 1080)
+        return job
+    }
+
+    func testUntouchedSourceIsAPureStreamCopy() {
+        XCTAssertEqual(job().ffmpegArgs(outputPath: output),
+                       ["-y", "-i", input, "-c:a", "copy", "-c:v", "copy", output])
+    }
+
+    func testChoosingASmallerResolutionReEncodesTheVideoOnly() {
+        let j = job()
+        j.chosenResolution = 720
+        let args = j.ffmpegArgs(outputPath: output)
+        XCTAssertTrue(args.contains("libx264"))
+        XCTAssertTrue(args.contains("scale=w='if(gt(iw,ih),-2,720)':h='if(gt(iw,ih),720,-2)':flags=lanczos"))
+        XCTAssertEqual(args[args.firstIndex(of: "-c:a")! + 1], "copy")
+    }
+
+    func testVideoOnlyDropsAudio() {
+        let j = job()
+        j.mediaMode = .videoOnly
+        let args = j.ffmpegArgs(outputPath: output)
+        XCTAssertTrue(args.contains("-an"))
+        XCTAssertFalse(args.contains("-c:a"))
+    }
+
+    func testAudioOnlyDropsVideo() {
+        let j = job()
+        j.mediaMode = .audio
+        let args = j.ffmpegArgs(outputPath: output)
+        XCTAssertTrue(args.contains("-vn"))
+        XCTAssertFalse(args.contains("-c:v"))
+    }
+
+    func testH265InMP4IsTaggedForQuickTime() {
+        let j = job()
+        j.videoCodec = .h265
+        let args = j.ffmpegArgs(outputPath: output)
+        XCTAssertTrue(args.contains("libx265"))
+        XCTAssertEqual(args[args.firstIndex(of: "-tag:v")! + 1], "hvc1")
+    }
+
+    func testOutputPathIsAlwaysLast() {
+        XCTAssertEqual(job().ffmpegArgs(outputPath: output).last, output)
+    }
+}

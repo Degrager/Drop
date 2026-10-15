@@ -283,8 +283,8 @@ enum ConvertOutputFormat: String, CaseIterable, Identifiable {
 }
 
 struct ConvertMediaInfo {
-    var videoCodec: String?    // e.g. "h264", "hevc"
-    var audioCodec: String?    // e.g. "aac", "mp3"
+    var videoCodec: String?    // ffprobe's codec_name, UPPERCASED: "H264", "HEVC"
+    var audioCodec: String?    // ffprobe's codec_name, UPPERCASED: "AAC", "MP3"
     var audioChannelLabel: String? // e.g. "1.0", "2.0", "5.1", "7.1"
     var resolution: String?    // e.g. "1920x1080"
     var duration: String?      // e.g. "3:42"

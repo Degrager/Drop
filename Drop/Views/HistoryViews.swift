@@ -2,6 +2,28 @@ import SwiftUI
 import AppKit
 import QuickLookThumbnailing
 
+extension HistoryEntry {
+    /// The finished file this entry points at, or nil when there is none to check (a failed
+    /// entry, or an older one saved before the path was recorded).
+    var finishedFileURL: URL? {
+        guard !failed, !outputFilePath.isEmpty else { return nil }
+        return URL(fileURLWithPath: outputFilePath)
+    }
+
+    /// Two entries with the same key are the same thing done again (same link or source file, same
+    /// kind, format and quality), so History shows them as one row with a count.
+    fileprivate var repeatKey: String {
+        [entryType, url, format, quality, mediaModeRaw, failed ? "failed" : "ok"].joined(separator: "\u{1F}")
+    }
+}
+
+/// One History row plus the earlier times the same thing was done, newest first.
+private struct HistoryItem: Identifiable {
+    let entry: HistoryEntry
+    let older: [HistoryEntry]
+    var id: UUID { entry.id }
+}
+
 // MARK: - History View
 
 struct HistoryView: View {
@@ -15,6 +37,8 @@ struct HistoryView: View {
     let onReconvert: (URL) -> Void
     @Environment(\.isCompactHeight) private var compactHeight
     @State private var searchText = ""
+    /// Rows whose earlier repeats are showing, by the id of the newest entry of each.
+    @State private var expandedRepeats: Set<UUID> = []
     @State private var isSearchHovering = false
     @FocusState private var searchFieldFocused: Bool
 
@@ -26,8 +50,23 @@ struct HistoryView: View {
         }
     }
 
+    /// Folds repeats of the same thing into their newest entry, keeping the order of first appearance.
+    private func collapse(_ entries: [HistoryEntry]) -> [HistoryItem] {
+        var order: [String] = []
+        var groups: [String: [HistoryEntry]] = [:]
+        for entry in entries {
+            let key = entry.repeatKey
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(entry)
+        }
+        return order.compactMap { key in
+            guard let group = groups[key], let newest = group.first else { return nil }
+            return HistoryItem(entry: newest, older: Array(group.dropFirst()))
+        }
+    }
+
     // Group entries by relative date label
-    var grouped: [(label: String, entries: [HistoryEntry])] {
+    private var grouped: [(label: String, items: [HistoryItem])] {
         let cal = Calendar.current
         let now = Date()
         var buckets: [(String, [HistoryEntry])] = []
@@ -49,7 +88,59 @@ struct HistoryView: View {
                 buckets.append((label, [entry]))
             }
         }
-        return buckets.map { (label: $0.0, entries: $0.1) }
+        return buckets.map { (label: $0.0, items: collapse($0.1)) }
+    }
+
+    /// Redownload / Reconvert, from a History row.
+    private func redo(_ entry: HistoryEntry) {
+        if entry.entryType == "conversion" {
+            // Reconvert: re-import the ORIGINAL input file (stored in entry.url for conversions)
+            // exactly like a fresh drop/import — no stored snapshot reused.
+            onReconvert(URL(fileURLWithPath: entry.url))
+        } else {
+            // Redownload: treat exactly like a fresh paste — a live analyze against the URL always
+            // re-runs from scratch, so no stale snapshot data (duration, resolutions, quality
+            // options) is ever reused for the actual download. The one exception is cosmetic: since
+            // we already know this link's title/thumbnail from the previous analyze, show them on
+            // the placeholder immediately instead of the bare URL while the fresh analyze runs —
+            // purely a faster-feeling display, replaced the instant the new analyze result comes back.
+            let placeholder = ContentView.LinkPreview(
+                url: entry.url, title: entry.title, thumbnailURL: entry.thumbnailURL,
+                hasVideo: false, duration: "",
+                mediaMode: .audioOnly, isPending: true
+            )
+            linkPreviews.append(placeholder)
+            hasInvalidURLs = false
+            activeTab = .download
+            // Pass the placeholder's own id through so the analyze result lands on THIS card --
+            // analyzeURL() generates its own fresh UUIDs when no ids override is given, which never
+            // matched this placeholder's id and left it stuck on "Analyzing…" forever (the result
+            // was silently dropped, matching the deliberate no-else-append design for
+            // cancelled/cleared cards).
+            onAnalyze([entry.url], [placeholder.id])
+        }
+    }
+
+    private func toggleRepeats(_ id: UUID) {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            if expandedRepeats.contains(id) { expandedRepeats.remove(id) } else { expandedRepeats.insert(id) }
+        }
+    }
+
+    private func row(for entry: HistoryEntry, repeatCount: Int = 1, isEarlier: Bool = false) -> some View {
+        HistoryRow(
+            entry: entry, config: config,
+            repeatCount: repeatCount, repeatsExpanded: expandedRepeats.contains(entry.id),
+            onToggleRepeats: { toggleRepeats(entry.id) },
+            onRemove: {
+                // The delay lets the row finish blurring out (glassBar removal, 0.18s)
+                // before the rows below slide up, so they don't pass over it.
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.88).delay(0.1)) { history.remove(id: entry.id) }
+            },
+            onRedownload: { redo(entry) }
+        )
+        .padding(.leading, isEarlier ? 18 : 0)
+        .transition(.glassBar(anchor: .center))
     }
 
     // Same black-frosted-glass capsule recipe as urlCard/dropZoneView --
@@ -91,7 +182,7 @@ struct HistoryView: View {
 
             if !history.entries.isEmpty {
                 GlassButton(
-                    label: "Clear all",
+                    label: "Clear All",
                     icon: "trash",
                     tint: .white,
                     horizontalPadding: 16,
@@ -162,46 +253,13 @@ struct HistoryView: View {
                     LazyVStack(spacing: 6, pinnedViews: [.sectionHeaders]) {
                         ForEach(grouped, id: \.label) { group in
                             Section {
-                                ForEach(group.entries) { entry in
-                                    HistoryRow(entry: entry, config: config, onRemove: {
-                                        // The delay lets the row finish blurring out (glassBar removal, 0.18s)
-                                        // before the rows below slide up, so they don't pass over it.
-                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.88).delay(0.1)) { history.remove(id: entry.id) }
-                                    }) {
-                                        if entry.entryType == "conversion" {
-                                            // Reconvert: re-import the ORIGINAL input file (stored
-                                            // in entry.url for conversions) exactly like a fresh
-                                            // drop/import — no stored snapshot reused.
-                                            onReconvert(URL(fileURLWithPath: entry.url))
-                                        } else {
-                                            // Redownload: treat exactly like a fresh paste — a live
-                                            // analyze against the URL always re-runs from scratch, so
-                                            // no stale snapshot data (duration, resolutions, quality
-                                            // options) is ever reused for the actual download. The one
-                                            // exception is cosmetic: since we already know this link's
-                                            // title/thumbnail from the previous analyze, show them on
-                                            // the placeholder immediately instead of the bare URL while
-                                            // the fresh analyze runs — purely a faster-feeling display,
-                                            // replaced the instant the new analyze result comes back.
-                                            let placeholder = ContentView.LinkPreview(
-                                                url: entry.url, title: entry.title, thumbnailURL: entry.thumbnailURL,
-                                                hasVideo: false, duration: "",
-                                                mediaMode: .audioOnly, isPending: true
-                                            )
-                                            linkPreviews.append(placeholder)
-                                            hasInvalidURLs = false
-                                            activeTab = .download
-                                            // Pass the placeholder's own id through so the analyze
-                                            // result lands on THIS card -- analyzeURL() generates its
-                                            // own fresh UUIDs when no ids override is given, which
-                                            // never matched this placeholder's id and left it stuck
-                                            // on "Analyzing…" forever (the result was silently
-                                            // dropped, matching the deliberate no-else-append design
-                                            // for cancelled/cleared cards).
-                                            onAnalyze([entry.url], [placeholder.id])
+                                ForEach(group.items) { item in
+                                    row(for: item.entry, repeatCount: item.older.count + 1)
+                                    if expandedRepeats.contains(item.id) {
+                                        ForEach(item.older) { older in
+                                            row(for: older, isEarlier: true)
                                         }
                                     }
-                                    .transition(.glassBar(anchor: .center))
                                 }
                             } header: {
                                 Text(group.label)
@@ -232,8 +290,16 @@ struct HistoryView: View {
 struct HistoryRow: View {
     let entry: HistoryEntry
     @ObservedObject var config: Config
+    /// How many times this same thing was done (1 = once); more than 1 shows a "×N" toggle for
+    /// the earlier ones.
+    var repeatCount: Int = 1
+    var repeatsExpanded: Bool = false
+    var onToggleRepeats: (() -> Void)? = nil
     let onRemove: () -> Void
     let onRedownload: () -> Void
+    /// The finished file is gone from disk (moved or deleted). Checked off the main thread when the
+    /// row appears; nil-path entries (failed, or saved before paths were recorded) are never flagged.
+    @State private var fileMissing = false
     @Environment(\.contentColumnWidth) private var columnWidth
     private var narrow: Bool { columnWidth > 0 && columnWidth < WindowLayout.narrowColumnBreakpoint }
 
@@ -311,7 +377,41 @@ struct HistoryRow: View {
             Text(formattedDate)
                 .font(.appMono(size: 10)).foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 .fixedSize()
+            repeatBadge
         }
+    }
+
+    /// "×5" beside the date: this was done five times; click to show or hide the four earlier ones.
+    @ViewBuilder
+    private var repeatBadge: some View {
+        if repeatCount > 1, let onToggleRepeats {
+            let earlier = repeatCount - 1
+            let noun = entry.entryType == "conversion" ? (earlier == 1 ? "Conversion" : "Conversions")
+                                                      : (earlier == 1 ? "Download" : "Downloads")
+            let label = "\(repeatsExpanded ? "Hide" : "Show") \(earlier) Earlier \(noun)"
+            Button(action: onToggleRepeats) {
+                HStack(spacing: 3) {
+                    Text("×\(repeatCount)")
+                    Image(systemName: "chevron.down")
+                        .font(.appMono(size: 8, weight: .bold))
+                        .rotationEffect(.degrees(repeatsExpanded ? 180 : 0))
+                }
+                .font(.appMono(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 0.5))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .help(label)
+            .accessibilityLabel(label)
+        }
+    }
+
+    /// The chips plus, when the finished file is gone, a MISSING marker.
+    private var chipsWithStatus: [ChipData] {
+        entry.chips + (fileMissing ? [ChipData(label: "", value: "MISSING", color: .orange, icon: "exclamationmark.triangle")] : [])
     }
 
     /// Error message for failed entries, one quiet line under the metadata.
@@ -338,8 +438,14 @@ struct HistoryRow: View {
                 // card behavior. Falls back to the output directory itself
                 // if no specific file path was recorded (older entries).
                 GlassButton(label: "Reveal", icon: "folder.fill", tint: .white, fitContent: true) {
-                    let target = !entry.outputFilePath.isEmpty ? entry.outputFilePath : entry.outputDir
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: target)])
+                    if fileMissing {
+                        // The file is gone, so there is nothing to select: open the folder it was in.
+                        let folder = URL(fileURLWithPath: entry.outputFilePath).deletingLastPathComponent()
+                        if FileManager.default.fileExists(atPath: folder.path) { NSWorkspace.shared.open(folder) } else { NSSound.beep() }
+                    } else {
+                        let target = !entry.outputFilePath.isEmpty ? entry.outputFilePath : entry.outputDir
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: target)])
+                    }
                 }
             }
 
@@ -370,7 +476,7 @@ struct HistoryRow: View {
                         thumbnail
                         VStack(alignment: .leading, spacing: 5) {
                             titleLine
-                            MetaLine(chips: entry.chips, inCapsule: true)
+                            MetaLine(chips: chipsWithStatus, inCapsule: true)
                             errorLine
                         }
                     }
@@ -381,7 +487,7 @@ struct HistoryRow: View {
                     thumbnail
                     VStack(alignment: .leading, spacing: 5) {
                         titleLine
-                        MetaLine(chips: entry.chips, inCapsule: true)
+                        MetaLine(chips: chipsWithStatus, inCapsule: true)
                         errorLine
                     }
                     actionButtons
@@ -406,6 +512,13 @@ struct HistoryRow: View {
             .stroke(Color.white.opacity(DesignTokens.Interactive.strokeRest), lineWidth: 0.5))
         .contextMenu {
             Button("Remove from History", role: .destructive, action: onRemove)
+        }
+        .task(id: entry.outputFilePath) {
+            guard let url = entry.finishedFileURL else { fileMissing = false; return }
+            let missing = await Task.detached(priority: .utility) {
+                !FileManager.default.fileExists(atPath: url.path)
+            }.value
+            fileMissing = missing
         }
     }
 }

@@ -2,22 +2,23 @@ import SwiftUI
 import AppKit
 
 /// The status ticker inside a card's outlined status box (Queued -> Downloading -> Done, etc): the
-/// outgoing text fades out in place, and the incoming text doesn't start fading in until that exit
-/// has fully finished -- a genuine sequence, not `blurIn`'s simultaneous crossfade. Nothing moves
+/// outgoing text fades out in place, and the incoming text doesn't appear until the box has
+/// finished sliding -- a genuine sequence, not `blurIn`'s simultaneous crossfade. Nothing moves
 /// relative to the box.
 ///
-/// The outgoing text is NOT a removal transition. A view that is being removed is left where it
-/// last was on screen instead of following its parent's layout, so when the box slid over (the
-/// card reserves room for a button that appears on the same state change -- Analyzing -> Queued)
-/// the old text faded out at the box's old position while the box and the new text moved away
-/// (reported live). Here it stays an ordinary child of the box, held for the length of the fade
-/// and dimmed through an opacity state, so it travels with the box like anything else in it.
+/// Both texts are ordinary children of the box -- two layers that trade roles on every swap --
+/// rather than transitions. A removal transition leaves the old text where it last was on screen
+/// instead of following the box when it slides over (the card reserves room for a button that
+/// appears on the same state change -- Analyzing -> Queued), so the old text is kept as a layer
+/// that stays in the tree and only has its opacity driven. A view that is NEW to the tree doesn't
+/// animate its position at all, it appears at the box's final spot; so the incoming text is
+/// mounted only once the box has landed (`settleDuration`, the card's own animation length), then
+/// faded in. Mounted any earlier it sat ahead of the box that was still on its way (reported
+/// live).
 ///
-/// Total duration (and curve) matches PreviewCard's own card-wide `.animation(.easeInOut
-/// (duration: 0.35), value: StateKey(...))` -- that's what slides trailingArea's button into its
-/// new reserved slot on the very same status change. Keeping the two on the same curve and total
-/// (0.17 + 0.18s) is what stops the text finishing before the button does ("it moves faster than
-/// the card rather than with it").
+/// `settleDuration` must match PreviewCard's card-wide `.animation(.easeInOut(duration: 0.35),
+/// value: StateKey(...))` -- that's what slides the box and trailingArea's button on the very
+/// same status change.
 struct StatusSwapStack: View {
     /// Which status is showing (queued / inline / label); nil when none is. A change is a swap.
     let slot: Int?
@@ -25,54 +26,72 @@ struct StatusSwapStack: View {
 
     private static let exitDuration: Double = 0.17
     private static let enterDuration: Double = 0.18
+    /// How long the card's own layout animation (the box sliding over) runs.
+    private static let settleDuration: Double = 0.35
 
-    /// What the previous render showed, so a swap can keep the old text around to fade it out.
-    /// Written during `body`, idempotently, so it is a plain reference type rather than state:
-    /// it must never trigger a re-render of its own.
+    /// The two layers' content and which one is live. Written during `body`, idempotently, so it
+    /// is a plain reference type rather than state: it must never trigger a re-render of its own.
     private final class Memory {
         var slot: Int?
-        var view: AnyView?
-        var departed: AnyView?
         var epoch = 0
+        /// Whether the current swap replaced visible text (the first status ever shown doesn't).
+        var hasDeparted = false
+        var views: [AnyView?] = [nil, nil]
+        var live: Int { epoch % 2 }
 
         func record(_ slot: Int?, _ view: AnyView?) {
             if slot != self.slot {
-                departed = self.view
+                hasDeparted = views[live] != nil
                 epoch += 1
                 self.slot = slot
+                // The other layer still holds the old text; without any, it must hold nothing.
+                if !hasDeparted { views[1 - live] = nil }
             }
-            self.view = view
+            views[live] = view
         }
     }
 
     @State private var memory = Memory()
-    /// The swap whose outgoing text has been dimmed to nothing / is fully gone.
-    @State private var fadingEpoch = 0
+    /// The swap whose old text has been dimmed to nothing / whose new text has faded in / whose old
+    /// text is fully gone (and so is released rather than kept running at zero opacity).
+    @State private var fadedOutEpoch = 0
+    @State private var mountedEpoch = 0
+    @State private var fadedInEpoch = 0
     @State private var settledEpoch = 0
 
     var body: some View {
         let _ = memory.record(slot, content)
-        let departed = settledEpoch == memory.epoch ? nil : memory.departed
+        let epoch = memory.epoch
         ZStack(alignment: .leading) {
-            if let content {
-                content
-                    .id(slot)
-                    .transition(.asymmetric(
-                        insertion: AnyTransition.opacity
-                            .animation(.easeInOut(duration: Self.enterDuration).delay(Self.exitDuration)),
-                        removal: .identity))
-            }
-            if let departed {
-                departed
-                    .opacity(fadingEpoch == memory.epoch ? 0 : 1)
-                    .allowsHitTesting(false)
+            ForEach(0..<2, id: \.self) { layer in
+                // One branch per layer (never "live" vs "departed" branches), so a layer keeps its
+                // identity, and so its on-screen position animation, when the roles swap.
+                let isLive = layer == memory.live
+                if isLive ? (!memory.hasDeparted || mountedEpoch == epoch) : settledEpoch != epoch,
+                   let view = memory.views[layer] {
+                    view
+                        .opacity(isLive
+                                 ? (memory.hasDeparted && fadedInEpoch != epoch ? 0 : 1)
+                                 : (fadedOutEpoch == epoch ? 0 : 1))
+                        .allowsHitTesting(isLive)
+                }
             }
         }
         .onChange(of: slot) {
             let epoch = memory.epoch
-            guard memory.departed != nil else { return }
-            withAnimation(.easeInOut(duration: Self.exitDuration)) { fadingEpoch = epoch }
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.exitDuration + 0.05) {
+            guard memory.hasDeparted else { return }
+            withAnimation(.easeInOut(duration: Self.exitDuration)) { fadedOutEpoch = epoch }
+            // The new text is only put on screen once the box has finished sliding: a view that is
+            // new to the tree doesn't animate its position, so mounted any earlier it would sit at
+            // the box's final spot ahead of the box (reported live).
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDuration) {
+                guard memory.epoch == epoch else { return }
+                mountedEpoch = epoch
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: Self.enterDuration)) { fadedInEpoch = epoch }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDuration + Self.enterDuration + 0.05) {
                 settledEpoch = epoch
             }
         }

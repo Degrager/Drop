@@ -590,11 +590,11 @@ struct CardFacade: View {
 
     /// The progress column of a downloading card: a status line over a slim bar. Leading-aligned
     /// to match the real card (see PreviewCard's own status card doc comment for why). Sized to
-    /// PreviewCard's own status card padded total (content width + 10pt padding each side) -- that
+    /// PreviewCard's own status card padded total (content width + the card's padding each side) -- that
     /// width is now a flat constant there regardless of button state, so this mirrors it exactly
     /// rather than deriving from button count the way it used to.
     private var statusColumn: some View {
-        let content = metrics.flat ? CardMetrics.queueStatusCardContentWidth : CardMetrics.statusCardContentWidth
+        let content = CardMetrics.statusCardContentWidth
         return VStack(alignment: .leading, spacing: 5) {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(Color.white.opacity(0.07))
@@ -603,7 +603,7 @@ struct CardFacade: View {
                 .fill(Color.white.opacity(0.06))
                 .frame(width: content, height: 4)
         }
-        .frame(width: content + (metrics.flat ? 2 * CardMetrics.queueStatusCardPadding : 20), alignment: .leading)
+        .frame(width: content + 2 * CardMetrics.statusCardPadding, alignment: .leading)
     }
 
     /// The outcome label of a finished download, beside the button row -- same padded total
@@ -613,7 +613,7 @@ struct CardFacade: View {
         RoundedRectangle(cornerRadius: 3, style: .continuous)
             .fill(Color.white.opacity(0.07))
             .frame(width: 52, height: 8)
-            .frame(width: metrics.flat ? CardMetrics.queueStatusCardContentWidth + 2 * CardMetrics.queueStatusCardPadding : CardMetrics.statusCardContentWidth + 20, alignment: .leading)
+            .frame(width: CardMetrics.statusCardContentWidth + 2 * CardMetrics.statusCardPadding, alignment: .leading)
     }
 
     /// The only piece that stretches with the card while frozen: one plain rounded shape per

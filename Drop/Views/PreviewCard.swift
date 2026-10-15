@@ -153,21 +153,15 @@ enum CardMetrics {
     /// capability. It used to be `statusWidth - (capable ? buttonSlot : 0)`, which meant the
     /// card's own width changed the instant a button's capability flipped (entering/leaving
     /// Downloading, which has no primary button) -- reported live as "the card expands to the
-    /// right" at exactly that transition. Sized for the widest thing this box ever has to hold:
-    /// not the short outcome words ("Cancelled", "Done") but yt-dlp's own longer activity labels
-    /// shown in the same slot while a download is getting started ("Embedding thumbnail…",
-    /// "Solving challenges…", "Starting download…", 19-20 characters, semibold) -- at 108pt those
-    /// truncated (reported live, e.g. "reading stream and starting download" getting cut off).
-    /// 140pt fits the longest of those with room to spare, well short of ballooning the row (the
-    /// box is a flat constant regardless of state, so "Done"/"Queued" just sit in extra room).
-    static let statusCardContentWidth: CGFloat = 140
-    /// The same box for a Convert queue row. Its words are only ever "Queued", "Converting", a time
-    /// left, or an outcome ("Cancelled" is the longest), never yt-dlp's long activity labels, so it
-    /// is narrower -- and a row's metadata chip is not squeezed onto an extra line (which makes
-    /// every row, and so the drawer, taller).
-    static let queueStatusCardContentWidth: CGFloat = 108
-    /// Its horizontal padding (Download's card uses 10).
-    static let queueStatusCardPadding: CGFloat = 6
+    /// right" at exactly that transition. The same box on Download's cards and Convert's queue
+    /// rows ("the width changes of the progress indicator in the convert queue should be
+    /// reflected to the download page"): its words are "Queued", "Analyzing", a time left, or an
+    /// outcome ("Cancelled" is the longest), and yt-dlp's longer activity labels ("Starting
+    /// download…", "Embedding thumbnail…") are cut short with an ellipsis. It used to be wider on
+    /// Download for those (140pt); matching Convert's 108pt gives the metadata and title more room.
+    static let statusCardContentWidth: CGFloat = 108
+    /// The status card's horizontal padding, added on top of the fixed content width.
+    static let statusCardPadding: CGFloat = 6
     /// The status card's own fixed CONTENT height (before its padding) -- sized for the tallest
     /// state (Downloading: icon+label, then a percentage+bar row below) so the card never
     /// resizes as the status changes. Every shorter state just has empty room below it.
@@ -709,10 +703,9 @@ struct PreviewCard<Settings: View>: View {
                 // fixed size the card itself grew/shrank with whichever was showing. The frame
                 // sets the CONTENT size; padding is added on top of that fixed size, not squeezed
                 // inside it, so the padded total is also always the same -- see
-                // CardMetrics.statusCardContentWidth's own doc comment for why 92pt specifically
-                // (the old width truncated "Cancelled" to "Cancele…", reported live).
+                // CardMetrics.statusCardContentWidth's own doc comment for why this width.
                 .frame(width: CardMetrics.statusCardContentWidth, height: CardMetrics.statusCardContentHeight, alignment: .center)
-                .padding(.horizontal, 10).padding(.vertical, 6)
+                .padding(.horizontal, CardMetrics.statusCardPadding).padding(.vertical, 6)
                 .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                     .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
                 VerticalGlassDivider()
@@ -1070,8 +1063,8 @@ struct CompletedCard<Status: View>: View {
                         StatusSwapStack(
                             slot: inlineStatus != nil ? 1 : 2,
                             content: inlineStatus ?? statusLabel)
-                        .frame(width: CardMetrics.queueStatusCardContentWidth, height: CardMetrics.statusCardContentHeight, alignment: .center)
-                        .padding(.horizontal, CardMetrics.queueStatusCardPadding).padding(.vertical, 6)
+                        .frame(width: CardMetrics.statusCardContentWidth, height: CardMetrics.statusCardContentHeight, alignment: .center)
+                        .padding(.horizontal, CardMetrics.statusCardPadding).padding(.vertical, 6)
                         .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
                             .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
                         VerticalGlassDivider()

@@ -29,70 +29,102 @@ struct StatusSwapStack: View {
     /// How long the card's own layout animation (the box sliding over) runs.
     private static let settleDuration: Double = 0.35
 
-    /// The two layers' content and which one is live. Written during `body`, idempotently, so it
-    /// is a plain reference type rather than state: it must never trigger a re-render of its own.
+    /// The two layers' content and state. Written during `body`, idempotently, so it is a plain
+    /// reference type rather than state: it must never trigger a re-render of its own (`tick`
+    /// does that, after the timers below change something).
     private final class Memory {
+        enum Change { case none, first, swap, restart }
+
         var slot: Int?
-        var epoch = 0
-        /// Whether the current swap replaced visible text (the first status ever shown doesn't).
-        var hasDeparted = false
+        var change = Change.none
+        var live = 0
         var views: [AnyView?] = [nil, nil]
-        var live: Int { epoch % 2 }
+        /// Whether a layer is on screen at all, and how opaque it is.
+        var mounted = [false, false]
+        var opacity: [Double] = [1, 1]
+        /// Bumped on every swap, so a timer left over from an earlier swap can tell it is stale.
+        var generation = 0
 
         func record(_ slot: Int?, _ view: AnyView?) {
             if slot != self.slot {
-                hasDeparted = views[live] != nil
-                epoch += 1
                 self.slot = slot
-                // The other layer still holds the old text; without any, it must hold nothing.
-                if !hasDeparted { views[1 - live] = nil }
+                if mounted[live] {
+                    // The live text is on screen: it stays, frozen, as the one to fade out, and
+                    // the other layer takes over with the new text (not yet on screen).
+                    live = 1 - live
+                    mounted[live] = false
+                    opacity[live] = 0
+                    change = .swap
+                } else if views[live] != nil {
+                    // Another swap before the previous one's new text has even appeared: nothing
+                    // is on screen for it to fade out, so the waiting text is simply replaced.
+                    change = .restart
+                } else {
+                    // The very first status: shown at once.
+                    mounted[live] = true
+                    opacity[live] = 1
+                    change = .first
+                }
             }
             views[live] = view
         }
     }
 
     @State private var memory = Memory()
-    /// The swap whose old text has been dimmed to nothing / whose new text has faded in / whose old
-    /// text is fully gone (and so is released rather than kept running at zero opacity).
-    @State private var fadedOutEpoch = 0
-    @State private var mountedEpoch = 0
-    @State private var fadedInEpoch = 0
-    @State private var settledEpoch = 0
+    /// Re-renders after a timer has changed something in `memory`.
+    @State private var tick = 0
 
     var body: some View {
+        let _ = tick
         let _ = memory.record(slot, content)
-        let epoch = memory.epoch
-        ZStack(alignment: .leading) {
+        // Each layer centered on its own: in a stack that is as wide as the wider of the two (the
+        // old text is still there while the new one appears) the narrower text sat at the stack's
+        // leading edge, left of centre, until the old one was released and the stack shrank.
+        ZStack(alignment: .center) {
             ForEach(0..<2, id: \.self) { layer in
                 // One branch per layer (never "live" vs "departed" branches), so a layer keeps its
                 // identity, and so its on-screen position animation, when the roles swap.
-                let isLive = layer == memory.live
-                if isLive ? (!memory.hasDeparted || mountedEpoch == epoch) : settledEpoch != epoch,
-                   let view = memory.views[layer] {
+                if memory.mounted[layer], let view = memory.views[layer] {
                     view
-                        .opacity(isLive
-                                 ? (memory.hasDeparted && fadedInEpoch != epoch ? 0 : 1)
-                                 : (fadedOutEpoch == epoch ? 0 : 1))
-                        .allowsHitTesting(isLive)
+                        .opacity(memory.opacity[layer])
+                        .allowsHitTesting(layer == memory.live)
                 }
             }
         }
         .onChange(of: slot) {
-            let epoch = memory.epoch
-            guard memory.hasDeparted else { return }
-            withAnimation(.easeInOut(duration: Self.exitDuration)) { fadedOutEpoch = epoch }
+            let change = memory.change
+            memory.change = .none
+            guard change == .swap || change == .restart else { return }
+            memory.generation += 1
+            let generation = memory.generation
+            let departing = 1 - memory.live
+            if change == .swap {
+                withAnimation(.easeInOut(duration: Self.exitDuration)) {
+                    memory.opacity[departing] = 0
+                    tick += 1
+                }
+            }
             // The new text is only put on screen once the box has finished sliding: a view that is
             // new to the tree doesn't animate its position, so mounted any earlier it would sit at
             // the box's final spot ahead of the box (reported live).
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDuration) {
-                guard memory.epoch == epoch else { return }
-                mountedEpoch = epoch
+                guard memory.generation == generation else { return }
+                memory.mounted[memory.live] = true
+                memory.opacity[memory.live] = 0
+                tick += 1
                 DispatchQueue.main.async {
-                    withAnimation(.easeInOut(duration: Self.enterDuration)) { fadedInEpoch = epoch }
+                    withAnimation(.easeInOut(duration: Self.enterDuration)) {
+                        memory.opacity[memory.live] = 1
+                        tick += 1
+                    }
                 }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDuration + Self.enterDuration + 0.05) {
-                settledEpoch = epoch
+            // The old text is fully gone by now: released, not kept running at zero opacity.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDuration + Self.enterDuration) {
+                guard memory.generation == generation else { return }
+                memory.mounted[departing] = false
+                memory.views[departing] = nil
+                tick += 1
             }
         }
     }

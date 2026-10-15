@@ -18,13 +18,13 @@ enum ConvertAudioCodec: String, CaseIterable, Identifiable {
     var isOffered: Bool { self != .opus }
     var note: String {
         switch self {
-        case .aac:  return "Best compatibility"
-        case .ac3:  return "Dolby surround"
+        case .aac:  return "Best Compatibility"
+        case .ac3:  return "Dolby Surround"
         case .eac3: return "Dolby Digital+"
-        case .mp3:  return "Universal format"
-        case .flac: return "Lossless audio"
-        case .opus: return "Web optimized"
-        case .pcm:  return "Uncompressed, no re-encode risk"
+        case .mp3:  return "Universal Format"
+        case .flac: return "Lossless Audio"
+        case .opus: return "Web Optimized"
+        case .pcm:  return "Uncompressed, No Re-Encode Risk"
         }
     }
     var ffmpegCodec: String {
@@ -87,11 +87,11 @@ enum ConvertVideoCodec: String, CaseIterable, Identifiable {
     var isOffered: Bool { self != .av1 && self != .vp9 }
     var note: String {
         switch self {
-        case .h264:   return "Best compatibility"
-        case .h265:   return "Smaller file size"
+        case .h264:   return "Best Compatibility"
+        case .h265:   return "Smaller File Size"
         case .prores: return "Apple/Final Cut Pro"
-        case .av1:    return "Most efficient"
-        case .vp9:    return "Web optimized"
+        case .av1:    return "Most Efficient"
+        case .vp9:    return "Web Optimized"
         }
     }
     /// Verified against ffmpeg 8.1.2 on-device: libaom-av1 is NOT built into this
@@ -223,13 +223,13 @@ enum ConvertOutputFormat: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var note: String {
         switch self {
-        case .mp4:  return "Universal video"
-        case .mov:  return "Apple/Final Cut"
-        case .mkv:  return "Best container"
+        case .mp4:  return "Universal Video"
+        case .mov:  return "Apple/Final Cut Pro"
+        case .mkv:  return "Best Container"
         case .wav:  return "Best for DaVinci Resolve"
-        case .mp3:  return "Universal audio"
-        case .m4a:  return "Not good for DaVinci Resolve"
-        case .flac: return "Lossless audio"
+        case .mp3:  return "Universal Audio"
+        case .m4a:  return "Not Good for DaVinci Resolve"
+        case .flac: return "Lossless Audio"
         }
     }
     var isVideo: Bool { [.mp4, .mov, .mkv].contains(self) }
@@ -1595,7 +1595,7 @@ struct ConvertView: View {
             .overlay(Capsule().stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .help("Choose which staged file to review")
+        .help("Choose Which Staged File to Review")
         .anchorPreference(key: FileSwitcherPreferenceKey.self, value: .bounds) { anchor in
             guard isFileSwitcherOpen else { return nil }
             // Width/height are estimates for the host's own on-screen-keeping math
@@ -1679,7 +1679,7 @@ struct ConvertView: View {
         var body: some View {
             HStack(spacing: 8) {
                 #if DEV_BUILD
-                HoverIconButton(icon: "terminal", size: 13, help: "Reveal ffmpeg command", expandable: true) {
+                HoverIconButton(icon: "terminal", size: 13, help: "Reveal ffmpeg Command", expandable: true) {
                     showingFFmpegCommand = true
                 }
                 .popover(isPresented: $showingFFmpegCommand, arrowEdge: .top) { ffmpegCommandPopover }
@@ -2181,7 +2181,7 @@ struct ConvertView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 FolderSizeLabel(label: totalEstimatedSizeLabel)
             }
-            .help("Convert to this folder" + (totalEstimatedSizeLabel.map { " · est. \($0)" } ?? ""))
+            .help("Convert to This Folder" + (totalEstimatedSizeLabel.map { " · Est. \($0)" } ?? ""))
 
             FolderActionButtons(path: config.convertOutputDir) { config.convertOutputDir = $0 }
         }
@@ -2526,10 +2526,10 @@ private struct QueueRowView: View {
                 // Real circular HoverIconButtons (not a bare glyph) so
                 // they're actually visible at a glance, not just barely
                 // legible.
-                HoverIconButton(icon: "chevron.up", size: 9, disabled: index == 0, help: "Move up", expandable: true, shape: .circle) {
+                HoverIconButton(icon: "chevron.up", size: 9, disabled: index == 0, help: "Move Up", expandable: true, shape: .circle) {
                     moveQueueItem(by: -1)
                 }
-                HoverIconButton(icon: "chevron.down", size: 9, disabled: index == queue.count - 1, help: "Move down", expandable: true, shape: .circle) {
+                HoverIconButton(icon: "chevron.down", size: 9, disabled: index == queue.count - 1, help: "Move Down", expandable: true, shape: .circle) {
                     moveQueueItem(by: 1)
                 }
             }

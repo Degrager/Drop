@@ -136,7 +136,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
             icon: "folder.badge.gearshape", size: 13, boxSize: DropGrid.controlHeight,
             activeColor: DesignTokens.Accent.primary,
             isActive: config.autoOpenFolder,
-            help: config.autoOpenFolder ? "Auto-open folder: On" : "Auto-open folder: Off",
+            help: config.autoOpenFolder ? "Auto-Open Folder: On" : "Auto-Open Folder: Off",
             expandable: true
         ) {
             config.autoOpenFolder.toggle()
@@ -314,7 +314,7 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
                     }
                     .buttonStyle(.plain)
                     .disabled(!enabled)
-                    .help(!toolsReady ? "Install yt-dlp and ffmpeg from the Tools menu first" : "")
+                    .help(!toolsReady ? HelpText.toolsMissing : "")
                     .onHover { h in
                         withAnimation(.easeOut(duration: 0.18)) {
                             primaryActionHovering = h

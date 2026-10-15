@@ -1070,8 +1070,8 @@ struct LogView: View {
                 .toggleStyle(.checkbox)
                 .font(.appMono(size: 11))
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
-            HoverIconButton(icon: "doc.on.doc", size: 12, help: "Copy log", expandable: true, action: copyLog)
-            HoverIconButton(icon: "square.and.arrow.up", size: 12, help: "Export log", expandable: true, action: exportLog)
+            HoverIconButton(icon: "doc.on.doc", size: 12, help: "Copy Log", expandable: true, action: copyLog)
+            HoverIconButton(icon: "square.and.arrow.up", size: 12, help: "Export Log", expandable: true, action: exportLog)
             HoverIconButton(icon: "folder", size: 12, help: "Reveal in Finder", expandable: true, action: { DropLogger.shared.revealInFinder() })
         }
         .padding(.horizontal, 14)
@@ -1186,6 +1186,7 @@ private struct LogRow: View {
                 .font(.appMono(size: 9.5, weight: .bold))
                 .foregroundColor(isError || isWarning || isSuccess ? color : .white.opacity(DesignTokens.Text.disabled))
                 .frame(width: 14)
+                .accessibilityHidden(true)
             Text(message)
                 .font(.appMono(size: 11, design: .monospaced))
                 .foregroundColor(color)
@@ -1307,6 +1308,7 @@ struct SidebarTabItem: View {
                 Image(systemName: icon)
                     .font(.appMono(size: 14))
                     .frame(width: Self.iconSlot)
+                    .accessibilityHidden(true)
                 if !compact {
                     TypedText(label)
                         .font(.appMono(size: 13, weight: isSelected ? .semibold : .medium))
@@ -1391,6 +1393,25 @@ struct SidebarTabItem: View {
 extension ChipData {
     enum MetaColumn { case time, video, audio, other }
 
+    /// What the chip's symbol stands for, spoken in place of the symbol's own name.
+    private func kindName(for symbol: String?) -> String? {
+        switch symbol {
+        case "clock": return "Duration"
+        case "internaldrive": return "Size"
+        case "video": return "Video"
+        case "waveform": return "Audio"
+        case "video.badge.waveform": return "Video and Audio"
+        default: return nil
+        }
+    }
+
+    /// The chip read as one phrase, e.g. "Duration 19s" or "Video MP4 H.264 1280x720".
+    var accessibilityText: String {
+        var parts = [kindName(for: icon), label.isEmpty ? nil : label, value].compactMap { $0 }
+        if let value2 { parts.append(contentsOf: [kindName(for: icon2), value2].compactMap { $0 }) }
+        return parts.joined(separator: " ")
+    }
+
     /// Which column of the aligned IN / OUT grid this chip belongs in.
     var metaColumn: MetaColumn {
         switch icon {
@@ -1457,6 +1478,7 @@ struct MetaCell: View {
                 Image(systemName: icon)
                     .font(.appMono(size: 10, weight: .bold))
                     .foregroundColor(chip.metaIconColor)
+                    .accessibilityHidden(true)
             }
             if !chip.label.isEmpty {
                 Text(chip.label)
@@ -1476,11 +1498,14 @@ struct MetaCell: View {
                     .font(.appMono(size: 10, weight: .bold))
                     .foregroundColor(chip.metaIconColor)
                     .padding(.leading, 3)
+                    .accessibilityHidden(true)
                 sizeText(value2)
             }
         }
         .lineLimit(1)
         .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(chip.accessibilityText)
     }
 }
 
@@ -1687,6 +1712,7 @@ struct NoteContent: View {
             Image(systemName: icon)
                 .font(.appMono(size: 9, weight: .semibold))
                 .foregroundColor(DesignTokens.Accent.warning)
+                .accessibilityHidden(true)
             Text(text)
                 .font(.appMono(size: 10))
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
@@ -2412,6 +2438,7 @@ struct FieldCaption: View {
                 Image(systemName: icon)
                     .font(.appMono(size: 10, weight: .semibold))
                     .frame(width: 14, alignment: .center)
+                    .accessibilityHidden(true)
             }
             Text(text)
                 .font(.appMono(size: icon == nil ? 9 : 10, weight: .semibold))
@@ -3012,7 +3039,7 @@ struct FolderActionButtons: View {
             // draws internally, which is why the box needs its own explicit override
             // (reported live: "same height as the directory bar"). `size` stays 13 so the
             // glyph and hover caption keep their original size instead of scaling up too.
-            HoverIconButton(icon: "folder", size: 13, boxSize: DropGrid.controlHeight, help: "Choose folder", expandable: true) {
+            HoverIconButton(icon: "folder", size: 13, boxSize: DropGrid.controlHeight, help: "Choose Folder", expandable: true) {
                 let panel = NSOpenPanel()
                 panel.canChooseFiles = false
                 panel.canChooseDirectories = true
@@ -3047,6 +3074,7 @@ struct FolderSizeLabel: View {
             HStack(spacing: 4) {
                 Image(systemName: "internaldrive")
                     .font(.appMono(size: 9))
+                    .accessibilityHidden(true)
                 Text(label)
                     .font(.appMono(size: 10, weight: .semibold))
             }

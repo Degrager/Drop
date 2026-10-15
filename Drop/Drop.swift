@@ -168,10 +168,10 @@ enum AudioFormat: String, CaseIterable, Identifiable {
     }
     var note: String {
         switch self {
-        case .mp3:  return "Universal compatibility"
-        case .m4a:  return "Not good for DaVinci Resolve"
+        case .mp3:  return "Universal Compatibility"
+        case .m4a:  return "Not Good for DaVinci Resolve"
         case .wav:  return "Best for DaVinci Resolve"
-        case .flac: return "Lossless, large files"
+        case .flac: return "Lossless, Large Files"
         }
     }
     /// True if this format is a direct stream copy from the source (no ffmpeg decode/encode pass).
@@ -266,10 +266,10 @@ enum VideoFormat: String, CaseIterable, Identifiable {
     var label: String { rawValue.uppercased() }
     var note: String {
         switch self {
-        case .mp4:  return "Universal compatibility, QuickTime-ready"
-        case .mov:  return "QuickTime, Final Cut Pro native"
-        case .mkv:  return "Best quality container"
-        case .webm: return "Web optimized"
+        case .mp4:  return "Universal Compatibility, QuickTime-Ready"
+        case .mov:  return "QuickTime, Final Cut Pro Native"
+        case .mkv:  return "Best Quality Container"
+        case .webm: return "Web Optimized"
         }
     }
     /// All containers here are stream remuxes, not re-encodes — video/audio codecs are untouched.
@@ -311,9 +311,9 @@ enum ReencodeCodec: String, CaseIterable, Identifiable {
     }
     var note: String {
         switch self {
-        case .h264: return "Fastest, plays everywhere"
-        case .hevc: return "Smaller file, same quality"
-        case .off:  return "Keep original — may not open in Preview/QuickTime"
+        case .h264: return "Fastest, Plays Everywhere"
+        case .hevc: return "Smaller File, Same Quality"
+        case .off:  return "Keep Original — May Not Open in Preview/QuickTime"
         }
     }
     var videotoolboxEncoder: String? {
@@ -4850,6 +4850,7 @@ struct SkeletonCancelButton: View {
             withAnimation(.easeOut(duration: 0.15)) { hovering = h }
         }
         .help("Cancel")
+        .accessibilityLabel("Cancel")
     }
 }
 
@@ -4872,6 +4873,7 @@ struct EmptyStateView: View {
             Image(systemName: icon)
                 .font(.appMono(size: 30, weight: .thin))
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                .accessibilityHidden(true)
             Text(title)
                 .font(.appMono(size: 14, weight: .medium, design: .rounded))
                 .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
@@ -5020,6 +5022,7 @@ struct HoverIconButton: View {
             isHovering = hovering
         }
         .help(help)
+        .accessibilityLabelIfPresent(help)
     }
 }
 
@@ -5107,7 +5110,7 @@ struct VersionChip: View {
                     .help(refreshHelp)
             } else {
                 chipContent
-                    .help(updateAvailable ? "Update available" : "Up to date")
+                    .help(updateAvailable ? "Update Available" : "Up to Date")
             }
         }
     }
@@ -5247,6 +5250,7 @@ struct SidebarToolRow: View {
             Image(systemName: icon)
                 .font(.appMono(size: 11))
                 .frame(width: WindowLayout.railIconSlot)
+                .accessibilityHidden(true)
             if !compact {
                 TypedText(name)
                     .font(.appMono(size: 11, weight: .medium))
@@ -5289,7 +5293,7 @@ struct SidebarToolRow: View {
                     .allowsHitTesting(false)
             }
         }
-        .help(version.isEmpty ? name : "\(name) \(version)\(updateAvailable ? " — update available" : "")")
+        .help(version.isEmpty ? name : "\(name) \(version)\(updateAvailable ? " — Update Available" : "")")
         .accessibilityElement(children: .combine)
     }
 }
@@ -5507,7 +5511,7 @@ struct CheckForUpdatesButton: View {
                     .allowsHitTesting(false)
             }
         }
-        .help(compact ? labelText : (disabledUntilSetup ? "Bundled yt-dlp/ffmpeg missing — reinstall Drop" : ""))
+        .help(compact ? labelText : (disabledUntilSetup ? HelpText.toolsMissing : ""))
         .accessibilityLabel(labelText)
     }
 }
@@ -6739,7 +6743,7 @@ struct ContentView: View {
         ) {
             sidebarCollapsedByUser.toggle()
         }
-        .accessibilityLabel(isCompactSidebar ? "Expand sidebar" : "Collapse sidebar")
+        .accessibilityLabel(isCompactSidebar ? "Expand Sidebar" : "Collapse Sidebar")
         .frame(width: WindowLayout.compactSidebarWidth)
         // The caption pops out rightward past this slot's own bounds, right
         // where the "Drop" wordmark sits once expanded -- reported live as
@@ -7158,6 +7162,7 @@ struct ContentView: View {
                 Image(systemName: "arrow.down.circle")
                     .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
                     .font(.appMono(size: 16))
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Setting up yt-dlp and ffmpeg…")
                         .font(.appMono(size: 13, weight: .semibold))
@@ -7200,6 +7205,7 @@ struct ContentView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.orange)
                 .font(.appMono(size: 16))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Couldn't set up yt-dlp/ffmpeg")
                     .font(.appMono(size: 13, weight: .semibold))
@@ -7322,13 +7328,14 @@ struct ContentView: View {
                         Image(systemName: "folder")
                             .font(.appMono(size: DropGrid.fieldFontSize - 1))
                             .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                            .accessibilityHidden(true)
                         TextField("", text: $config.outputDir)
                             .textFieldStyle(.plain)
                             .font(.appMono(size: DropGrid.fieldFontSize))
                             .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
                         FolderSizeLabel(label: totalEstimatedSizeLabel)
                     }
-                    .help("Save to this folder" + (totalEstimatedSizeLabel.map { " · est. \($0)" } ?? ""))
+                    .help("Save to This Folder" + (totalEstimatedSizeLabel.map { " · Est. \($0)" } ?? ""))
 
                     FolderActionButtons(path: config.outputDir) { config.outputDir = $0 }
                 }
@@ -7345,7 +7352,7 @@ struct ContentView: View {
     // accepted typing (see 16f354a). Dimmer than the accent-filled Analyze pill so it doesn't
     // compete with it, matching the leading link glyph's own secondary weight.
     private var clipboardRefreshButton: some View {
-        HoverIconButton(icon: "arrow.clockwise", size: 11, boxSize: 24, color: .white.opacity(DesignTokens.Text.secondary), help: "Refresh clipboard", shape: .circle) {
+        HoverIconButton(icon: "arrow.clockwise", size: 11, boxSize: 24, color: .white.opacity(DesignTokens.Text.secondary), help: "Refresh Clipboard", shape: .circle) {
             refreshClipboardPreview()
         }
         .padding(.trailing, 6)
@@ -7465,7 +7472,7 @@ struct ContentView: View {
         // setup should ever block this button.
         .disabled(isRetry || !readyToDownload)
         .opacity((isRetry || !readyToDownload) ? 0.5 : 1.0)
-        .help(readyToDownload ? "" : "Install yt-dlp and ffmpeg from the Tools menu first")
+        .help(readyToDownload ? "" : HelpText.toolsMissing)
     }
 
     /// Re-reads the clipboard into `clipboardPreview` -- called on appear and
@@ -7541,6 +7548,7 @@ struct ContentView: View {
                 .font(.appMono(size: 13, weight: .thin))
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 .padding(.leading, 14)
+                .accessibilityHidden(true)
 
             ZStack(alignment: .leading) {
                 // No longer a TextField: this bar has nothing of its own to type or
@@ -8131,7 +8139,7 @@ struct ContentView: View {
                                     percentage: String? = nil, bar: AnyView? = nil) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 5) {
-                Image(systemName: icon).foregroundColor(iconColor ?? color)
+                Image(systemName: icon).foregroundColor(iconColor ?? color).accessibilityHidden(true)
                 Text(label).foregroundColor(color).lineLimit(1)
             }
             .font(.appMono(size: 10, weight: .semibold))
@@ -9677,3 +9685,19 @@ struct GlassButton: View {
 }
 
 
+
+
+/// Tooltip and accessibility wording that more than one place shows.
+enum HelpText {
+    /// yt-dlp / ffmpeg ship inside the app, so a missing one means a broken install.
+    static let toolsMissing = "Bundled yt-dlp or ffmpeg Is Missing — Reinstall Drop"
+}
+
+extension View {
+    /// Gives a control an accessibility label only when there is one to give: an empty label would
+    /// replace the one SwiftUI derives with nothing at all.
+    @ViewBuilder
+    func accessibilityLabelIfPresent(_ label: String) -> some View {
+        if label.isEmpty { self } else { self.accessibilityLabel(label) }
+    }
+}

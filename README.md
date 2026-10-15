@@ -61,7 +61,7 @@ Every download is logged with its original link, so redownloading or retrying a 
 ## Requirements
 
 - macOS 14 (Sonoma) or later
-- Apple Silicon or Intel Mac
+- A Mac with Apple Silicon (M1 or later). Intel Macs are not supported.
 
 ## Installation
 

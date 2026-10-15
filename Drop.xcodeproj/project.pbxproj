@@ -529,8 +529,8 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.9;
-				ARCHS = arm64;
-				VALID_ARCHS = arm64;
+				ARCHS = "arm64 x86_64";
+				VALID_ARCHS = "arm64 x86_64";
 			};
 			name = Release;
 		};
@@ -601,8 +601,8 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.9;
-				ARCHS = arm64;
-				VALID_ARCHS = arm64;
+				ARCHS = "arm64 x86_64";
+				VALID_ARCHS = "arm64 x86_64";
 			};
 			name = Release;
 		};

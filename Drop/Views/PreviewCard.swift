@@ -1,6 +1,84 @@
 import SwiftUI
 import AppKit
 
+/// The status ticker inside a card's outlined status box (Queued -> Downloading -> Done, etc): the
+/// outgoing text fades out in place, and the incoming text doesn't start fading in until that exit
+/// has fully finished -- a genuine sequence, not `blurIn`'s simultaneous crossfade. Nothing moves
+/// relative to the box.
+///
+/// The outgoing text is NOT a removal transition. A view that is being removed is left where it
+/// last was on screen instead of following its parent's layout, so when the box slid over (the
+/// card reserves room for a button that appears on the same state change -- Analyzing -> Queued)
+/// the old text faded out at the box's old position while the box and the new text moved away
+/// (reported live). Here it stays an ordinary child of the box, held for the length of the fade
+/// and dimmed through an opacity state, so it travels with the box like anything else in it.
+///
+/// Total duration (and curve) matches PreviewCard's own card-wide `.animation(.easeInOut
+/// (duration: 0.35), value: StateKey(...))` -- that's what slides trailingArea's button into its
+/// new reserved slot on the very same status change. Keeping the two on the same curve and total
+/// (0.17 + 0.18s) is what stops the text finishing before the button does ("it moves faster than
+/// the card rather than with it").
+struct StatusSwapStack: View {
+    /// Which status is showing (queued / inline / label); nil when none is. A change is a swap.
+    let slot: Int?
+    let content: AnyView?
+
+    private static let exitDuration: Double = 0.17
+    private static let enterDuration: Double = 0.18
+
+    /// What the previous render showed, so a swap can keep the old text around to fade it out.
+    /// Written during `body`, idempotently, so it is a plain reference type rather than state:
+    /// it must never trigger a re-render of its own.
+    private final class Memory {
+        var slot: Int?
+        var view: AnyView?
+        var departed: AnyView?
+        var epoch = 0
+
+        func record(_ slot: Int?, _ view: AnyView?) {
+            if slot != self.slot {
+                departed = self.view
+                epoch += 1
+                self.slot = slot
+            }
+            self.view = view
+        }
+    }
+
+    @State private var memory = Memory()
+    /// The swap whose outgoing text has been dimmed to nothing / is fully gone.
+    @State private var fadingEpoch = 0
+    @State private var settledEpoch = 0
+
+    var body: some View {
+        let _ = memory.record(slot, content)
+        let departed = settledEpoch == memory.epoch ? nil : memory.departed
+        ZStack(alignment: .leading) {
+            if let content {
+                content
+                    .id(slot)
+                    .transition(.asymmetric(
+                        insertion: AnyTransition.opacity
+                            .animation(.easeInOut(duration: Self.enterDuration).delay(Self.exitDuration)),
+                        removal: .identity))
+            }
+            if let departed {
+                departed
+                    .opacity(fadingEpoch == memory.epoch ? 0 : 1)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onChange(of: slot) {
+            let epoch = memory.epoch
+            guard memory.departed != nil else { return }
+            withAnimation(.easeInOut(duration: Self.exitDuration)) { fadingEpoch = epoch }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.exitDuration + 0.05) {
+                settledEpoch = epoch
+            }
+        }
+    }
+}
+
 // Reports a view's own rendered width up through the view tree -- used to
 // size the title skeleton bar to match the real, resolved title Text's
 // width instead of a hardcoded guess.
@@ -559,9 +637,9 @@ struct PreviewCard<Settings: View>: View {
                 //
                 // Content is CENTERED within the box (not leading-aligned top-to-bottom; the
                 // text itself is still leading-aligned horizontally -- see below): asked for
-                // explicitly ("middle aligned"). Swaps between states use statusSwap, not blurIn:
-                // the outgoing text moves up and fades out, and the incoming one doesn't start
-                // (also moving up, into place) until that exit has fully finished -- a real
+                // explicitly ("middle aligned"). Swaps between states use StatusSwapStack, not blurIn:
+                // the outgoing text fades out in place, and the incoming one does not start
+                // until that exit has fully finished -- a real
                 // sequence, not a simultaneous crossfade (asked for explicitly: "the text should
                 // finish moving up before the swap happens").
                 //
@@ -572,11 +650,9 @@ struct PreviewCard<Settings: View>: View {
                 // as "the status section moves left or right." Anchoring to the leading edge
                 // means every status word starts at the exact same point regardless of length;
                 // only the TRAILING edge of the text (nothing is anchored to it) varies now.
-                ZStack(alignment: .leading) {
-                    if let queuedStatus { queuedStatus.transition(.statusSwap()) }
-                    if let inlineStatus { inlineStatus.transition(.statusSwap()) }
-                    if let statusLabel { statusLabel.transition(.statusSwap()) }
-                }
+                StatusSwapStack(
+                    slot: queuedStatus != nil ? 0 : inlineStatus != nil ? 1 : 2,
+                    content: queuedStatus ?? inlineStatus ?? statusLabel)
                 // A static box, not a tight wrap: Downloading (icon+label, then a percentage+bar
                 // row below) is the tallest state, every other state is one line -- without a
                 // fixed size the card itself grew/shrank with whichever was showing. The frame
@@ -940,10 +1016,9 @@ struct CompletedCard<Status: View>: View {
                 // the narrowest state, so the row's height never changes with it.
                 HStack(spacing: 6) {
                     if inlineStatus != nil || statusLabel != nil {
-                        ZStack(alignment: .leading) {
-                            if let inlineStatus { inlineStatus.transition(.statusSwap()) }
-                            if let statusLabel { statusLabel.transition(.statusSwap()) }
-                        }
+                        StatusSwapStack(
+                            slot: inlineStatus != nil ? 1 : 2,
+                            content: inlineStatus ?? statusLabel)
                         .frame(width: CardMetrics.queueStatusCardContentWidth, height: CardMetrics.statusCardContentHeight, alignment: .center)
                         .padding(.horizontal, CardMetrics.queueStatusCardPadding).padding(.vertical, 6)
                         .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)

@@ -3640,27 +3640,6 @@ extension AnyTransition {
         )
     }
 
-    /// A status-ticker swap (Queued -> Downloading -> Done, etc): the outgoing text fades out in
-    /// place, and the incoming text doesn't start fading in until that exit has fully finished --
-    /// a genuine sequence, not `blurIn`'s simultaneous crossfade. Nothing moves: it was a move up
-    /// and in from below, removed per request ("just fade in place"). Built on the same idiom as
-    /// `blurInAfter` (delay the insertion by the removal's own duration).
-    ///
-    /// Total duration (and curve) matches PreviewCard's own card-wide `.animation(.easeInOut
-    /// (duration: 0.35), value: StateKey(...))` -- that's what slides trailingArea's button into
-    /// its new reserved slot on the very same status change, since its `.frame(width:
-    /// trailingAreaWidth)` has no animation of its own and just inherits that ambient one. Keeping
-    /// the two on the same curve and total (0.17 + 0.18s) is what stops the text finishing before
-    /// the button does ("it moves faster than the card rather than with it").
-    static func statusSwap(exitDuration: Double = 0.17) -> AnyTransition {
-        .asymmetric(
-            insertion: AnyTransition.opacity
-                .animation(.easeInOut(duration: 0.18).delay(exitDuration)),
-            removal: AnyTransition.opacity
-                .animation(.easeInOut(duration: exitDuration))
-        )
-    }
-
     /// Same as `blurIn`, anchored on the top edge -- for sections that unfold
     /// downward inside a card (Options, the format chips) so the content
     /// grows out of the header instead of scaling from its own centre while

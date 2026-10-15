@@ -27,7 +27,7 @@ struct StatusSwapStack: View {
     private static let exitDuration: Double = 0.17
     private static let enterDuration: Double = 0.18
     /// How long the card's own layout animation (the box sliding over) runs.
-    private static let settleDuration: Double = 0.35
+    private static let settleDuration = CardMetrics.slideDuration
 
     /// The two layers' content and state. Written during `body`, idempotently, so it is a plain
     /// reference type rather than state: it must never trigger a re-render of its own (`tick`
@@ -144,6 +144,12 @@ private struct WidthPreferenceKey: PreferenceKey {
 /// Sizes shared by every card header so a card doesn't change shape as it moves
 /// between states (analyzing, queued, downloading, done).
 enum CardMetrics {
+    /// How long the box, divider and buttons take to slide over when a button appears or leaves
+    /// (Download's card-wide animation / Convert's row animation). A view that is new to the tree
+    /// doesn't animate its position -- it appears at its final spot -- so anything that appears
+    /// beside the sliding box waits this long first, or it overlaps the box and divider.
+    static let slideDuration: Double = 0.35
+    static let rowSlideDuration: Double = 0.25
     static let thumbWidth: CGFloat = 56
     static let thumbHeight: CGFloat = 38
     /// Height of the IN / OUT metadata capsule (two rows). The analyzing placeholder is drawn
@@ -449,7 +455,7 @@ struct PreviewCard<Settings: View>: View {
         .animation(.easeOut(duration: 0.15), value: showCheckbox)
         // Every state change (analyzing -> ready -> downloading -> finished) animates in place:
         // the same card, its contents adjusting.
-        .animation(.easeInOut(duration: 0.35), value: StateKey(
+        .animation(.easeInOut(duration: CardMetrics.slideDuration), value: StateKey(
             analyzing: isAnalyzing, settings: showsSettings, queued: queuedStatus != nil,
             status: inlineStatus != nil, label: statusLabel != nil, buttons: buttonCount
         ))
@@ -752,6 +758,19 @@ struct PreviewCard<Settings: View>: View {
         HoverIconButton(icon: control.icon, size: 16, color: control.color, help: control.help, expandable: true) { control.action() }
     }
 
+    /// Tells when the card has only just finished analyzing, the moment the button slots grow and
+    /// the box and divider slide over to make room. Written during `body`, idempotently.
+    private final class AnalyzeFlip {
+        var analyzing: Bool?
+        var flippedAt = Date.distantPast
+        func record(_ analyzing: Bool) {
+            if self.analyzing == true, !analyzing { flippedAt = Date() }
+            self.analyzing = analyzing
+        }
+        var justFlipped: Bool { Date().timeIntervalSince(flippedAt) < 0.1 }
+    }
+    @State private var analyzeFlip = AnalyzeFlip()
+
     /// The header's buttons, side by side: [primary] [remove], remove always last. Reverted back
     /// from a stacked column (see git history) -- that was chasing a problem it didn't actually
     /// own. It was built to stop the progress indicator shifting when a button appears/disappears,
@@ -761,9 +780,14 @@ struct PreviewCard<Settings: View>: View {
     /// above) and just cost a taller card plus a lot of size/shape tuning for nothing. Every one is
     /// the same 28pt capsule, and the primary one stays put while its icon changes
     /// (collapse -> cancel -> redownload).
-    @ViewBuilder
     private var trailingArea: some View {
-        HStack(spacing: 12) {
+        let _ = analyzeFlip.record(isAnalyzing)
+        // The options button that arrives when analysis ends comes in beside a box and divider that
+        // are still sliding over to make room, so it waits for them (a later swap, e.g. a finished
+        // download's redownload button, has no slide to wait for).
+        let primaryTransition: AnyTransition = analyzeFlip.justFlipped
+            ? .blurInAfter(CardMetrics.slideDuration) : .blurIn
+        return HStack(spacing: 12) {
             if let headerAccessory { headerAccessory }
             // Only the two button slots get the fixed-width reservation below -- headerAccessory
             // (Convert's file switcher, a different size entirely) sits outside it unconstrained;
@@ -771,7 +795,7 @@ struct PreviewCard<Settings: View>: View {
             // fixed here.
             HStack(spacing: 12) {
                 if let primary = primaryTrailingControl {
-                    controlButton(primary).transition(.blurIn)
+                    controlButton(primary).transition(primaryTransition)
                 }
                 if isAnalyzing {
                     // Spinner -> X on hover, in the remove button's own slot.
@@ -1070,11 +1094,11 @@ struct CompletedCard<Status: View>: View {
                         VerticalGlassDivider()
                     }
                     HStack(spacing: 6) {
-                        if let trailingAccessory { trailingAccessory.transition(.blurIn) }
+                        if let trailingAccessory { trailingAccessory.transition(.blurInAfter(CardMetrics.rowSlideDuration)) }
                         removeButton
                     }
                 }
-                .animation(.easeOut(duration: 0.25), value: trailingAccessory != nil)
+                .animation(.easeOut(duration: CardMetrics.rowSlideDuration), value: trailingAccessory != nil)
             } else {
                 if let inlineStatus { inlineStatus }
                 VStack(spacing: 6) {

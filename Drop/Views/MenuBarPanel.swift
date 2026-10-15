@@ -266,6 +266,7 @@ private final class MenuBarHostingView<Content: View>: NSHostingView<Content> {
 
 // MARK: - Controller
 
+@MainActor
 final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem?
     private var panel: MenuBarPanel?

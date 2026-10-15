@@ -147,6 +147,7 @@ class Config: ObservableObject {
         return copy
     }
 }
+
 enum AudioFormat: String, CaseIterable, Identifiable {
     // WAV first — uncompressed PCM, decodes identically everywhere, best for DaVinci Resolve; other formats follow.
     case wav, m4a, mp3, flac
@@ -1334,6 +1335,15 @@ enum FixAction: Equatable {
 
 // MARK: - Download Manager
 
+/// A string that two threads share: the thread reading yt-dlp's output appends to it, and the
+/// code that runs once the process has exited reads it.
+final class SyncText: @unchecked Sendable {
+    private let lock = NSLock()
+    private var text = ""
+    func append(_ s: String) { lock.lock(); text += s; lock.unlock() }
+    var value: String { lock.lock(); defer { lock.unlock() }; return text }
+}
+
 class DownloadManager: ObservableObject, @unchecked Sendable {
     // Downloads run strictly one at a time. Previously 3 ran concurrently,
     // which meant multiple yt-dlp processes competing for the same network/
@@ -2187,6 +2197,25 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Quitting stops every download in flight, and -- like Cancel -- removes the .part/.ytdl files
+    /// they had written. Drop doesn't keep in-progress downloads across launches, so nothing would
+    /// ever resume from those files; they would just sit in the output folder.
+    func cancelAllForQuit() {
+        let running = downloads.filter { $0.status == .downloading }
+        guard !running.isEmpty else { return }
+        for download in running {
+            guard let proc = download.process else { continue }
+            Self.terminateProcessTree(proc)
+            kill(proc.processIdentifier, SIGKILL)
+        }
+        // Let the processes finish dying so they can't write another byte after the cleanup.
+        usleep(150_000)
+        for download in running {
+            appendLog("Stopped on quit: \(download.title)")
+            Self.deletePartialFiles(baseName: download.resolvedBaseName, in: download.outputDir, log: { self.appendLog($0) })
+        }
+    }
+
     /// Cancel kills yt-dlp/ffmpeg but doesn't remove whatever they'd already
     /// written — a .part/.ytdl temp file, or (once past the merge step) a
     /// truncated final file. Both use the same resolved base name, so scan
@@ -2769,10 +2798,13 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             proc.standardError  = outputPipe
             DispatchQueue.main.async { self.withDownload(downloadID) { $0.process = proc } }
 
-            var stderrOutput  = ""
+            let stderrOutput  = SyncText()
+            // Signalled when the reader thread below has read to the end of yt-dlp's output.
+            let readerDone = DispatchSemaphore(value: 0)
 
             // Read all output on a dedicated thread — never blocks the launch thread
             let outputThread = Thread {
+                defer { readerDone.signal() }
                 let handle = outputPipe.fileHandleForReading
                 var buffer = Data()
                 while true {
@@ -2795,7 +2827,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                     for line in lines {
                         let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !t.isEmpty else { continue }
-                        stderrOutput += t + "\n"
+                        stderrOutput.append(t + "\n")
                         // Logged line for this iteration -- normally just `t`
                         // verbatim, but percentage lines get rewritten below
                         // into a Homebrew-style Unicode bar + elapsed time
@@ -2981,7 +3013,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                 if !buffer.isEmpty, let last = String(data: buffer, encoding: .utf8) {
                     let t = last.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !t.isEmpty {
-                        stderrOutput += t
+                        stderrOutput.append(t)
                         DispatchQueue.main.async {
                             self.withDownload(downloadID) { $0.logs.append(t) }
                             self.appendLog(t)
@@ -2994,6 +3026,12 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
             do {
                 try proc.run()
                 proc.waitUntilExit()
+                // The reader thread may still be draining what yt-dlp wrote last, including the
+                // final ERROR line the failure message and the 403 retry look for. Wait for it to
+                // reach the end of the stream before anything below reads `stderrOutput` --
+                // `Thread.cancel()` alone only sets a flag the read loop never checks. Bounded,
+                // because a child process (ffmpeg) can hold the pipe open after yt-dlp exits.
+                _ = readerDone.wait(timeout: .now() + 3)
                 outputThread.cancel()
 
                 // File was written directly to outputDir by yt-dlp.
@@ -3169,8 +3207,8 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                             failTitle = $0.title
                         }
                         // Save failed download to history so user can see what went wrong
-                        let failErrLine = stderrOutput.components(separatedBy: "\n")
-                            .first(where: { $0.contains("ERROR") }) ?? String(stderrOutput.suffix(200))
+                        let failErrLine = stderrOutput.value.components(separatedBy: "\n")
+                            .first(where: { $0.contains("ERROR") }) ?? String(stderrOutput.value.suffix(200))
                         let failEntry = HistoryEntry(
                             title: failTitle.isEmpty ? url : failTitle,
                             url: url, format: "", quality: "",
@@ -3179,7 +3217,7 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                             errorMessage: failErrLine.trimmingCharacters(in: .whitespacesAndNewlines)
                         )
                         self.history.add(failEntry)
-                        let stderr      = stderrOutput.lowercased()
+                        let stderr      = stderrOutput.value.lowercased()
                         // A 403 here almost always means the signed CDN URL yt-dlp
                         // resolved expired or got edge-throttled between extraction
                         // and the actual media fetch -- not that the video is truly
@@ -3224,8 +3262,8 @@ class DownloadManager: ObservableObject, @unchecked Sendable {
                         if fileMissing {
                             errLine = "yt-dlp exited OK but no output file found in \(outputDir). Open the log for details."
                         } else {
-                            errLine = stderrOutput.components(separatedBy: "\n")
-                                .first(where: { $0.contains("ERROR") }) ?? String(stderrOutput.suffix(300))
+                            errLine = stderrOutput.value.components(separatedBy: "\n")
+                                .first(where: { $0.contains("ERROR") }) ?? String(stderrOutput.value.suffix(300))
                         }
                         self.withDownload(downloadID) { $0.errorMessage = errLine.isEmpty ? "Unknown error" : errLine }
                         if isCookie {
@@ -5594,6 +5632,7 @@ extension Notification.Name {
 
 // MARK: - App Delegate (enforces the screen-relative minimum window size)
 
+@MainActor
 class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared: DropAppDelegate!
     /// The status item, its panel and its right-click menu (MenuBarPanel.swift).
@@ -6607,6 +6646,12 @@ struct ContentView: View {
             return true
         }
         .preferredColorScheme(.dark)
+        // Quitting stops whatever is running and removes the partial files it had written, the same
+        // as Cancel does (see DownloadManager.cancelAllForQuit).
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            manager.cancelAllForQuit()
+            for job in convertQueue where job.status == .converting { job.cancel() }
+        }
         .onAppear {
             // Mirrors the Download tab's own Paste & Analyze button exactly:
             // validate every line is a URL, insert pending placeholder cards

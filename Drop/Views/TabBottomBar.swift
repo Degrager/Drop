@@ -340,7 +340,9 @@ struct TabBottomBar<LeftControls: View, ExtraControls: View, BatchDirectoryContr
             .padding(.horizontal, 12)
             .padding(.vertical, compactHeight ? 8 : 12)
             .glassCard(cornerRadius: DesignTokens.Radius.xlarge, rimAnchoredToBottom: true)
-            .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 4)
+            // No downward offset: a halo pushed below the bar read as the bar ending lower than the
+            // sidebar's bottom edge, which has no shadow.
+            .shadow(color: .black.opacity(DesignTokens.Interactive.glowShadowPeak), radius: 10, y: 0)
             .contentColumn()
             // The sidebar card's own bottom margin (ContentView.sidebar's .padding(.vertical, 12),
             // the same at every window height), so the two bottom edges line up.

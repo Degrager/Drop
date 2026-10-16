@@ -299,6 +299,10 @@ struct CardFacadeMetrics: Equatable {
     var hasStatusLabel = false
     /// The link line under the header, shown while a card is expanded.
     var hasLink = false
+    /// The link line's own width, and the header's (the card's inner width): equal when the
+    /// line is long enough to be truncated, i.e. it fills whatever room the card has.
+    var linkWidth: CGFloat = 0
+    var headerWidth: CGFloat = 0
     /// A row in the Convert queue: no card of its own (it sits inside the queue's), compact.
     var flat = false
     /// A flat row's move controls (the up / down pair before its thumbnail).
@@ -344,6 +348,9 @@ struct CardFacadeMetrics: Equatable {
         /// it silently absorbed the placeholder's share too and grew twice as wide as it
         /// should -- reported live as "the right side of the facades doesn't scale properly."
         case spacer
+        /// A button that keeps its own size (Add to Queue): a capsule that never stretches, and
+        /// moves only with whatever flexible items sit before it in its row.
+        case button
     }
 
     struct FieldShape: Equatable {
@@ -578,14 +585,21 @@ struct CardFacade: View {
                     if capsuleBesideTitle { capsule }
                 }
             }
+            .fixedSize()
             if narrow { capsule }
             if metrics.hasLink {
+                // As wide as the real line was, never wider than the room there is. A line long
+                // enough to be truncated (a Convert file path) fills the card's inner width,
+                // whatever that is now; a short one (a Download link) keeps its own width.
+                let fills = metrics.linkWidth <= 0 || (metrics.headerWidth > 0 && metrics.linkWidth >= metrics.headerWidth - 1)
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
                     .fill(Color.white.opacity(0.05))
-                    .frame(width: 300, height: 9)
+                    .frame(height: 9)
+                    .frame(maxWidth: fills ? .infinity : metrics.linkWidth, alignment: .leading)
             }
         }
-        .fixedSize()
+        // Only the height is fixed: the link bar takes whatever width the card has.
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The real card's status section, in its fixed-size outlined box followed by the hairline
@@ -779,6 +793,11 @@ struct CardFacade: View {
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Color.white.opacity(0.07))
                 .frame(width: rect.width, height: 6)
+                .position(x: rect.midX, y: rect.midY)
+        case .button:
+            Capsule()
+                .fill(Color.white.opacity(0.06))
+                .frame(width: rect.width, height: rect.height)
                 .position(x: rect.midX, y: rect.midY)
         case .spacer:
             EmptyView()

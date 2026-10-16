@@ -1719,16 +1719,21 @@ struct ConvertView: View {
                     }
                     .font(.appMono(size: 10.5))
                     .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                    .reportsFacadeFieldShape(id: "footer.note", kind: .text)
                 } else {
                     Text("Everything follows the source")
                         .font(.appMono(size: 10.5))
                         .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                        .reportsFacadeFieldShape(id: "footer.note", kind: .text)
                 }
                 Spacer(minLength: 0)
+                    .reportsFacadeFieldShape(id: "footer.spacer", kind: .spacer)
                 if stagingCount > 1 {
                     GlassButton(label: "Add All to Queue", icon: "tray.and.arrow.down", tint: .white, fitContent: true, action: onAddAll)
+                        .reportsFacadeFieldShape(id: "footer.addAll", kind: .button)
                 }
                 GlassButton(label: "Add to Queue", icon: "arrow.turn.down.right", tint: DesignTokens.Accent.primary, fitContent: true, action: onAdd)
+                    .reportsFacadeFieldShape(id: "footer.add", kind: .button)
             }
         }
     }
@@ -2897,10 +2902,12 @@ struct ConvertPreviewCard: View {
                             FieldCaption(icon: "doc.badge.arrow.up", text: "OUTPUT FORMAT")
                                 .reportsFacadeFieldShape(id: "outputFormat.caption", kind: .text)
                             Spacer(minLength: 10)
+                                .reportsFacadeFieldShape(id: "outputFormat.legendSpacer", kind: .spacer)
                             // The dot on formatOptions' matching option, explained -- top
                             // right of this field group (the user asked for it moved there
                             // from beside the caption).
                             nativeLegend(positiveLabel: "Original")
+                                .reportsFacadeFieldShape(id: "outputFormat.legend", kind: .text)
                         }
                         .frame(height: 15, alignment: .leading)
                         SegmentedCapsule(options: formatOptions, groupID: "outputFormat")

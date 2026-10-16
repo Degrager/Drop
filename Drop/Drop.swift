@@ -1927,7 +1927,9 @@ struct ContentView: View {
                             // no real re-encode either way) doesn't carry an irrelevant key.
                             if p.mediaMode != .audioOnly && sourceNeedsReencode(for: .mov, preview: p) {
                                 Spacer(minLength: 10)
+                                    .reportsFacadeFieldShape(id: "download.outputFormat.legendSpacer.\(p.id)", kind: .spacer)
                                 nativeLegend(positiveLabel: "Re-encode", tint: DesignTokens.Accent.warning)
+                                    .reportsFacadeFieldShape(id: "download.outputFormat.legend.\(p.id)", kind: .text)
                             }
                         }
                         .frame(height: 15, alignment: .leading)

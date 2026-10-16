@@ -521,9 +521,11 @@ struct PreviewCard<Settings: View>: View {
                     // that ever sets this to a real link (Convert's own secondaryTitle below,
                     // a local file path, keeps .middle: there the FILENAME at the end matters).
                     .lineLimit(1).truncationMode(.tail)
+                    .reportsToFacade { metrics, size in metrics.linkWidth = size.width }
                     .transition(.blurInTop)
             }
         }
+        .reportsToFacade { metrics, size in metrics.headerWidth = size.width }
     }
 
     /// The metadata capsule: the card's own persistent one, or (Convert) the caller's subtitle.

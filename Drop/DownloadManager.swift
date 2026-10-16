@@ -17,7 +17,7 @@ final class SyncText: @unchecked Sendable {
     var value: String { lock.lock(); defer { lock.unlock() }; return text }
 }
 
-class DownloadManager: ObservableObject, @unchecked Sendable {
+class DownloadManager: ObservableObject {
     // Downloads run strictly one at a time. Previously 3 ran concurrently,
     // which meant multiple yt-dlp processes competing for the same network/
     // CPU and no clear indication of what was actually in progress vs still

@@ -128,13 +128,14 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ) { [weak self] note in
             guard let self, let window = note.object as? NSWindow,
                   !(window is NSPanel), window.delegate !== self else { return }
-            self.configureWindow(window)
+            // Delivered on the main queue (queue: .main), so this really is on the main actor.
+            MainActor.assumeIsolated { self.configureWindow(window) }
         }
         NotificationCenter.default.addObserver(
             forName: .dropSidebarCollapsedChanged, object: nil, queue: .main
         ) { [weak self] note in
             guard let collapsed = note.userInfo?["collapsed"] as? Bool else { return }
-            self?.sidebarCollapsedDidChange(collapsed: collapsed)
+            MainActor.assumeIsolated { self?.sidebarCollapsedDidChange(collapsed: collapsed) }
         }
     }
 

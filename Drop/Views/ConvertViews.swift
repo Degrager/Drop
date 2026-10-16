@@ -302,7 +302,7 @@ struct ConvertMediaInfo {
 
 enum ConvertJobStatus { case queued, converting, done, failed, cancelled }
 
-class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
+class ConvertJob: ObservableObject, Identifiable {
     /// Formats a remaining-seconds countdown as "Ns" or "Nm Ss", matching the
     /// plain style yt-dlp's own ETA strings use on the Download tab.
     static func formatETA(_ seconds: Double) -> String {

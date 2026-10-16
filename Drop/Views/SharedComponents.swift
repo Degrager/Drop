@@ -588,32 +588,41 @@ struct CardFacade: View {
         .fixedSize()
     }
 
-    /// The progress column of a downloading card: a status line over a slim bar. Leading-aligned
-    /// to match the real card (see PreviewCard's own status card doc comment for why). Sized to
-    /// PreviewCard's own status card padded total (content width + the card's padding each side) -- that
-    /// width is now a flat constant there regardless of button state, so this mirrors it exactly
-    /// rather than deriving from button count the way it used to.
-    private var statusColumn: some View {
-        let content = CardMetrics.statusCardContentWidth
-        return VStack(alignment: .leading, spacing: 5) {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(Color.white.opacity(0.07))
-                .frame(width: 70, height: 8)
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .frame(width: content, height: 4)
-        }
-        .frame(width: content + 2 * CardMetrics.statusCardPadding, alignment: .leading)
+    /// The real card's status section, in its fixed-size outlined box followed by the hairline
+    /// divider toward the buttons (PreviewCard.cardHeaderRow, CompletedCard's flat trailing
+    /// layout): the same constants, the same outline, the same centred content -- `content` is
+    /// the skeleton standing in for whatever words the box holds.
+    private func statusSection<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .frame(width: CardMetrics.statusCardContentWidth, height: CardMetrics.statusCardContentHeight, alignment: .center)
+            .padding(.horizontal, CardMetrics.statusCardPadding).padding(.vertical, 6)
+            .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
     }
 
-    /// The outcome label of a finished download, beside the button row -- same padded total
-    /// width as `statusColumn` above, since the real card now gives every status state
-    /// (Downloading included) the exact same fixed box regardless of what's inside it.
+    /// The progress state of a card: a status line over a slim bar (Downloading, the tallest
+    /// state; shorter ones just have room below).
+    private var statusColumn: some View {
+        statusSection {
+            VStack(alignment: .center, spacing: 5) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color.white.opacity(0.07))
+                    .frame(width: 70, height: 8)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .frame(width: CardMetrics.statusCardContentWidth, height: 4)
+            }
+        }
+    }
+
+    /// The outcome label of a finished download -- the same box as `statusColumn`, since the
+    /// real card gives every status state the exact same fixed box regardless of what's inside.
     private var statusLabel: some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(Color.white.opacity(0.07))
-            .frame(width: 52, height: 8)
-            .frame(width: CardMetrics.statusCardContentWidth + 2 * CardMetrics.statusCardPadding, alignment: .leading)
+        statusSection {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Color.white.opacity(0.07))
+                .frame(width: 52, height: 8)
+        }
     }
 
     /// The only piece that stretches with the card while frozen: one plain rounded shape per
@@ -817,7 +826,7 @@ struct CardFacade: View {
                 // Mirrors CompletedCard's flat trailing layout: the status in its fixed-width
                 // box, then the buttons the row has right now.
                 HStack(spacing: 6) {
-                    if metrics.hasStatus { statusColumn } else if metrics.hasStatusLabel { statusLabel }
+                    if metrics.hasStatus { statusColumn; VerticalGlassDivider() } else if metrics.hasStatusLabel { statusLabel; VerticalGlassDivider() }
                     HStack(spacing: 6) {
                         ForEach(0..<max(metrics.buttonCount, 1), id: \.self) { _ in button(28) }
                     }
@@ -861,7 +870,7 @@ struct CardFacade: View {
             }
             .overlay(alignment: .topTrailing) {
                 HStack(spacing: 12) {
-                    if metrics.hasStatus { statusColumn } else if metrics.hasStatusLabel { statusLabel }
+                    if metrics.hasStatus { statusColumn; VerticalGlassDivider() } else if metrics.hasStatusLabel { statusLabel; VerticalGlassDivider() }
                     HStack(spacing: 12) {
                         // Every header button is the same 28pt capsule.
                         ForEach(0..<max(metrics.buttonCount, 1), id: \.self) { _ in

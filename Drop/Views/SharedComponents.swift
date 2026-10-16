@@ -828,7 +828,8 @@ struct CardFacade: View {
         Color.clear
             .overlay(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .center, spacing: 8) {
+                    // The row's own compact spacing (PreviewCard's CompletedCard: `compact ? 6 : 12`).
+                    HStack(alignment: .center, spacing: 6) {
                         if metrics.hasLeadingControls { moveControls }
                         thumbnailBox
                         VStack(alignment: .leading, spacing: 4) {

@@ -2357,6 +2357,9 @@ struct ConvertView: View {
                         return
                     }
                     let success = p.terminationStatus == 0
+                    // A failed run leaves a truncated file at `output`, same as a cancel does. It's
+                    // this run's own uniquely named file, so removing it can't touch anything else.
+                    if !success { try? FileManager.default.removeItem(at: output) }
                     job.status = success ? .done : .failed
                     self.selectionVersion += 1
                     job.progress = success ? "Done" : "Failed (exit \(p.terminationStatus))"

@@ -267,3 +267,81 @@ final class ConvertOutputNamingTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: second.outputURL!.path), "the cancelled run's own file is removed")
     }
 }
+
+// MARK: - yt-dlp output lines
+
+final class YtDlpOutputUpdateTests: XCTestCase {
+    private func parse(_ line: String, last: Double = 0, elapsed: Int = 5) -> (YtDlpOutputUpdate, Double) {
+        var fraction = last
+        let update = YtDlpOutputUpdate.parse(line: line, lastFraction: &fraction, elapsedSeconds: elapsed)
+        return (update, fraction)
+    }
+
+    func testPercentLineGivesProgressSpeedAndEta() {
+        let (u, fraction) = parse("[download]  47.3% of  8.23MiB at  1.20MiB/s ETA 00:04")
+        XCTAssertEqual(u.progress ?? -1, 0.473, accuracy: 0.0001)
+        XCTAssertEqual(fraction, u.progress)
+        XCTAssertTrue(u.isProgressLine)
+        XCTAssertEqual(u.eta, .speed(text: "1.20MiB/s", eta: "00:04", hasRealETA: true))
+        XCTAssertTrue(u.renderedLine.contains("[5s elapsed]"))
+        XCTAssertTrue(u.renderedLine.contains("of  8.23MiB at  1.20MiB/s ETA 00:04"))
+    }
+
+    func testProgressNeverMovesBackward() {
+        let (u, fraction) = parse("[download]  10.0% of  8.23MiB at  1.20MiB/s ETA 00:40", last: 0.6)
+        XCTAssertEqual(u.progress, 0.6)
+        XCTAssertEqual(fraction, 0.6)
+    }
+
+    func testFragmentIndexReplacesAnUnstablePercentage() {
+        // The very first fragment line of an unknown-size stream can read 100%.
+        let (u, _) = parse("[download] 100.0% of ~   1.00KiB at  1.00KiB/s ETA Unknown (frag 3/50)")
+        XCTAssertEqual(u.progress ?? -1, 3.0 / 50.0, accuracy: 0.0001)
+    }
+
+    func testFragmentCounterIsStrippedFromTheEta() {
+        let (u, _) = parse("[download]  20.0% of ~  50.00MiB at  2.00MiB/s ETA 02:55 (frag 11/50)")
+        XCTAssertEqual(u.eta, .speed(text: "2.00MiB/s", eta: "02:55", hasRealETA: true))
+    }
+
+    func testUnknownOrNearZeroEtaIsNotReal() {
+        XCTAssertEqual(parse("[download]  50.0% of  1.00MiB at  5.00MiB/s ETA Unknown").0.eta,
+                       .speed(text: "5.00MiB/s", eta: "Unknown", hasRealETA: false))
+        XCTAssertEqual(parse("[download]  50.0% of  1.00MiB at  5.00MiB/s ETA 00:01").0.eta,
+                       .speed(text: "5.00MiB/s", eta: "00:01", hasRealETA: false))
+    }
+
+    func testUnknownSpeedFallsBackToDownloading() {
+        let u = parse("[download]  50.0% of  1.00MiB at  Unknown B/s ETA Unknown").0
+        XCTAssertEqual(u.eta, .speed(text: "Downloading\u{2026}", eta: "Unknown", hasRealETA: false))
+    }
+
+    func testPercentLineWithoutSpeedClearsTheEta() {
+        let (u, _) = parse("[download] 100% of 8.23MiB in 00:00:07")
+        XCTAssertEqual(u.eta, .clear)
+        XCTAssertEqual(u.progress, 1.0)
+    }
+
+    func testActivityTextFromStatusLines() {
+        XCTAssertEqual(parse("[youtube] Extracting URL: https://youtu.be/x").0.activityText, "Fetching info…")
+        XCTAssertEqual(parse("[Merger] Merging formats into \"a.mp4\"").0.activityText, "Merging streams…")
+        XCTAssertEqual(parse("[EmbedThumbnail] ffmpeg: Adding thumbnail").0.activityText, "Merging streams…")
+        XCTAssertEqual(parse("[Metadata] Adding metadata to \"a.mp4\"").0.activityText, "Processing…")
+        XCTAssertNil(parse("something unrelated").0.activityText)
+    }
+
+    func testPostProcessingLinePinsProgressComplete() {
+        let u = parse("[ExtractAudio] Destination: a.m4a").0
+        XCTAssertEqual(u.activityText, "Converting…")
+        XCTAssertTrue(u.pinsProgressComplete)
+        XCTAssertFalse(parse("[youtube] Extracting URL: https://youtu.be/x").0.pinsProgressComplete)
+    }
+
+    func testPlainLinesPassThroughUnchanged() {
+        let u = parse("ERROR: Unsupported URL").0
+        XCTAssertEqual(u.renderedLine, "ERROR: Unsupported URL")
+        XCTAssertFalse(u.isProgressLine)
+        XCTAssertNil(u.progress)
+        XCTAssertNil(u.eta)
+    }
+}

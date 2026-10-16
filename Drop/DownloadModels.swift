@@ -270,3 +270,146 @@ enum FixAction: Equatable {
     case openURL(String)        // Open a URL (e.g. YouTube search)
     case none
 }
+
+
+// MARK: - yt-dlp output lines
+
+/// What one line of yt-dlp's output means for a download's row: the progress fraction, the speed
+/// and ETA, the friendly status, and the line as it should appear in the log. Worked out by
+/// `parse` from the line alone (plus the fraction shown so far), so it can run on the thread that
+/// reads the output and be tested without a download.
+struct YtDlpOutputUpdate: Sendable, Equatable {
+    enum Eta: Sendable, Equatable {
+        /// A percentage line with no speed section: no ETA to show.
+        case clear
+        /// `text` is the speed (or "Downloading…" when it is unknown); `eta` is the countdown
+        /// with any fragment counter stripped; `hasRealETA` is false for "Unknown" and
+        /// near-zero values.
+        case speed(text: String, eta: String, hasRealETA: Bool)
+    }
+
+    var renderedLine: String
+    var isProgressLine: Bool
+    var progress: Double? = nil
+    var eta: Eta? = nil
+    var activityText: String? = nil
+    /// Post-processing lines (converting, extracting audio) mean the download itself is complete.
+    var pinsProgressComplete: Bool = false
+
+    /// `lastFraction` is the fraction shown so far for this download attempt: the new one never
+    /// goes below it, and it is updated when this line carries a percentage.
+    static func parse(line t: String, lastFraction: inout Double, elapsedSeconds: Int) -> YtDlpOutputUpdate {
+        // Percentage lines are rewritten into a Homebrew-style Unicode bar plus elapsed time
+        // instead of yt-dlp's raw "[download] NN.N% of ..." text, so the log reads like a real
+        // terminal installer rather than a wall of repeated percents.
+        var update = YtDlpOutputUpdate(
+            renderedLine: t,
+            isProgressLine: t.hasPrefix("[download]") && t.contains("%"))
+
+        // Parse progress: "[download]  47.3% of ..."
+        if update.isProgressLine {
+            let parts = t.components(separatedBy: "%")
+            if let first = parts.first {
+                let token = first.components(separatedBy: CharacterSet.whitespaces).last ?? ""
+                if let pct = Double(token), pct >= 0 {
+                    let rawClamped = min(max(pct / 100.0, 0.02), 1.0)
+                    // yt-dlp's per-line percentage during a fragmented (HLS/DASH) download is a
+                    // whole-file *estimate* that gets revised every fragment boundary -- early on
+                    // it is wildly unstable and can even briefly read 100% (e.g. the very first
+                    // line, when only ~1KiB of an unknown-size stream has been seen). While
+                    // fragments are in play (a "(frag N/M)" suffix is present and M > 1), prefer
+                    // fragment-index-based progress instead -- coarser, but monotonic and never
+                    // spuriously pins at 100% early. The true finish line has no "(frag" suffix at
+                    // all, so it always passes through untouched.
+                    var effective = rawClamped
+                    if let fragRange = t.range(of: "(frag ") {
+                        let fragNums = t[fragRange.upperBound...].components(separatedBy: "/")
+                        if fragNums.count >= 2,
+                           let idx = Int(fragNums[0].trimmingCharacters(in: .whitespaces)),
+                           let total = Int(fragNums[1].components(separatedBy: ")").first?.trimmingCharacters(in: .whitespaces) ?? ""),
+                           total > 1 {
+                            // idx is the fragment currently in flight (0-based), so idx/total is a
+                            // safe floor -- never above true progress, and only rises.
+                            effective = min(max(Double(idx) / Double(total), 0.02), 0.99)
+                        }
+                    }
+                    // Never let the displayed value move backward within one download attempt.
+                    let clamped = max(effective, lastFraction)
+                    lastFraction = clamped
+                    // Carry the rest of the line (speed/ETA, after the first "%") alongside the
+                    // bar so that info isn't lost -- "of 8.23MiB at 1.20MiB/s ETA 00:04" stays
+                    // visible.
+                    let tail = parts.dropFirst().joined(separator: "%")
+                        .trimmingCharacters(in: .whitespaces)
+                    let bar = DownloadManager.unicodeProgressBar(fraction: clamped)
+                    update.renderedLine = tail.isEmpty
+                        ? "\(bar)  [\(elapsedSeconds)s elapsed]"
+                        : "\(bar)  \(tail)  [\(elapsedSeconds)s elapsed]"
+                    update.progress = clamped
+                    update.eta = speedAndEta(afterPercent: parts.dropFirst().joined(separator: "%"))
+                }
+            }
+        }
+
+        // Map yt-dlp status messages to friendly activity text
+        if t.contains("Extracting URL") || t.contains("Downloading webpage") {
+            update.activityText = "Fetching info…"
+        } else if t.contains("Downloading android") || t.contains("Downloading initial") || t.contains("Downloading player") {
+            update.activityText = "Loading player…"
+        } else if t.contains("Solving JS") || t.contains("deno") {
+            update.activityText = "Solving challenges…"
+        } else if t.contains("m3u8") || t.contains("Downloading m3u8") {
+            update.activityText = "Reading stream…"
+        } else if t.contains("Downloading") && t.contains("format") {
+            update.activityText = "Selecting format…"
+        } else if t.contains("Downloading video thumbnail") {
+            update.activityText = "Fetching thumbnail…"
+        } else if t.hasPrefix("[download]") && !t.contains("%") && t.contains("Destination") {
+            update.activityText = "Starting download…"
+        } else if t.contains("Merging formats") || t.contains("ffmpeg") {
+            update.activityText = "Merging streams…"
+        } else if t.contains("Fixing") || t.contains("Post-process") || t.contains("Adding metadata") {
+            update.activityText = "Processing…"
+        } else if t.contains("Converting") || t.contains("Extracting audio") || t.hasPrefix("[ExtractAudio]") || t.hasPrefix("[ffmpeg]") {
+            update.activityText = "Converting…"
+            update.pinsProgressComplete = true
+        } else if t.hasPrefix("[EmbedThumbnail]") {
+            update.activityText = "Embedding thumbnail…"
+        } else if t.hasPrefix("[Metadata]") || t.contains("embed-metadata") {
+            update.activityText = "Embedding metadata…"
+        }
+        // NOTE: the title is deliberately never taken from the output. The main process has no
+        // --print line (the filename is resolved separately before it runs), so the first
+        // unbracketed line can be arbitrary yt-dlp output like "Deleting original file ... (pass
+        // -k to keep)", which would clobber the real title if captured.
+        return update
+    }
+
+    /// Parses what follows the first "%" of a progress line:
+    /// " of  8.23MiB at  1.20MiB/s ETA 00:04" (yt-dlp's "of X" is only the stream it is on -- the
+    /// video, then the audio -- so it is not used as the file's size).
+    private static func speedAndEta(afterPercent afterPct: String) -> Eta {
+        guard afterPct.contains(" at ") else { return .clear }
+        let atParts = afterPct.components(separatedBy: " at ")
+        guard atParts.count > 1 else { return .clear }
+        let speedEta = atParts[1].trimmingCharacters(in: .whitespaces)
+        let etaParts = speedEta.components(separatedBy: " ETA ")
+        let speed = etaParts[0].trimmingCharacters(in: .whitespaces)
+        // A fragmented stream (HLS/DASH) appends its own "(frag 11/50)" counter straight onto the
+        // ETA with no further delimiter -- yt-dlp's own diagnostic text, not part of the
+        // countdown. Left in, it made etaText long enough to truncate in the status card
+        // (reported live: "02:55 (frag 11…"), so it's stripped before the ETA is used.
+        let rawEta = etaParts.count > 1 ? etaParts[1].trimmingCharacters(in: .whitespaces) : ""
+        let eta = (rawEta.components(separatedBy: " (").first ?? rawEta)
+            .trimmingCharacters(in: .whitespaces)
+        // Only a real, meaningful countdown counts. On fast connections small files finish in
+        // under a second, so yt-dlp reports "00:00" or "Unknown" almost the entire time --
+        // showing that looked like a frozen countdown, so those fall back to speed-only.
+        let etaSeconds = eta.components(separatedBy: ":")
+            .compactMap { Int($0) }
+            .reduce(0) { $0 * 60 + $1 }
+        let hasRealETA = !eta.isEmpty && eta != "Unknown" && etaSeconds >= 2
+        let speedIsKnown = !speed.isEmpty && speed != "Unknown B/s"
+        return .speed(text: speedIsKnown ? speed : "Downloading\u{2026}", eta: eta, hasRealETA: hasRealETA)
+    }
+}

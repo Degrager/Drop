@@ -941,6 +941,39 @@ class DownloadManager: ObservableObject {
     // download's async closures are still in flight holding a now-stale
     // integer index — looking up by id and no-oping if the row is gone
     // avoids the out-of-range crash that a raw downloads[idx] access risks.
+    /// Applies one parsed line of yt-dlp output (see YtDlpOutputUpdate) to its download's row and
+    /// to the log. Main thread only.
+    private func apply(_ u: YtDlpOutputUpdate, to downloadID: UUID) {
+        if let progress = u.progress { withDownload(downloadID) { $0.progress = progress } }
+        switch u.eta {
+        case .none:
+            break
+        case .clear?:
+            withDownload(downloadID) { $0.etaText = "" }
+        case .speed(let text, let eta, let hasRealETA)?:
+            withDownload(downloadID) {
+                $0.activityText = text
+                // yt-dlp's ETA jitters between a real countdown and "Unknown"/near-zero on almost
+                // every other tick, which made the ETA flash in and out. Once a real ETA has been
+                // shown, keep displaying it (percentage still updates live) instead of collapsing
+                // back to percent-only on a single stale/"Unknown" tick. The percentage itself is
+                // its own element now (see progressIndicator), not folded into this text.
+                if hasRealETA {
+                    $0.etaText = "\(eta) left"
+                } else if let prevETA = $0.lastKnownETA {
+                    $0.etaText = "\(prevETA) left"
+                } else {
+                    $0.etaText = ""
+                }
+                if hasRealETA { $0.lastKnownETA = eta }
+            }
+        }
+        if u.pinsProgressComplete { withDownload(downloadID) { $0.progress = 1.0 } }
+        if let activity = u.activityText { withDownload(downloadID) { $0.activityText = activity } }
+        withDownload(downloadID) { $0.logs.append(u.renderedLine) }
+        appendLog(u.renderedLine, progressSourceID: u.isProgressLine ? "download-\(downloadID)" : nil)
+    }
+
     private func withDownload(_ id: UUID, _ mutate: (inout Download) -> Void) {
         guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
         mutate(&downloads[i])
@@ -1501,185 +1534,12 @@ class DownloadManager: ObservableObject {
                         let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !t.isEmpty else { continue }
                         stderrOutput.append(t + "\n")
-                        // Logged line for this iteration -- normally just `t`
-                        // verbatim, but percentage lines get rewritten below
-                        // into a Homebrew-style Unicode bar + elapsed time
-                        // instead of yt-dlp's raw "[download] NN.N% of ..."
-                        // text, so the log reads like a real terminal
-                        // installer rather than a wall of repeated percents.
-                        var renderedLine = t
-                        // Parse progress: "[download]  47.3% of ..."
-                        if t.hasPrefix("[download]"), t.contains("%") {
-                            let parts = t.components(separatedBy: "%")
-                            if let first = parts.first {
-                                let token = first.components(separatedBy: CharacterSet.whitespaces).last ?? ""
-                                if let pct = Double(token), pct >= 0 {
-                                    let rawClamped = min(max(pct / 100.0, 0.02), 1.0)
-                                    // yt-dlp's per-line percentage during a
-                                    // fragmented (HLS/DASH) download is a
-                                    // whole-file *estimate* that gets revised
-                                    // every fragment boundary -- early on
-                                    // this estimate is wildly unstable and
-                                    // can even briefly read 100% (e.g. the
-                                    // very first line, when only ~1KiB of
-                                    // an unknown-size stream has been seen).
-                                    // While fragments are in play (a "(frag
-                                    // N/M)" suffix is present and M > 1),
-                                    // prefer fragment-index-based progress
-                                    // instead -- coarser, but monotonic and
-                                    // never spuriously pins at 100% early.
-                                    // The true finish line has no "(frag"
-                                    // suffix at all, so it always passes
-                                    // through untouched.
-                                    var effective = rawClamped
-                                    if let fragRange = t.range(of: "(frag ") {
-                                        let fragText = t[fragRange.upperBound...]
-                                        let fragNums = fragText
-                                            .components(separatedBy: "/")
-                                        if fragNums.count >= 2,
-                                           let idx = Int(fragNums[0].trimmingCharacters(in: .whitespaces)),
-                                           let total = Int(fragNums[1].components(separatedBy: ")").first?.trimmingCharacters(in: .whitespaces) ?? ""),
-                                           total > 1 {
-                                            // idx is the fragment currently in
-                                            // flight (0-based), so idx/total
-                                            // is a safe floor -- never above
-                                            // true progress, and only rises.
-                                            let fragFloor = min(max(Double(idx) / Double(total), 0.02), 0.99)
-                                            effective = fragFloor
-                                        }
-                                    }
-                                    // Never let the displayed value move
-                                    // backward within one download attempt.
-                                    let clamped = max(effective, lastDisplayedFraction)
-                                    lastDisplayedFraction = clamped
-                                    // Carry the rest of the line (speed/ETA, after the
-                                    // first "%") alongside the bar so that info isn't lost --
-                                    // "of 8.23MiB at 1.20MiB/s ETA 00:04" stays visible.
-                                    let tail = parts.dropFirst().joined(separator: "%")
-                                        .trimmingCharacters(in: .whitespaces)
-                                    let elapsed = Int(Date().timeIntervalSince(t0))
-                                    let bar = DownloadManager.unicodeProgressBar(fraction: clamped)
-                                    renderedLine = tail.isEmpty
-                                        ? "\(bar)  [\(elapsed)s elapsed]"
-                                        : "\(bar)  \(tail)  [\(elapsed)s elapsed]"
-                                    DispatchQueue.main.async {
-                                        self.withDownload(downloadID) { $0.progress = clamped }
-                                        // Parse: "[download]  47.3% of  8.23MiB at  1.20MiB/s ETA 00:04"
-                                        // (yt-dlp's "of X" is only the stream it is on -- the video, then
-                                        // the audio -- so it is not used as the file's size: the card
-                                        // keeps the analyzed estimate until the real file replaces it.)
-                                        let afterPct = parts.dropFirst().joined(separator: "%")
-                                        // Speed + ETA activity text
-                                        if afterPct.contains(" at ") {
-                                            let atParts = afterPct.components(separatedBy: " at ")
-                                            if atParts.count > 1 {
-                                                let speedEta = atParts[1].trimmingCharacters(in: .whitespaces)
-                                                let etaParts = speedEta.components(separatedBy: " ETA ")
-                                                let speed = etaParts[0].trimmingCharacters(in: .whitespaces)
-                                                // A fragmented stream (HLS/DASH) appends its own
-                                                // "(frag 11/50)" counter straight onto the ETA
-                                                // with no further delimiter -- yt-dlp's own
-                                                // diagnostic text, not part of the countdown. Left
-                                                // in, it made etaText long enough to truncate in
-                                                // the status card (reported live: "02:55 (frag
-                                                // 11…"), so it's stripped before the ETA is ever
-                                                // used for the ticking countdown or for display.
-                                                let rawEta = etaParts.count > 1 ? etaParts[1].trimmingCharacters(in: .whitespaces) : ""
-                                                let eta = (rawEta.components(separatedBy: " (").first ?? rawEta)
-                                                    .trimmingCharacters(in: .whitespaces)
-                                                // Only show ETA when it's a real, meaningful countdown.
-                                                // On fast connections small files finish in under a
-                                                // second, so yt-dlp reports "00:00" or "Unknown" almost
-                                                // the entire time — showing that looked like a frozen
-                                                // countdown. Fall back to speed-only in those cases.
-                                                let etaSeconds = eta.components(separatedBy: ":")
-                                                    .compactMap { Int($0) }
-                                                    .reduce(0) { $0 * 60 + $1 }
-                                                let hasRealETA = !eta.isEmpty && eta != "Unknown" && etaSeconds >= 2
-                                                let speedIsKnown = !speed.isEmpty && speed != "Unknown B/s"
-                                                let text: String
-                                                if speedIsKnown {
-                                                    text = speed
-                                                } else {
-                                                    text = "Downloading\u{2026}"
-                                                }
-                                                self.withDownload(downloadID) {
-                                                    $0.activityText = text
-                                                    // yt-dlp's ETA jitters between a real countdown and
-                                                    // "Unknown"/near-zero on almost every other tick, which
-                                                    // made the ETA flash in and out. Once a real ETA has
-                                                    // been shown, keep displaying it (percentage still
-                                                    // updates live) instead of collapsing back to
-                                                    // percent-only on a single stale/"Unknown" tick.
-                                                    // The percentage itself is its own element now (see
-                                                    // progressIndicator), not folded into this text.
-                                                    if hasRealETA {
-                                                        $0.etaText = "\(eta) left"
-                                                    } else if let prevETA = $0.lastKnownETA {
-                                                        $0.etaText = "\(prevETA) left"
-                                                    } else {
-                                                        $0.etaText = ""
-                                                    }
-                                                    if hasRealETA { $0.lastKnownETA = eta }
-                                                }
-                                            } else {
-                                                self.withDownload(downloadID) { $0.etaText = "" }
-                                            }
-                                        } else {
-                                            self.withDownload(downloadID) { $0.etaText = "" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // Map yt-dlp status messages to friendly activity text
-                        let activity: String?
-                        if t.contains("Extracting URL") || t.contains("Downloading webpage") {
-                            activity = "Fetching info…"
-                        } else if t.contains("Downloading android") || t.contains("Downloading initial") || t.contains("Downloading player") {
-                            activity = "Loading player…"
-                        } else if t.contains("Solving JS") || t.contains("deno") {
-                            activity = "Solving challenges…"
-                        } else if t.contains("m3u8") || t.contains("Downloading m3u8") {
-                            activity = "Reading stream…"
-                        } else if t.contains("Downloading") && t.contains("format") {
-                            activity = "Selecting format…"
-                        } else if t.contains("Downloading video thumbnail") {
-                            activity = "Fetching thumbnail…"
-                        } else if t.hasPrefix("[download]") && !t.contains("%") && t.contains("Destination") {
-                            activity = "Starting download…"
-                        } else if t.contains("Merging formats") || t.contains("ffmpeg") {
-                            activity = "Merging streams…"
-                        } else if t.contains("Fixing") || t.contains("Post-process") || t.contains("Adding metadata") {
-                            activity = "Processing…"
-                        } else if t.contains("Converting") || t.contains("Extracting audio") || t.hasPrefix("[ExtractAudio]") || t.hasPrefix("[ffmpeg]") {
-                            activity = "Converting…"
-                            DispatchQueue.main.async { self.withDownload(downloadID) { $0.progress = 1.0 } }
-                        } else if t.hasPrefix("[EmbedThumbnail]") {
-                            activity = "Embedding thumbnail…"
-                        } else if t.hasPrefix("[Metadata]") || t.contains("embed-metadata") {
-                            activity = "Embedding metadata…"
-                        } else {
-                            activity = nil
-                        }
-                        if let a = activity {
-                            DispatchQueue.main.async {
-                                self.withDownload(downloadID) { $0.activityText = a }
-                            }
-                        }
-                        // NOTE: title is already set from the LinkPreview when the
-                        // download row was created (see startDownload's $0.title at
-                        // creation) — we intentionally do NOT overwrite it from stdout
-                        // here. The main process has no --print line (filename is
-                        // resolved separately via nameProc before this runs), so the
-                        // first unbracketed stdout line can be arbitrary yt-dlp output
-                        // like "Deleting original file ... (pass -k to keep)", which
-                        // would clobber the real title if captured.
-                        let isProgressLine = t.hasPrefix("[download]") && t.contains("%")
-                        DispatchQueue.main.async {
-                            self.withDownload(downloadID) { $0.logs.append(renderedLine) }
-                            self.appendLog(renderedLine, progressSourceID: isProgressLine ? "download-\(downloadID)" : nil)
-                        }
+                        // Everything about what the line means is worked out here, off the main
+                        // thread, into a plain value; the one hop to the main thread only applies it.
+                        let update = YtDlpOutputUpdate.parse(
+                            line: t, lastFraction: &lastDisplayedFraction,
+                            elapsedSeconds: Int(Date().timeIntervalSince(t0)))
+                        DispatchQueue.main.async { self.apply(update, to: downloadID) }
                     }
                 }
                 // Flush remaining buffer

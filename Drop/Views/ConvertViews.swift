@@ -681,6 +681,28 @@ class ConvertJob: ObservableObject, Identifiable, @unchecked Sendable {
         return "\(base)_converted.\(outputFormat.fileExtension)"
     }
 
+    /// Where a conversion's output goes: `filename` in `dir`, or -- when something is already
+    /// there -- the same name with " (2)", " (3)", ... before the extension, the way Download
+    /// numbers its files. ffmpeg runs with -y, so without this a second conversion of the same
+    /// source (or of another file with the same name from a different folder) silently
+    /// overwrote the first one's finished file, and cancelling it then deleted that file.
+    static func uniqueOutputURL(
+        filename: String, in dir: URL,
+        exists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
+    ) -> URL {
+        let first = dir.appendingPathComponent(filename)
+        guard exists(first) else { return first }
+        let base = (filename as NSString).deletingPathExtension
+        let ext = (filename as NSString).pathExtension
+        var n = 2
+        while true {
+            let name = ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)"
+            let candidate = dir.appendingPathComponent(name)
+            if !exists(candidate) { return candidate }
+            n += 1
+        }
+    }
+
     init(inputURL: URL) {
         self.inputURL = inputURL
         let ext = inputURL.pathExtension.lowercased()
@@ -1644,7 +1666,7 @@ struct ConvertView: View {
         /// a space so the printed line is directly pasteable into Terminal. Reported live: wanting a
         /// way to see this per-selection instead of inferring it from behavior/timing.
         private var ffmpegCommandPreview: String {
-            let output = URL(fileURLWithPath: config.convertOutputDir).appendingPathComponent(job.outputFilename)
+            let output = ConvertJob.uniqueOutputURL(filename: job.outputFilename, in: URL(fileURLWithPath: config.convertOutputDir))
             let args = job.ffmpegArgs(outputPath: output.path)
             return (["ffmpeg"] + args)
                 .map { $0.contains(" ") ? "\"\($0)\"" : $0 }
@@ -2203,7 +2225,9 @@ struct ConvertView: View {
         // Destination folder is the single shared SAVE TO field in the bottom
         // bar (same folder for every job, mirrors Download's tab).
         let dir = URL(fileURLWithPath: config.convertOutputDir)
-        let output = dir.appendingPathComponent(job.outputFilename)
+        // A name nothing is using, so this run can never overwrite a finished file (and Cancel,
+        // which deletes the run's own output, can only ever delete that run's file).
+        let output = ConvertJob.uniqueOutputURL(filename: job.outputFilename, in: dir)
         job.status = .converting
         selectionVersion += 1
         job.progress = "Starting…"

@@ -202,3 +202,68 @@ final class ConvertCommandTests: XCTestCase {
         XCTAssertEqual(job().ffmpegArgs(outputPath: output).last, output)
     }
 }
+
+/// Convert must never write over a file that is already there: ffmpeg runs with -y, and Cancel deletes
+/// the run's own output, so a shared path meant a finished conversion could vanish.
+final class ConvertOutputNamingTests: XCTestCase {
+    private let dir = URL(fileURLWithPath: "/out")
+
+    private func name(_ filename: String, taken: Set<String>) -> String {
+        ConvertJob.uniqueOutputURL(filename: filename, in: dir) { taken.contains($0.path) }.lastPathComponent
+    }
+
+    func testFreeNameIsUsedAsIs() {
+        XCTAssertEqual(name("Clip_converted.mp4", taken: []), "Clip_converted.mp4")
+    }
+
+    func testTakenNameGetsNumberedBeforeTheExtension() {
+        XCTAssertEqual(name("Clip_converted.mp4", taken: ["/out/Clip_converted.mp4"]), "Clip_converted (2).mp4")
+    }
+
+    func testNumberingSkipsNamesAlreadyTaken() {
+        let taken: Set<String> = ["/out/Clip_converted.mp4", "/out/Clip_converted (2).mp4", "/out/Clip_converted (3).mp4"]
+        XCTAssertEqual(name("Clip_converted.mp4", taken: taken), "Clip_converted (4).mp4")
+    }
+
+    func testOnlyTheSameFolderCounts() {
+        let taken: Set<String> = ["/elsewhere/Clip_converted.mp4"]
+        XCTAssertEqual(name("Clip_converted.mp4", taken: taken), "Clip_converted.mp4")
+    }
+
+    func testDotsInTheNameAndNoExtension() {
+        XCTAssertEqual(name("my.clip_converted.mp4", taken: ["/out/my.clip_converted.mp4"]), "my.clip_converted (2).mp4")
+        XCTAssertEqual(name("notes", taken: ["/out/notes"]), "notes (2)")
+    }
+
+    /// Two different files with the same name (from different folders) get the same output name;
+    /// the second one to run must land beside the first, not over it.
+    func testSameNameFromTwoSourceFoldersDoesNotCollide() {
+        let a = ConvertJob(inputURL: URL(fileURLWithPath: "/one/Clip.mov")).outputFilename
+        let b = ConvertJob(inputURL: URL(fileURLWithPath: "/two/Clip.mov")).outputFilename
+        XCTAssertEqual(a, b)
+        let first = ConvertJob.uniqueOutputURL(filename: a, in: dir) { _ in false }
+        let second = ConvertJob.uniqueOutputURL(filename: b, in: dir) { $0 == first }
+        XCTAssertNotEqual(first, second)
+    }
+
+    /// The scenario that lost a file: convert, convert the same source again, cancel the second run.
+    func testCancellingASecondRunLeavesTheFirstFinishedFileAlone() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("drop-naming-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let source = URL(fileURLWithPath: "/somewhere/Clip.mov")
+        let firstOutput = ConvertJob.uniqueOutputURL(filename: ConvertJob(inputURL: source).outputFilename, in: tmp)
+        try Data("finished first conversion".utf8).write(to: firstOutput)
+
+        let second = ConvertJob(inputURL: source)
+        second.outputURL = ConvertJob.uniqueOutputURL(filename: second.outputFilename, in: tmp)
+        XCTAssertNotEqual(second.outputURL, firstOutput)
+        try Data("half-written".utf8).write(to: second.outputURL!)
+
+        second.cancel()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstOutput.path), "the first finished file must survive")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.outputURL!.path), "the cancelled run's own file is removed")
+    }
+}

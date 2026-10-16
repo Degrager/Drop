@@ -1567,6 +1567,15 @@ class DownloadManager: ObservableObject {
                 _ = readerDone.wait(timeout: .now() + 3)
                 outputThread.cancel()
 
+                // Cancel has already logged it and removed the partial files. Looking for a finished
+                // file now would log "File not found" for a download nobody wants, and could even
+                // pick up a file that finished just as Cancel landed and re-encode it. Hand straight
+                // to the completion below, which skips a cancelled row.
+                if DispatchQueue.main.sync(execute: { self.readDownload(downloadID) { $0.status } }) == .cancelled {
+                    DispatchQueue.main.async { self.startNextPending(after: idx) }
+                    return
+                }
+
                 // File was written directly to outputDir by yt-dlp.
                 // Find it by scanning outputDir for the newest media file matching the title.
                 let fm = FileManager.default
@@ -1586,7 +1595,10 @@ class DownloadManager: ObservableObject {
                 let resolvedNameFolded = resolvedName
                     .folding(options: [.diacriticInsensitive, .widthInsensitive, .caseInsensitive], locale: nil)
                 let usesExactName = !isPlaylist && config.filenameTemplate == "%(title)s"
-                let titleFolded = (self.readDownload(downloadID) { $0.title } ?? "")
+                // Read on the main thread, where `downloads` is mutated; this closure runs on a
+                // background queue.
+                let titleNow = DispatchQueue.main.sync { self.readDownload(downloadID) { $0.title } }
+                let titleFolded = (titleNow ?? "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                     .folding(options: [.diacriticInsensitive, .widthInsensitive, .caseInsensitive], locale: nil)
 

@@ -1829,7 +1829,10 @@ struct ContentView: View {
         }()
         // The pasted link stands in for the title until a real one arrives.
         let titleKnown = !analyzing || (!p.title.isEmpty && p.title != p.url)
-        let primaryControl = dl.flatMap { downloadControls($0, preview: p) }
+        let primaryControl: CardControl? = dl.flatMap { downloadControls($0, preview: p) }
+            ?? (failedAnalyze ? CardControl(icon: "arrow.clockwise", color: DesignTokens.Accent.danger, help: "Retry") {
+                retryAnalysis(of: p)
+            } : nil)
         let cardLocked = isBatchMode || failedAnalyze || dl != nil
         // Only while a job is actually in flight -- once it's set, the card's remove button
         // becomes Cancel instead (see PreviewCard.onCancel), so onRemove below is never called
@@ -1853,7 +1856,7 @@ struct ContentView: View {
             title: p.title,
             // The link and the path are only shown while the settings are (expanded).
             secondaryTitle: dl == nil ? p.url : "",
-            belowHeader: dl.flatMap { downloadErrorDetails($0) },
+            belowHeader: dl.flatMap { downloadErrorDetails($0) } ?? (failedAnalyze ? analyzeErrorDetails() : nil),
             isExpanded: cardLocked ? .constant(false) : Binding(
                 get: { preview.wrappedValue.isExpanded },
                 set: { preview.isExpanded.wrappedValue = $0 }
@@ -2339,6 +2342,41 @@ struct ContentView: View {
                 restorePreviewCard(from: dl, replacing: p.id)
             }
         }
+    }
+
+    /// Puts a failed card back to Analyzing and runs the same analysis again, in place (same id,
+    /// so the card updates instead of being replaced).
+    private func retryAnalysis(of p: LinkPreview) {
+        guard let idx = linkPreviews.firstIndex(where: { $0.id == p.id }) else { return }
+        withAnimation(.spring(response: 0.35)) {
+            linkPreviews[idx].analyzeError = nil
+            linkPreviews[idx].analyzeErrorIsForbidden = false
+            linkPreviews[idx].title = p.url
+            linkPreviews[idx].isPending = true
+        }
+        analyzeURL(urls: [p.url], ids: [p.id])
+    }
+
+    /// A failed analysis's way to the real reason: the capsule only has the short summary, the
+    /// log has yt-dlp's own error line.
+    private func analyzeErrorDetails() -> AnyView {
+        AnyView(
+            Button(action: {
+                withAnimation(.spring(response: 0.25)) { activeTab = .log }
+            }) {
+                HStack(spacing: 5) {
+                    Image(systemName: "terminal").font(.appMono(size: 10, weight: .semibold))
+                    Text("Show in Log").font(.appMono(size: 11, weight: .semibold))
+                }
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Color.orange.opacity(0.18))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.orange.opacity(0.4), lineWidth: 0.75)))
+                .foregroundColor(.orange)
+            }
+            .buttonStyle(.plain)
+            .help("Show in Log")
+            .frame(maxWidth: .infinity, alignment: .leading)
+        )
     }
 
     /// A failed download's hint and its fix button, below the header (the reason itself is in

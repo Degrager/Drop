@@ -134,7 +134,7 @@ struct StatusSwapStack: View {
 // size the title skeleton bar to match the real, resolved title Text's
 // width instead of a hardcoded guess.
 private struct WidthPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static var defaultValue: CGFloat { 0 }
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         let next = nextValue()
         if next > 0 { value = next }

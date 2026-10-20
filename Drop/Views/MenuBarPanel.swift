@@ -29,6 +29,7 @@ enum MenuBarClipboard: Equatable {
     case links(count: Int, title: String, detail: String)
 }
 
+@MainActor
 final class MenuBarModel: ObservableObject {
     @Published private(set) var clipboard: MenuBarClipboard = .empty
     /// Right after a successful paste, until it reverts on its own.

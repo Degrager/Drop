@@ -385,14 +385,14 @@ struct CardFacadeMetrics: Equatable {
 /// preferences emitted from inside a GeometryReader never reached the freeze wrapper, so
 /// they are written straight into the card's SizeMemory (see `reportsToFacade`).
 struct CardFacadeMetricsKey: PreferenceKey {
-    static var defaultValue = CardFacadeMetrics()
+    static var defaultValue: CardFacadeMetrics { CardFacadeMetrics() }
     static func reduce(value: inout CardFacadeMetrics, nextValue: () -> CardFacadeMetrics) {
         let next = nextValue()
         if next.reported { value = next }
     }
 }
 
-private struct CardFacadeMemoryKey: EnvironmentKey { static let defaultValue: SizeMemory? = nil }
+private struct CardFacadeMemoryKey: EnvironmentKey { static var defaultValue: SizeMemory? { nil } }
 
 extension EnvironmentValues {
     /// The SizeMemory of the card this view belongs to, provided by FrozenDuringResize.
@@ -491,7 +491,9 @@ extension View {
 /// mounted throughout, so releasing the drag is one layout pass, not a rebuild.
 struct FreezeLayout: Layout {
     var frozen: Bool
-    let memory: SizeMemory
+    // Layout passes (the only readers and writers) run on the main thread; SwiftUI just doesn't say
+    // so in the Layout protocol, which wants its conformers Sendable.
+    nonisolated(unsafe) let memory: SizeMemory
     private static let fallbackHeight: CGFloat = 96
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -918,7 +920,7 @@ struct CardFacade: View {
 /// that is only right while the column fills the space. Once it is capped (850pt) and
 /// centered, the column keeps its width and only its position shifts, and a facade that
 /// followed the sidebar's edge grew wider than any real card.
-private struct FacadeFollowsSidebar: ViewModifier, Animatable {
+private struct FacadeFollowsSidebar: ViewModifier, @preconcurrency Animatable {
     var live: CGFloat
     var pinned: CGFloat
     /// The page container's width with the sidebar collapsed; 0 until measured.
@@ -1778,7 +1780,7 @@ enum CardCapsule: Equatable {
 /// PreviewCard.swift's own WidthPreferenceKey serves for the title bar, duplicated here
 /// (private to each file) because that one isn't visible outside PreviewCard.swift.
 private struct CapsuleWidthPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static var defaultValue: CGFloat { 0 }
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         let next = nextValue()
         if next > 0 { value = next }
@@ -2606,7 +2608,7 @@ private struct DropdownPopoverPreferenceKey: PreferenceKey {
     /// measure it. `height` is an estimate, not exact -- close enough to decide whether
     /// the menu would run past the bottom of the window, not a pixel-perfect fit.
     struct Entry { let anchor: Anchor<CGRect>; let width: CGFloat; let height: CGFloat; let content: () -> AnyView }
-    static var defaultValue: [String: Entry] = [:]
+    static var defaultValue: [String: Entry] { [:] }
     static func reduce(value: inout [String: Entry], nextValue: () -> [String: Entry]) {
         value.merge(nextValue()) { _, new in new }
     }
@@ -2757,7 +2759,8 @@ struct OutsideClickMonitor: NSViewRepresentable {
         var excluding: CGRect = .zero
         var windowHeight: CGFloat = 0
         var action: (() -> Void)?
-        private var monitor: Any?
+        // Only ever touched on the main thread, and in deinit once nothing else can reach the object.
+        nonisolated(unsafe) private var monitor: Any?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()

@@ -583,7 +583,7 @@ struct HistoryChip: View {
 // The resulting file:// URL slots into the same `thumbnailURL` field/AsyncImage
 // path History already uses for download thumbnails.
 enum HistoryThumbnailer {
-    private static var cacheDir: URL? = {
+    private static let cacheDir: URL? = {
         guard let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
         let dir = base.appendingPathComponent("DropHistoryThumbs", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

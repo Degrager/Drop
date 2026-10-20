@@ -686,49 +686,57 @@ struct ContentView: View {
             // snapshot up to wherever the raw geometry actually landed. See
             // settledWindowSize's declaration.
             NotificationCenter.default.addObserver(forName: .dropLiveResizeEnded, object: nil, queue: .main) { _ in
-                settledWindowSize = windowSize
-                // Minus the room the (pinned) sidebar takes -- mainAreaWidth is
-                // measured as if the sidebar were collapsed.
-                columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth - (pageInset - WindowLayout.compactSidebarWidth))
+                // Delivered on the main queue (queue: .main), so this really is on the main actor.
+                MainActor.assumeIsolated {
+                    settledWindowSize = windowSize
+                    // Minus the room the (pinned) sidebar takes -- mainAreaWidth is
+                    // measured as if the sidebar were collapsed.
+                    columnClass = WindowLayout.columnClass(mainWidth: mainAreaWidth - (pageInset - WindowLayout.compactSidebarWidth))
+                }
             }
             // The menu bar's Check for Updates (panel button and right-click menu):
             // exactly what the sidebar's button does, gated the same way (it is
             // disabled until the tools are installed).
             NotificationCenter.default.addObserver(forName: .menuBarCheckForUpdates, object: nil, queue: .main) { _ in
-                guard manager.toolsReady else { return }
-                manager.ensureLatestTools()
-                manager.dropUpdater.checkForUpdates()
+                MainActor.assumeIsolated {
+                    guard manager.toolsReady else { return }
+                    manager.ensureLatestTools()
+                    manager.dropUpdater.checkForUpdates()
+                }
             }
             NotificationCenter.default.addObserver(forName: .menuBarDownload, object: nil, queue: .main) { note in
                 guard let raw = note.userInfo?["url"] as? String else { return }
-                let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !candidate.isEmpty, allLinesAreURLs(candidate) else { return }
-                activeTab = .download
-                // Deliberately NOT activating/foregrounding the app here --
-                // the menu bar panel's whole point is a quick background
-                // paste-and-queue without interrupting whatever the user is
-                // doing (its button just turns to "Queued" -- you stay where
-                // you are unless you tap "Open Drop" yourself).
-                let pendingURLs = candidate.components(separatedBy: "\n")
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                // Capture each placeholder's own id (not just its url) so
-                // duplicate-url pastes stay independent through analyze --
-                // see analyzeProcesses' declaration for why.
-                var pendingIDs: [UUID] = []
-                withAnimation(.spring(response: 0.35)) {
-                    for u in pendingURLs {
-                        let placeholder = LinkPreview(
-                            url: u, title: u, thumbnailURL: "",
-                            hasVideo: false, duration: "",
-                            mediaMode: .audioOnly, isPending: true
-                        )
-                        pendingIDs.append(placeholder.id)
-                        linkPreviews.append(placeholder)
+                // Delivered on the main queue (queue: .main), so this really is on the main actor.
+                MainActor.assumeIsolated {
+                    let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !candidate.isEmpty, allLinesAreURLs(candidate) else { return }
+                    activeTab = .download
+                    // Deliberately NOT activating/foregrounding the app here --
+                    // the menu bar panel's whole point is a quick background
+                    // paste-and-queue without interrupting whatever the user is
+                    // doing (its button just turns to "Queued" -- you stay where
+                    // you are unless you tap "Open Drop" yourself).
+                    let pendingURLs = candidate.components(separatedBy: "\n")
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                    // Capture each placeholder's own id (not just its url) so
+                    // duplicate-url pastes stay independent through analyze --
+                    // see analyzeProcesses' declaration for why.
+                    var pendingIDs: [UUID] = []
+                    withAnimation(.spring(response: 0.35)) {
+                        for u in pendingURLs {
+                            let placeholder = LinkPreview(
+                                url: u, title: u, thumbnailURL: "",
+                                hasVideo: false, duration: "",
+                                mediaMode: .audioOnly, isPending: true
+                            )
+                            pendingIDs.append(placeholder.id)
+                            linkPreviews.append(placeholder)
+                        }
                     }
+                    urlText = ""
+                    analyzeURL(urls: pendingURLs, ids: pendingIDs)
                 }
-                urlText = ""
-                analyzeURL(urls: pendingURLs, ids: pendingIDs)
             }
         }
         // Cmd+Shift+V: paste clipboard and download immediately
@@ -2690,7 +2698,7 @@ struct ContentView: View {
     /// Called from the analyze background thread right after a Process starts.
     /// Returns false (after killing it) if the card was cancelled while the
     /// process was still launching.
-    private func registerAnalyzeProcess(_ proc: Process, cardID: UUID) -> Bool {
+    private nonisolated func registerAnalyzeProcess(_ proc: Process, cardID: UUID) -> Bool {
         var cancelled = false
         DispatchQueue.main.sync {
             if self.cancelledAnalyzeIDs.contains(cardID) { cancelled = true }
@@ -2712,24 +2720,23 @@ struct ContentView: View {
     /// tell it apart from the app having silently died. 45s is generous for yt-dlp's own
     /// PyInstaller startup plus a real network fetch, short enough that a genuinely stuck card
     /// recovers inside one visible wait instead of needing a force-quit.
-    private static let analyzeTimeoutSeconds: Double = 45
+    private nonisolated static let analyzeTimeoutSeconds: Double = 45
 
     /// Starts a watchdog that kills `proc` if it's still running after `analyzeTimeoutSeconds`.
     /// Cancel the returned work item the moment `proc.waitUntilExit()` returns on its own, then
     /// call `didTimeOut()` to tell a genuine timeout apart from every other way an analyze
     /// attempt can end empty-handed (a clean yt-dlp failure, a 403, cancellation) -- those all
     /// reach the same "waitUntilExit returned" point, so only this flag says *why*.
-    private func startAnalyzeTimeoutWatchdog(for proc: Process) -> (workItem: DispatchWorkItem, didTimeOut: () -> Bool) {
-        let flagLock = NSLock()
-        var timedOut = false
+    private nonisolated func startAnalyzeTimeoutWatchdog(for proc: Process) -> (workItem: DispatchWorkItem, didTimeOut: @Sendable () -> Bool) {
+        let timedOut = Locked(false)
         let workItem = DispatchWorkItem {
             if proc.isRunning {
-                flagLock.lock(); timedOut = true; flagLock.unlock()
+                timedOut.value = true
                 DownloadManager.terminateProcessTree(proc)
             }
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.analyzeTimeoutSeconds, execute: workItem)
-        return (workItem, { flagLock.lock(); defer { flagLock.unlock() }; return timedOut })
+        return (workItem, { timedOut.value })
     }
 
     private func fetchInstantPreview(for url: String, cardID: UUID) {
@@ -2800,6 +2807,9 @@ struct ContentView: View {
             manager.appendLog("Analyze: yt-dlp not found")
             return
         }
+        // The background work below reads these; capturing the manager itself (a main-actor
+        // class, safe to share) keeps the closures from reaching through the view's `self`.
+        let manager = self.manager
         // ids MUST line up 1:1 with urls by index -- if a caller passes a
         // mismatched count, fall back to fresh UUIDs rather than risk
         // silently pairing the wrong id with the wrong url.
@@ -2810,8 +2820,7 @@ struct ContentView: View {
 
         let group = DispatchGroup()
         // Use a lock-protected array to collect results in order
-        var results: [(Int, LinkPreview?)] = []
-        let lock = NSLock()
+        let results = Locked<[(Int, LinkPreview?)]>([])
 
         // Cap how many yt-dlp analyze processes run at once. Previously every
         // pasted URL fired its own yt-dlp process onto DispatchQueue.global()
@@ -2871,7 +2880,7 @@ struct ContentView: View {
                 // just the first item's info, so the download-time cache lookup
                 // below is gated on !isPlaylist to avoid ever feeding a single-item
                 // info dict into a full-playlist download.
-                let infoJSONCachePath = self.manager.cachedInfoJSONWritePath(for: url)
+                let infoJSONCachePath = manager.cachedInfoJSONWritePath(for: url)
                 var analyzeArgs = [
                     "--no-warnings", "--no-download",
                     // --print (used below) implies --simulate, and yt-dlp's
@@ -2906,7 +2915,7 @@ struct ContentView: View {
                 // could see higher. The download call already applied this same
                 // cookie source (see ytArgs below); analyze never did, so the two
                 // steps were silently looking at two different format lists.
-                analyzeArgs += self.config.browser.cookieArgs
+                analyzeArgs += DispatchQueue.main.sync { self.config.browser.cookieArgs }
                 // Reuse a fresh cached info-json (written by a prior analyze of
                 // this exact URL within the TTL window) instead of re-resolving
                 // from the network -- this is what makes re-pasting an already-
@@ -2917,7 +2926,7 @@ struct ContentView: View {
                 // every --print template above reads from the same info dict
                 // either way, so the existing parsing logic below needs no
                 // changes to handle this path.
-                let reusedCachePath = self.manager.cachedInfoJSONPath(for: url)
+                let reusedCachePath = manager.cachedInfoJSONPath(for: url)
                 if let cachePath = reusedCachePath {
                     analyzeArgs.append("--load-info-json")
                     analyzeArgs.append(cachePath)
@@ -2946,10 +2955,10 @@ struct ContentView: View {
                 // HTTP 403 at analyze time can be detected and surfaced --
                 // previously this text was read and thrown away, so analyze
                 // failures were invisible.
-                var errData1 = Data()
+                let errData1 = Locked(Data())
                 let errSem = DispatchSemaphore(value: 0)
                 DispatchQueue.global().async {
-                    errData1 = errPipe.fileHandleForReading.readDataToEndOfFile()
+                    errData1.value = errPipe.fileHandleForReading.readDataToEndOfFile()
                     errSem.signal()
                 }
                 let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
@@ -2962,7 +2971,7 @@ struct ContentView: View {
                 DispatchQueue.main.sync { wasCancelled = self.analyzeProcesses[cardID] == nil }
                 if wasCancelled { group.leave(); return }
                 var output = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                var lastStderr = String(data: errData1, encoding: .utf8) ?? ""
+                var lastStderr = String(data: errData1.value, encoding: .utf8) ?? ""
 
                 // Fallback: if bestvideo* failed (audio-only source), retry with bestaudio.
                 // Skipped once the primary attempt already timed out -- retrying the same
@@ -2994,10 +3003,10 @@ struct ContentView: View {
                     try? proc2.run()
                     if !registerAnalyzeProcess(proc2, cardID: cardID) { group.leave(); return }
                     let watchdog2 = startAnalyzeTimeoutWatchdog(for: proc2)
-                    var errData2 = Data()
+                    let errData2 = Locked(Data())
                     let errSem2 = DispatchSemaphore(value: 0)
                     DispatchQueue.global().async {
-                        errData2 = errPipe2.fileHandleForReading.readDataToEndOfFile()
+                        errData2.value = errPipe2.fileHandleForReading.readDataToEndOfFile()
                         errSem2.signal()
                     }
                     let outData2 = outPipe2.fileHandleForReading.readDataToEndOfFile()
@@ -3012,7 +3021,7 @@ struct ContentView: View {
                     // Fallback's stderr replaces the primary attempt's --
                     // it's the more recent, more relevant failure reason
                     // once both attempts have actually run.
-                    if let s2 = String(data: errData2, encoding: .utf8), !s2.isEmpty { lastStderr = s2 }
+                    if let s2 = String(data: errData2.value, encoding: .utf8), !s2.isEmpty { lastStderr = s2 }
                 }
 
                 // A 403 here means yt-dlp couldn't even read the page/metadata
@@ -3044,7 +3053,7 @@ struct ContentView: View {
                         lp.isPlaylist = true
                         lp.playlistCount = playlistCount
                         lp.isSelected = true
-                        lock.lock(); results.append((i, lp)); lock.unlock()
+                        results.mutate { $0.append((i, lp)) }
                         DispatchQueue.main.async { self.analyzeProcesses.removeValue(forKey: cardID) }
                         group.leave()
                         return
@@ -3277,9 +3286,7 @@ struct ContentView: View {
                         .last { !$0.isEmpty } ?? "no stderr output"
                     manager.logFromBackground("Analyze failed for \(url): \(stderrSummary)")
                 }
-                lock.lock()
-                results.append((i, preview))
-                lock.unlock()
+                results.mutate { $0.append((i, preview)) }
                 // Push this URL's result to the UI the instant IT finishes,
                 // rather than waiting for every pasted URL in the batch to
                 // finish (the old group.notify-only path). Each yt-dlp
@@ -3288,7 +3295,7 @@ struct ContentView: View {
                 // "Analyzing…" to their real title/thumbnail one at a time
                 // instead of all sitting at "Analyzing…" until the slowest
                 // link in the batch finally completes.
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [preview] in
                     self.analyzeProcesses.removeValue(forKey: cardID)
                     if var realCard = preview {
                         // Slower, gentler settle than the old 0.4s spring --
@@ -3384,7 +3391,7 @@ struct ContentView: View {
             // already applied each card to the UI as it finished, but the
             // "was this batch video, audio, or mixed" badge still needs a
             // full-batch view once everything's done.
-            let sorted = results.sorted { $0.0 < $1.0 }.compactMap { $0.1 }.filter { $0.analyzeError == nil }
+            let sorted = results.value.sorted { $0.0 < $1.0 }.compactMap { $0.1 }.filter { $0.analyzeError == nil }
             let hasAny  = !sorted.isEmpty
             let hasVid  = sorted.contains { $0.hasVideo }
             let allVid  = sorted.allSatisfy { $0.hasVideo }

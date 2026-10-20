@@ -873,7 +873,8 @@ class ConvertJob: ObservableObject, Identifiable {
                 }
             }
 
-            DispatchQueue.main.async { self.mediaInfo = info }
+            let probed = info
+            DispatchQueue.main.async { self.mediaInfo = probed }
         }
     }
 
@@ -1366,12 +1367,9 @@ struct ConvertView: View {
         .onDrop(of: ["public.file-url"], isTargeted: $isDragging) { providers in
             for p in providers {
                 p.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
-                    DispatchQueue.main.async {
-                        if let data = item as? Data,
-                           let url = URL(dataRepresentation: data, relativeTo: nil) {
-                            addFile(url)
-                        }
-                    }
+                    // Turned into a plain URL here, so only that crosses over to the main thread.
+                    guard let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                    DispatchQueue.main.async { addFile(url) }
                 }
             }
             return true
@@ -2496,7 +2494,7 @@ private struct FileSwitcherPreferenceKey: PreferenceKey {
     /// DropdownPopoverPreferenceKey.Entry. `dismiss` lets the host's outside-click
     /// monitor close the popup without needing a binding into ConvertView's own state.
     struct Entry { let anchor: Anchor<CGRect>; let width: CGFloat; let height: CGFloat; let content: () -> AnyView; let dismiss: () -> Void }
-    static var defaultValue: Entry? = nil
+    static var defaultValue: Entry? { nil }
     static func reduce(value: inout Entry?, nextValue: () -> Entry?) {
         if let next = nextValue() { value = next }
     }

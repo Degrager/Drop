@@ -17,6 +17,18 @@ final class SyncText: @unchecked Sendable {
     var value: String { lock.lock(); defer { lock.unlock() }; return text }
 }
 
+/// A value that background threads and the main thread both touch, guarded by a lock.
+final class Locked<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value
+    init(_ value: Value) { stored = value }
+    var value: Value {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+    func mutate(_ change: (inout Value) -> Void) { lock.lock(); change(&stored); lock.unlock() }
+}
+
 @MainActor
 class DownloadManager: ObservableObject {
     // Downloads run strictly one at a time. Previously 3 ran concurrently,
@@ -404,7 +416,7 @@ class DownloadManager: ObservableObject {
     /// separate "is an update available" check anymore -- by the time this
     /// runs, whatever's on disk already IS the latest nightly.
     /// updateAvailable/ffmpegUpdateAvailable stay false.
-    func silentUpdateCheck(completion: (() -> Void)? = nil) {
+    func silentUpdateCheck(completion: (@MainActor @Sendable () -> Void)? = nil) {
         DispatchQueue.main.async { self.checkingUpdates = true }
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 0.2) {
             func runBin(_ path: String, _ args: [String]) -> String {
@@ -483,7 +495,7 @@ class DownloadManager: ObservableObject {
     /// transient blip. Calls back with nil if the endpoint still can't be
     /// resolved (offline, etc.), in which case callers just fall through to a
     /// normal download attempt.
-    private func resolveVersionedAssetURL(_ latestURL: URL, attemptsLeft: Int = 2, completion: @escaping (URL?) -> Void) {
+    private nonisolated func resolveVersionedAssetURL(_ latestURL: URL, attemptsLeft: Int = 2, completion: @escaping @Sendable (URL?) -> Void) {
         final class NoRedirect: NSObject, URLSessionTaskDelegate {
             func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                             newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
@@ -523,7 +535,7 @@ class DownloadManager: ObservableObject {
     /// it; both are extracted into a dedicated yt-dlp_bin/ directory rather
     /// than flattened into supportDir directly, so this can't collide with
     /// or partially overwrite anything else Drop stores there.
-    func updateYtdlp(onlyIfNewer: Bool = false, completion: (() -> Void)? = nil) {
+    func updateYtdlp(onlyIfNewer: Bool = false, completion: (@MainActor @Sendable () -> Void)? = nil) {
         guard !updatingYtdlp else { completion?(); return }
         updatingYtdlp = true
         let latestURL = URL(string: "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_macos.zip")!
@@ -542,7 +554,7 @@ class DownloadManager: ObservableObject {
         }
     }
 
-    private func downloadYtdlp(from releaseURL: URL, completion: (() -> Void)?) {
+    private func downloadYtdlp(from releaseURL: URL, completion: (@MainActor @Sendable () -> Void)?) {
         appendLog("Fetching latest yt-dlp nightly build…")
         ytdlpDownloadProgress = 0
         let finalDir = supportDir.appendingPathComponent("yt-dlp_bin")
@@ -603,7 +615,8 @@ class DownloadManager: ObservableObject {
             }
         }
         ytdlpProgressObservation = task.progress.observe(\.fractionCompleted, options: [.new]) { [weak self] progress, _ in
-            DispatchQueue.main.async { self?.ytdlpDownloadProgress = progress.fractionCompleted }
+            let fraction = progress.fractionCompleted
+            DispatchQueue.main.async { [weak self] in self?.ytdlpDownloadProgress = fraction }
         }
         task.resume()
     }
@@ -710,10 +723,12 @@ class DownloadManager: ObservableObject {
             guard !shown.contains(current),
                   let url = URL(string: "https://api.github.com/repos/Degrager/Drop/releases/tags/v\(current)") else { return }
 
+            let alreadyShown = shown
             URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
                 guard let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let notes = json["body"] as? String else { return }
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    var shown = alreadyShown
                     shown.insert(current)
                     UserDefaults.standard.set(Array(shown), forKey: shownKey)
                     self?.userDriver.showWhatsNew(versionString: current, notesHTML: notes)
@@ -730,7 +745,7 @@ class DownloadManager: ObservableObject {
     /// a real nightly channel here. Zip contains the ffmpeg binary at its
     /// root (no nested folder), same completion-callback shape as
     /// updateYtdlp above.
-    func updateFFmpeg(onlyIfNewer: Bool = false, completion: (() -> Void)? = nil) {
+    func updateFFmpeg(onlyIfNewer: Bool = false, completion: (@MainActor @Sendable () -> Void)? = nil) {
         guard !updatingFFmpeg else { completion?(); return }
         updatingFFmpeg = true
         let latestURL = URL(string: "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/snapshot/ffmpeg.zip")!
@@ -749,7 +764,7 @@ class DownloadManager: ObservableObject {
         }
     }
 
-    private func downloadFFmpeg(from releaseURL: URL, completion: (() -> Void)?) {
+    private func downloadFFmpeg(from releaseURL: URL, completion: (@MainActor @Sendable () -> Void)?) {
         appendLog("Fetching latest ffmpeg nightly build…")
         ffmpegDownloadProgress = 0
         let destURL = supportDir.appendingPathComponent("ffmpeg")
@@ -801,7 +816,8 @@ class DownloadManager: ObservableObject {
             }
         }
         ffmpegProgressObservation = task.progress.observe(\.fractionCompleted, options: [.new]) { [weak self] progress, _ in
-            DispatchQueue.main.async { self?.ffmpegDownloadProgress = progress.fractionCompleted }
+            let fraction = progress.fractionCompleted
+            DispatchQueue.main.async { [weak self] in self?.ffmpegDownloadProgress = fraction }
         }
         task.resume()
     }
@@ -940,7 +956,7 @@ class DownloadManager: ObservableObject {
     /// completion even after yt-dlp itself has exited, so Cancel looked like it
     /// did nothing. Kill any live ffmpeg child processes by PID first (found via
     /// `pgrep -P`), then terminate yt-dlp itself.
-    static func terminateProcessTree(_ proc: Process) {
+    nonisolated static func terminateProcessTree(_ proc: Process) {
         let pid = proc.processIdentifier
         if pid > 0 {
             let pgrep = Process()
@@ -1267,21 +1283,14 @@ class DownloadManager: ObservableObject {
     }
 
     private func startDownload(index idx: Int, config: Config) {
+        // Config is only ever read on the main thread; the background closures below carry this
+        // reference just to the main-thread hops that read it.
+        nonisolated(unsafe) let config = config
         // Wall-clock start, used below to show "[Ns elapsed]" alongside the
         // progress bar.
         let t0 = Date()
-        // yt-dlp's raw per-line percentage is a whole-file estimate that
-        // gets recomputed at every HLS/DASH fragment boundary as
-        // (bytes-so-far + newly-known-fragment-size) / (fragment-index+1) *
-        // total-fragments -- each time a fresh fragment's real size becomes
-        // known it revises that whole-file estimate, which visibly knocks
-        // the percentage backward a few points (observed in real logs, e.g.
-        // 4.8% -> 2.4% -> 0.1% right as fragment 0 handed off to fragment 1).
-        // Never letting the displayed fraction go backward within a single
-        // download attempt smooths this out without hiding real progress --
-        // scoped to this one startDownload call via closure capture, so it
-        // naturally resets for the next queued download.
-        var lastDisplayedFraction: Double = 0.0
+        // Read here, on the main thread, so the output reader below doesn't touch Config.
+        let usesDefaultTemplate = config.filenameTemplate == "%(title)s"
 
         guard downloads.indices.contains(idx) else { return }
         let downloadID = downloads[idx].id
@@ -1512,7 +1521,8 @@ class DownloadManager: ObservableObject {
                     }
                 }
             }
-            DispatchQueue.main.async { self.withDownload(downloadID) { $0.resolvedBaseName = resolvedName } }
+            let nameToRecord = resolvedName
+            DispatchQueue.main.async { self.withDownload(downloadID) { $0.resolvedBaseName = nameToRecord } }
 
             let work = Self.workDir(for: downloadID)
             try? FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
@@ -1562,6 +1572,18 @@ class DownloadManager: ObservableObject {
             // Read all output on a dedicated thread — never blocks the launch thread
             let outputThread = Thread {
                 defer { readerDone.signal() }
+            // yt-dlp's raw per-line percentage is a whole-file estimate that
+            // gets recomputed at every HLS/DASH fragment boundary as
+            // (bytes-so-far + newly-known-fragment-size) / (fragment-index+1) *
+            // total-fragments -- each time a fresh fragment's real size becomes
+            // known it revises that whole-file estimate, which visibly knocks
+            // the percentage backward a few points (observed in real logs, e.g.
+            // 4.8% -> 2.4% -> 0.1% right as fragment 0 handed off to fragment 1).
+            // Never letting the displayed fraction go backward within a single
+            // download attempt smooths this out without hiding real progress --
+            // scoped to this one startDownload call via closure capture, so it
+            // naturally resets for the next queued download.
+            var lastDisplayedFraction: Double = 0.0
                 let handle = outputPipe.fileHandleForReading
                 var buffer = Data()
                 while true {
@@ -1646,7 +1668,7 @@ class DownloadManager: ObservableObject {
                 // otherwise (playlist / custom template) fall back to fuzzy title matching.
                 let resolvedNameFolded = resolvedName
                     .folding(options: [.diacriticInsensitive, .widthInsensitive, .caseInsensitive], locale: nil)
-                let usesExactName = !isPlaylist && config.filenameTemplate == "%(title)s"
+                let usesExactName = !isPlaylist && usesDefaultTemplate
                 // Read on the main thread, where `downloads` is mutated; this closure runs on a
                 // background queue.
                 let titleNow = DispatchQueue.main.sync { self.readDownload(downloadID) { $0.title } }
@@ -1742,7 +1764,7 @@ class DownloadManager: ObservableObject {
                 // folder is not needed. After a failure it is kept, for the retry to continue from.
                 if proc.terminationStatus == 0 { Self.removeWorkDir(for: downloadID) }
 
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [confirmedPath, fileSize, actualHeight] in
                     let curStatus = self.readDownload(downloadID) { $0.status }
                     guard curStatus != nil else {
                         // Row is gone (removed/cleared while downloading) — nothing to update.

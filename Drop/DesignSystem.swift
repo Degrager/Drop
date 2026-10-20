@@ -108,6 +108,8 @@ extension View {
     }
 }
 
+// The shared transitions below are built once and never changed, but SwiftUI doesn't mark
+// AnyTransition as Sendable, so each is `nonisolated(unsafe)`: read-only values, safe to share.
 extension AnyTransition {
     /// WARNING before using this bare, symmetric, on a conditionally-mounted view (an
     /// `if`/`if let` branch, or a view keyed with `.id()` to one of several possible
@@ -149,7 +151,7 @@ extension AnyTransition {
     /// blur while settling from 95% scale, anchored on the top edge. No opacity
     /// (see FocusEffect). Removal is a quick shrink so cards still leave with
     /// motion.
-    static let glassPop = AnyTransition.asymmetric(
+    nonisolated(unsafe) static let glassPop = AnyTransition.asymmetric(
         insertion: focus(blur: 6, scale: 0.95, anchor: .top)
             .animation(.easeOut(duration: 0.26)),
         removal: focus(blur: 4, scale: 0.97, anchor: .top)
@@ -165,12 +167,12 @@ extension AnyTransition {
     /// status swaps inside one card (a card going from analyzed to
     /// downloading), where animating both glass surfaces at once was the most
     /// expensive thing the app did.
-    static let glassPopInOnly = AnyTransition.asymmetric(
+    nonisolated(unsafe) static let glassPopInOnly = AnyTransition.asymmetric(
         insertion: focus(blur: 6, scale: 0.95, anchor: .top)
             .animation(.easeOut(duration: 0.26)),
         removal: .identity
     )
-    static let blurInOnly = AnyTransition.asymmetric(
+    nonisolated(unsafe) static let blurInOnly = AnyTransition.asymmetric(
         insertion: focus(blur: 5, scale: 0.97, opacity: 0.4)
             .animation(.easeOut(duration: 0.2)),
         removal: .identity
@@ -242,7 +244,7 @@ extension AnyTransition {
     /// sub-rows. A short focus pull with only a light opacity assist so
     /// bright elements (blue chips, green ETA) don't read as glowing blobs
     /// at full blur.
-    static let blurIn = AnyTransition.asymmetric(
+    nonisolated(unsafe) static let blurIn = AnyTransition.asymmetric(
         insertion: focus(blur: 5, scale: 0.97, opacity: 0.4)
             .animation(.easeOut(duration: 0.2)),
         removal: focus(blur: 4, scale: 0.98, opacity: 0.4)
@@ -264,7 +266,7 @@ extension AnyTransition {
     /// downward inside a card (Options, the format chips) so the content
     /// grows out of the header instead of scaling from its own centre while
     /// the card height is still animating open.
-    static let blurInTop = AnyTransition.asymmetric(
+    nonisolated(unsafe) static let blurInTop = AnyTransition.asymmetric(
         insertion: focus(blur: 5, scale: 0.97, opacity: 0.3, anchor: .top)
             .animation(.easeOut(duration: 0.22)),
         removal: focus(blur: 4, scale: 0.98, opacity: 0.3, anchor: .top)
@@ -275,7 +277,7 @@ extension AnyTransition {
     /// labels): a blur and a light fade only, with NO scale -- the pill around
     /// it is what grows and shrinks (clipping the label as it goes), and a
     /// scaling label made rows look like they were resizing vertically.
-    static let blurInLeading = AnyTransition.asymmetric(
+    nonisolated(unsafe) static let blurInLeading = AnyTransition.asymmetric(
         insertion: focus(blur: 4, scale: 1, opacity: 0.3, anchor: .leading)
             .animation(.easeOut(duration: 0.2).delay(0.06)),
         removal: focus(blur: 4, scale: 1, opacity: 0.3, anchor: .leading)
@@ -287,7 +289,7 @@ extension AnyTransition {
     /// labels in the very same transaction as the card's width, so every row's
     /// frame follows one curve; this keeps the text from lingering (and being
     /// clipped by the shrinking pill) for the whole width animation.
-    static let labelFade = AnyTransition.asymmetric(
+    nonisolated(unsafe) static let labelFade = AnyTransition.asymmetric(
         insertion: .opacity,
         removal: AnyTransition.opacity.animation(.easeOut(duration: 0.15))
     )
@@ -299,7 +301,7 @@ extension AnyTransition {
     /// the incoming one focuses in over a short, fixed-duration ease-out --
     /// deliberately not a spring: a spring's tail keeps the GPU compositing
     /// long after the motion is visually done.
-    static let pageSwap = AnyTransition.asymmetric(
+    nonisolated(unsafe) static let pageSwap = AnyTransition.asymmetric(
         insertion: focus(blur: 4, scale: 0.99, opacity: 0.6, anchor: .top)
             .animation(.easeOut(duration: 0.2)),
         removal: .identity
@@ -307,7 +309,7 @@ extension AnyTransition {
 
     /// Centered overlay content (update sheet stages, popups): pops from
     /// slightly small out of a blur, leaves the same way in reverse.
-    static let overlayPop = AnyTransition.asymmetric(
+    nonisolated(unsafe) static let overlayPop = AnyTransition.asymmetric(
         insertion: focus(blur: 6, scale: 0.95)
             .animation(.easeOut(duration: 0.24)),
         removal: focus(blur: 4, scale: 0.97)
@@ -951,7 +953,7 @@ struct LiveGlassCard: ViewModifier {
 
 /// The animated half of LiveGlassCard: `live` is interpolated by SwiftUI, so the
 /// outline's overhang (`pinned - live`, never negative) shrinks or grows smoothly.
-private struct LiveOutline: ViewModifier, Animatable {
+private struct LiveOutline: ViewModifier, @preconcurrency Animatable {
     var live: CGFloat
     var pinned: CGFloat
     var cornerRadius: CGFloat

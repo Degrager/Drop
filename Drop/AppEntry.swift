@@ -22,6 +22,7 @@ extension Notification.Name {
 /// continuously-running animations (a TimelineView driving a Canvas at the
 /// display's refresh rate keeps SwiftUI re-laying-out on macOS), which would
 /// otherwise stack on top of the per-frame relayout the drag itself causes.
+@MainActor
 final class LiveResizeState: ObservableObject {
     static let shared = LiveResizeState()
     @Published private(set) var isActive = false
@@ -91,16 +92,20 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.addObserver(
             forName: NSText.didBeginEditingNotification, object: nil, queue: .main
         ) { note in
-            guard let editor = note.object as? NSTextView else { return }
-            editor.isAutomaticTextCompletionEnabled = false
-            editor.isAutomaticSpellingCorrectionEnabled = false
-            editor.isContinuousSpellCheckingEnabled = false
-            editor.isGrammarCheckingEnabled = false
-            editor.isAutomaticQuoteSubstitutionEnabled = false
-            editor.isAutomaticDashSubstitutionEnabled = false
-            editor.isAutomaticDataDetectionEnabled = false
-            editor.isAutomaticLinkDetectionEnabled = false
-            editor.isAutomaticTextReplacementEnabled = false
+            // Delivered on the main queue (queue: .main), so this really is on the main actor.
+            nonisolated(unsafe) let note = note
+            MainActor.assumeIsolated {
+                guard let editor = note.object as? NSTextView else { return }
+                editor.isAutomaticTextCompletionEnabled = false
+                editor.isAutomaticSpellingCorrectionEnabled = false
+                editor.isContinuousSpellCheckingEnabled = false
+                editor.isGrammarCheckingEnabled = false
+                editor.isAutomaticQuoteSubstitutionEnabled = false
+                editor.isAutomaticDashSubstitutionEnabled = false
+                editor.isAutomaticDataDetectionEnabled = false
+                editor.isAutomaticLinkDetectionEnabled = false
+                editor.isAutomaticTextReplacementEnabled = false
+            }
         }
 
         // Created here, not in init -- AppKit is fully initialized by now.
@@ -126,10 +131,13 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, let window = note.object as? NSWindow,
-                  !(window is NSPanel), window.delegate !== self else { return }
             // Delivered on the main queue (queue: .main), so this really is on the main actor.
-            MainActor.assumeIsolated { self.configureWindow(window) }
+            nonisolated(unsafe) let note = note
+            MainActor.assumeIsolated {
+                guard let self, let window = note.object as? NSWindow,
+                      !(window is NSPanel), window.delegate !== self else { return }
+                self.configureWindow(window)
+            }
         }
         NotificationCenter.default.addObserver(
             forName: .dropSidebarCollapsedChanged, object: nil, queue: .main
@@ -186,7 +194,11 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // tries to reassert it, instead of fighting that per scroll event.
         window.titlebarSeparatorStyle = .none
         titlebarSeparatorObservation = window.observe(\.titlebarSeparatorStyle, options: [.new]) { window, change in
-            if change.newValue != .none { window.titlebarSeparatorStyle = .none }
+            // Window properties change on the main thread. (Compared as the style itself: a bare
+            // `.none` here meant the Optional's own `.none`, so this fired on every change.)
+            MainActor.assumeIsolated {
+                if change.newValue != NSTitlebarSeparatorStyle.none { window.titlebarSeparatorStyle = .none }
+            }
         }
         window.isMovableByWindowBackground = true
         // Disables macOS's window-state-restoration snapshot --
@@ -236,7 +248,7 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func applyMinimumSize(to window: NSWindow) {
         window.minSize = currentMinimumSize
         guard minSizeObservations.isEmpty else { return }
-        let capMinimum: (NSWindow) -> Void = { [weak self] window in
+        let capMinimum: @MainActor @Sendable (NSWindow) -> Void = { [weak self] window in
             guard let self else { return }
             let floor = self.currentMinimumSize
             guard window.minSize.width > floor.width || window.minSize.height > floor.height else { return }
@@ -244,8 +256,8 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                     height: min(window.minSize.height, floor.height))
         }
         minSizeObservations = [
-            window.observe(\.minSize, options: [.new]) { window, _ in capMinimum(window) },
-            window.observe(\.contentMinSize, options: [.new]) { window, _ in capMinimum(window) },
+            window.observe(\.minSize, options: [.new]) { window, _ in MainActor.assumeIsolated { capMinimum(window) } },
+            window.observe(\.contentMinSize, options: [.new]) { window, _ in MainActor.assumeIsolated { capMinimum(window) } },
         ]
     }
 
@@ -393,6 +405,7 @@ enum AnalyzeResult {
 /// Persists every appendLog() line to a real file on disk so logs survive app
 /// restarts and can be attached/uploaded when reporting an issue. Lives
 /// alongside (not instead of) the in-memory globalLogs/log panel.
+@MainActor
 final class DropLogger {
     static let shared = DropLogger()
     let fileURL: URL

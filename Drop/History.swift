@@ -169,6 +169,7 @@ struct HistoryEntry: Codable, Identifiable {
     }
 }
 
+@MainActor
 class HistoryStore: ObservableObject {
     @Published var entries: [HistoryEntry] = []
     private let key = "dropHistory"
@@ -249,9 +250,19 @@ class HistoryStore: ObservableObject {
         DispatchQueue.global(qos: .background).async { HistoryThumbnailer.pruneCache(keeping: referenced) }
         // Runs ffprobe/disk I/O per legacy entry — kept off the main thread so it
         // never delays app launch, even with a large history list.
+        // The copy is taken here, on the main thread; the background work only ever sees the copy.
+        let legacyEntries = entries
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            self?.migrateLegacyConversionEntries()
+            guard let repaired = Self.repairedLegacyConversionEntries(legacyEntries) else { return }
+            DispatchQueue.main.async { [weak self] in self?.applyRepairedEntries(repaired) }
         }
+    }
+
+    /// Puts repaired entries back by id, so an entry added while the repair ran is not lost.
+    private func applyRepairedEntries(_ repaired: [HistoryEntry]) {
+        let byID = Dictionary(repaired.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for i in entries.indices { if let fixed = byID[entries[i].id] { entries[i] = fixed } }
+        scheduleSave()
     }
 
     /// One-time repair for conversion history entries saved before this fix: the
@@ -259,9 +270,8 @@ class HistoryStore: ObservableObject {
     /// showed a filename) and never captured `fileSize`/`quality`. This probes the
     /// real file on disk (if it still exists) to recover the true folder, size, and
     /// codec/quality info, running once per affected entry then re-saving.
-    private func migrateLegacyConversionEntries() {
-        // Snapshot on whatever thread this was called from (background utility
-        // queue from load()) — all file I/O and ffprobe calls happen here, off main.
+    nonisolated private static func repairedLegacyConversionEntries(_ entries: [HistoryEntry]) -> [HistoryEntry]? {
+        // All file I/O and ffprobe calls happen here, off the main thread, on a copy.
         var snapshot = entries
         var changed = false
         let ffprobe = locateFFprobe()
@@ -335,11 +345,6 @@ class HistoryStore: ObservableObject {
             changed = true
         }
 
-        guard changed else { return }
-        let finalSnapshot = snapshot
-        DispatchQueue.main.async { [weak self] in
-            self?.entries = finalSnapshot
-            self?.scheduleSave()
-        }
+        return changed ? snapshot : nil
     }
 }

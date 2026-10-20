@@ -17,6 +17,7 @@ final class SyncText: @unchecked Sendable {
     var value: String { lock.lock(); defer { lock.unlock() }; return text }
 }
 
+@MainActor
 class DownloadManager: ObservableObject {
     // Downloads run strictly one at a time. Previously 3 ran concurrently,
     // which meant multiple yt-dlp processes competing for the same network/
@@ -30,7 +31,7 @@ class DownloadManager: ObservableObject {
     /// on-disk lookup and uniqueBaseName's collision check so the two can
     /// never drift out of sync (a new output format previously had to be
     /// added to both lists by hand).
-    static let mediaExtensions: Set<String> = ["mp3", "m4a", "wav", "flac", "mp4", "mkv", "webm", "mov", "ogg"]
+    nonisolated static let mediaExtensions: Set<String> = ["mp3", "m4a", "wav", "flac", "mp4", "mkv", "webm", "mov", "ogg"]
     let history = HistoryStore()
     @Published var downloads: [Download] = []
     @Published var globalLogs: [String] = []
@@ -65,7 +66,7 @@ class DownloadManager: ObservableObject {
     /// read-only once code-signed, so "updating" yt-dlp/ffmpeg means
     /// downloading a fresh binary here and preferring it over the bundled
     /// copy -- never touching Bundle.main.
-    private var supportDir: URL {
+    private nonisolated var supportDir: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Drop", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -78,7 +79,7 @@ class DownloadManager: ObservableObject {
     /// path(forResource:) (which only searches Resources) can never find
     /// them -- that was the bug making toolsReady come back false. Resolve
     /// via Bundle.main.executableURL's parent directory instead.
-    private var bundledBinariesDir: URL? {
+    private nonisolated var bundledBinariesDir: URL? {
         Bundle.main.executableURL?.deletingLastPathComponent()
     }
 
@@ -98,7 +99,7 @@ class DownloadManager: ObservableObject {
     /// then launches in ~0.24s on repeat calls (measured, 35x faster) --
     /// so it lives in its own folder (yt-dlp_bin/) alongside the required
     /// _internal/ support directory the executable depends on at runtime.
-    var ytdlpPath: String? {
+    nonisolated var ytdlpPath: String? {
         let updatedOnedir = supportDir.appendingPathComponent("yt-dlp_bin/yt-dlp_macos").path
         if FileManager.default.fileExists(atPath: updatedOnedir) { return updatedOnedir }
         // Back-compat: an old onefile copy from before this change may still
@@ -111,7 +112,7 @@ class DownloadManager: ObservableObject {
         return nil
     }
 
-    var ffmpegPath: String? {
+    nonisolated var ffmpegPath: String? {
         let updated = supportDir.appendingPathComponent("ffmpeg").path
         if FileManager.default.fileExists(atPath: updated) { return updated }
         if let bundled = bundledBinariesDir?.appendingPathComponent("ffmpeg").path,
@@ -134,7 +135,7 @@ class DownloadManager: ObservableObject {
     // internally falls back to a full re-extraction automatically
     // (ReExtractInfo) if a cached format URL has since expired, so a stale
     // or missing cache is never a hard failure -- just a lost speedup.
-    private var analyzeCacheDir: URL {
+    private nonisolated var analyzeCacheDir: URL {
         let dir = supportDir.appendingPathComponent("analyze-cache", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
@@ -143,7 +144,7 @@ class DownloadManager: ObservableObject {
     // Cache is only trusted for this long -- belt-and-suspenders on top of
     // yt-dlp's own expired-URL fallback, so a week-old cache file left over
     // from a previous run never even gets attempted.
-    private static let analyzeCacheTTL: TimeInterval = 30 * 60  // 30 minutes
+    private nonisolated static let analyzeCacheTTL: TimeInterval = 30 * 60  // 30 minutes
 
     /// Deterministic cache basename for a given source URL -- same URL
     /// always maps to the same path, so re-analyzing overwrites cleanly.
@@ -156,13 +157,13 @@ class DownloadManager: ObservableObject {
     /// to info.json regardless of the template passed in) -- passing an
     /// already-suffixed ".info.json" template here would produce a
     /// double-suffixed "<hash>.info.json.info.json" file on disk instead.
-    private func analyzeCacheBasePath(for url: String) -> URL {
+    private nonisolated func analyzeCacheBasePath(for url: String) -> URL {
         let digest = SHA256.hash(data: Data(url.utf8))
         let hash = digest.map { String(format: "%02x", $0) }.joined()
         return analyzeCacheDir.appendingPathComponent(hash)
     }
 
-    private func analyzeCacheInfoJSONPath(for url: String) -> URL {
+    private nonisolated func analyzeCacheInfoJSONPath(for url: String) -> URL {
         // String-concatenated rather than appendingPathExtension("info.json") --
         // appendingPathExtension treats its argument as a single extension and
         // its behavior with an embedded dot is not something to rely on
@@ -173,14 +174,14 @@ class DownloadManager: ObservableObject {
 
     /// The -o template to pass to yt-dlp's --write-info-json at analyze
     /// time. yt-dlp appends ".info.json" itself -- see note above.
-    func cachedInfoJSONWritePath(for url: String) -> String {
+    nonisolated func cachedInfoJSONWritePath(for url: String) -> String {
         analyzeCacheBasePath(for: url).path
     }
 
     /// Returns the cached info-json path for this URL if it exists and is
     /// still within the trust window, else nil. Callers should treat nil as
     /// "no cache, use the normal URL-based path" -- never a hard error.
-    func cachedInfoJSONPath(for url: String) -> String? {
+    nonisolated func cachedInfoJSONPath(for url: String) -> String? {
         let path = analyzeCacheInfoJSONPath(for: url)
         let fm = FileManager.default
         guard fm.fileExists(atPath: path.path),
@@ -286,18 +287,23 @@ class DownloadManager: ObservableObject {
         updatingFFmpeg = true
         ytdlpDownloadProgress = 0
         ffmpegDownloadProgress = 0
-        var tick = 0
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
-            tick += 1
-            // Different rates so the two bars visibly diverge, like two
-            // independent real downloads would.
-            self.ytdlpDownloadProgress = min(1, Double(tick) * 0.045)
-            self.ffmpegDownloadProgress = min(1, Double(tick) * 0.03)
-            if self.ffmpegDownloadProgress >= 1 {
-                timer.invalidate()
-                self.updatingYtdlp = false
-                self.updatingFFmpeg = false
-                self.toolsReady = true
+        // A task on the main actor ticking every 0.1s (it used to be a Timer, whose closure the
+        // compiler can't see runs on the main thread).
+        Task { @MainActor in
+            var tick = 0
+            while true {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                tick += 1
+                // Different rates so the two bars visibly diverge, like two
+                // independent real downloads would.
+                ytdlpDownloadProgress = min(1, Double(tick) * 0.045)
+                ffmpegDownloadProgress = min(1, Double(tick) * 0.03)
+                if ffmpegDownloadProgress >= 1 {
+                    updatingYtdlp = false
+                    updatingFFmpeg = false
+                    toolsReady = true
+                    break
+                }
             }
         }
     }
@@ -611,7 +617,7 @@ class DownloadManager: ObservableObject {
     /// release pipeline stamps a number, so the running build is a dev build
     /// unless this says otherwise. Dev builds also default CURRENT_PROJECT_VERSION
     /// high (999999), so Sparkle never sees a published release as newer than them.
-    static func isReleaseVersion(_ version: String) -> Bool {
+    nonisolated static func isReleaseVersion(_ version: String) -> Bool {
         version.range(of: #"^\d+(\.\d+)+$"#, options: .regularExpression) != nil
     }
 
@@ -638,6 +644,7 @@ class DownloadManager: ObservableObject {
     // every published flag the UI reads (isActivelyChecking,
     // hasActionableUpdate, justConfirmedUpToDate) now lives directly on it
     // instead of being split across two independently-notified objects.
+    @MainActor
     final class DropUpdater: NSObject, ObservableObject {
         // DropCustomUserDriver is @MainActor (required -- Sparkle's
         // SPUUserDriver protocol itself is annotated NS_SWIFT_UI_ACTOR), but
@@ -646,7 +653,7 @@ class DownloadManager: ObservableObject {
         // thread in practice (as a SwiftUI @StateObject). assumeIsolated
         // bridges that gap without cascading @MainActor up through
         // DownloadManager, which is used from background threads elsewhere.
-        let userDriver = MainActor.assumeIsolated { DropCustomUserDriver() }
+        let userDriver = DropCustomUserDriver()
         private var updater: SPUUpdater!
 
         // Started immediately (not lazy/deferred) so Sparkle's own scheduled
@@ -998,7 +1005,7 @@ class DownloadManager: ObservableObject {
     /// first "WxH" resolution pair on a Video: line. No bundled ffprobe
     /// exists in Drop, so this reuses the ffmpeg binary already required
     /// for every conversion instead of shipping a second tool.
-    private func actualVideoHeight(atPath path: String, ffmpegPath: String) -> Int? {
+    private nonisolated func actualVideoHeight(atPath path: String, ffmpegPath: String) -> Int? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: ffmpegPath)
         p.arguments = ["-hide_banner", "-i", path]
@@ -1025,7 +1032,7 @@ class DownloadManager: ObservableObject {
 
     /// Same probe as actualVideoHeight, reading the codec name instead of the resolution off
     /// ffmpeg's own "Video: <codec> (...)" banner line (e.g. "vp9", "av1", "h264").
-    private func actualVideoCodec(atPath path: String, ffmpegPath: String) -> String? {
+    private nonisolated func actualVideoCodec(atPath path: String, ffmpegPath: String) -> String? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: ffmpegPath)
         p.arguments = ["-hide_banner", "-i", path]
@@ -1048,7 +1055,7 @@ class DownloadManager: ObservableObject {
     /// Parses ffmpeg's own "Duration: HH:MM:SS.ms" banner line, the same probe pattern as
     /// actualVideoHeight/actualVideoCodec. Used by reencodeIfNeeded to size a bitrate
     /// target off the source file instead of guessing a flat number.
-    private func probeDurationSeconds(atPath path: String, ffmpegPath: String) -> Double? {
+    private nonisolated func probeDurationSeconds(atPath path: String, ffmpegPath: String) -> Double? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: ffmpegPath)
         p.arguments = ["-hide_banner", "-i", path]
@@ -1083,7 +1090,7 @@ class DownloadManager: ObservableObject {
     /// deleting the intermediate. Returns the resulting file's path if a re-encode happened
     /// (which may differ from `path` when finalExtension changed it), nil if none was
     /// needed/possible (the caller re-measures file size either way, from whichever path is current).
-    private func reencodeIfNeeded(atPath path: String, ffmpegPath: String, finalExtension: String, targetCodec: ReencodeCodec, downloadID: UUID) -> String? {
+    private nonisolated func reencodeIfNeeded(atPath path: String, ffmpegPath: String, finalExtension: String, targetCodec: ReencodeCodec, downloadID: UUID) -> String? {
         guard let sourceCodec = actualVideoCodec(atPath: path, ffmpegPath: ffmpegPath),
               sourceCodec == "av1" || sourceCodec == "vp9" else { return nil }
         // .off genuinely means "don't touch it" when the file is already sitting in its real
@@ -1099,9 +1106,9 @@ class DownloadManager: ObservableObject {
         guard targetCodec != .off || finalExtension != (path as NSString).pathExtension else { return nil }
         let effectiveCodec = targetCodec == .off ? .h264 : targetCodec
         if targetCodec == .off {
-            appendLog("⚠ Off isn't possible for a MOV source -- .mov can't hold \(sourceCodec.uppercased()) at all, re-encoding to \(effectiveCodec.label) instead.")
+            logFromBackground("⚠ Off isn't possible for a MOV source -- .mov can't hold \(sourceCodec.uppercased()) at all, re-encoding to \(effectiveCodec.label) instead.")
         }
-        appendLog("⚠ Source had no \(effectiveCodec.label) stream at this resolution (got \(sourceCodec.uppercased())) — re-encoding for Preview/QuickTime compatibility…")
+        logFromBackground("⚠ Source had no \(effectiveCodec.label) stream at this resolution (got \(sourceCodec.uppercased())) — re-encoding for Preview/QuickTime compatibility…")
         let finalPath = (path as NSString).deletingPathExtension + ".\(finalExtension)"
         let tempPath = (path as NSString).deletingPathExtension + ".reencode.\(finalExtension)"
 
@@ -1201,12 +1208,12 @@ class DownloadManager: ObservableObject {
         progressThread.start()
 
         do { try p.run() } catch {
-            appendLog("❌ Re-encode failed to start: \(error.localizedDescription) — keeping the original \(sourceCodec.uppercased()) file.")
+            logFromBackground("❌ Re-encode failed to start: \(error.localizedDescription) — keeping the original \(sourceCodec.uppercased()) file.")
             return nil
         }
         p.waitUntilExit()
         guard p.terminationStatus == 0, FileManager.default.fileExists(atPath: tempPath) else {
-            appendLog("❌ Re-encode to \(effectiveCodec.label) failed — keeping the original \(sourceCodec.uppercased()) file.")
+            logFromBackground("❌ Re-encode to \(effectiveCodec.label) failed — keeping the original \(sourceCodec.uppercased()) file.")
             try? FileManager.default.removeItem(atPath: tempPath)
             return nil
         }
@@ -1214,11 +1221,11 @@ class DownloadManager: ObservableObject {
             try FileManager.default.removeItem(atPath: path)
             try FileManager.default.moveItem(atPath: tempPath, toPath: finalPath)
         } catch {
-            appendLog("❌ Couldn't replace the original file after re-encoding: \(error.localizedDescription)")
+            logFromBackground("❌ Couldn't replace the original file after re-encoding: \(error.localizedDescription)")
             try? FileManager.default.removeItem(atPath: tempPath)
             return nil
         }
-        appendLog("✓ Re-encoded to \(effectiveCodec.label).")
+        logFromBackground("✓ Re-encoded to \(effectiveCodec.label).")
         return finalPath
     }
 
@@ -1313,7 +1320,7 @@ class DownloadManager: ObservableObject {
             }
             if !fm.isWritableFile(atPath: outputDir) {
                 // Try to fix permissions automatically with chmod before giving up
-                self.appendLog("⚠ Folder not writable, attempting chmod u+w...")
+                self.logFromBackground("⚠ Folder not writable, attempting chmod u+w...")
                 let chmod = Process()
                 chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
                 chmod.arguments = ["u+w", outputDir]
@@ -1333,7 +1340,7 @@ class DownloadManager: ObservableObject {
                     }
                     return
                 }
-                self.appendLog("✓ Fixed folder permissions, continuing download.")
+                self.logFromBackground("✓ Fixed folder permissions, continuing download.")
             }
             DispatchQueue.main.async {
                 self.withDownload(downloadID) {
@@ -1464,7 +1471,7 @@ class DownloadManager: ObservableObject {
                             resolvedName = self.uniqueBaseName(out, in: outputDir)
                         }
                     } catch {
-                        self.appendLog("ERROR: filename resolution failed to launch — \(error.localizedDescription)")
+                        self.logFromBackground("ERROR: filename resolution failed to launch — \(error.localizedDescription)")
                     }
                 }
             }
@@ -1643,9 +1650,9 @@ class DownloadManager: ObservableObject {
                 }
                 if let b = best {
                     confirmedPath = b.path
-                    self.appendLog("✓ Saved to: \(b.path)")
+                    self.logFromBackground("✓ Saved to: \(b.path)")
                 } else {
-                    self.appendLog("❌ File not found in \(outputDir) after download.")
+                    self.logFromBackground("❌ File not found in \(outputDir) after download.")
                 }
 
                 // MP4/MOV only -- MKV/WebM hold AV1/VP9 natively, no compatibility issue to fix.
@@ -1660,7 +1667,7 @@ class DownloadManager: ObservableObject {
                    let reencodedPath = self.reencodeIfNeeded(atPath: path, ffmpegPath: ffmpeg, finalExtension: videoFormat.rawValue, targetCodec: reencodeCodec, downloadID: downloadID) {
                     confirmedPath = reencodedPath
                     if reencodedPath != path {
-                        self.appendLog("✓ Saved to: \(reencodedPath)")
+                        self.logFromBackground("✓ Saved to: \(reencodedPath)")
                     }
                 }
 
@@ -1682,7 +1689,7 @@ class DownloadManager: ObservableObject {
                 if mediaMode == .videoAndAudio, let path = confirmedPath, let ffmpeg = self.ffmpegPath {
                     actualHeight = self.actualVideoHeight(atPath: path, ffmpegPath: ffmpeg)
                     if let h = actualHeight, h < videoQuality.maxHeight {
-                        self.appendLog("⚠ Requested \(videoQuality.label) but source only delivered \(h)p -- history will reflect the actual resolution.")
+                        self.logFromBackground("⚠ Requested \(videoQuality.label) but source only delivered \(h)p -- history will reflect the actual resolution.")
                     }
                 }
 
@@ -1884,7 +1891,7 @@ class DownloadManager: ObservableObject {
     /// Given a base filename (no extension) and a directory, returns a name guaranteed
     /// not to collide with any existing file of any media extension in that directory —
     /// appending " (2)", " (3)", etc. as needed. Mirrors the old uniqueDestPath behavior.
-    private func uniqueBaseName(_ base: String, in dir: String) -> String {
+    private nonisolated func uniqueBaseName(_ base: String, in dir: String) -> String {
         let fm = FileManager.default
         let mediaExts = Self.mediaExtensions
         func exists(_ name: String) -> Bool {
@@ -1932,6 +1939,12 @@ class DownloadManager: ObservableObject {
     /// DropLogger's on-disk file is unaffected either way: every call is written there in full,
     /// so the exportable log keeps complete fidelity for troubleshooting even when the in-app
     /// list coalesces.
+    /// appendLog for code running on a background thread: the log is main-thread state, so the line
+    /// is handed over to the main thread (in the order it was sent) instead of being written from here.
+    nonisolated func logFromBackground(_ line: String, progressSourceID: String? = nil) {
+        DispatchQueue.main.async { self.appendLog(line, progressSourceID: progressSourceID) }
+    }
+
     func appendLog(_ line: String, progressSourceID: String? = nil) {
         let ts = DownloadManager.logTimestampFormatter.string(from: Date())
         let entry = "[\(ts)] \(line)"
@@ -1949,7 +1962,7 @@ class DownloadManager: ObservableObject {
     /// look brew/most CLI installers use: "█████████░░░░░░░░░░░ 47%".
     /// Fixed width so the bar doesn't jitter the log line length as the
     /// percentage changes.
-    static func unicodeProgressBar(fraction: Double, width: Int = 24) -> String {
+    nonisolated static func unicodeProgressBar(fraction: Double, width: Int = 24) -> String {
         let clamped = min(max(fraction, 0.0), 1.0)
         let filledCount = Int((clamped * Double(width)).rounded())
         let filled = String(repeating: "█", count: filledCount)

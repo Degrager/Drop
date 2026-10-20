@@ -302,10 +302,11 @@ struct ConvertMediaInfo {
 
 enum ConvertJobStatus { case queued, converting, done, failed, cancelled }
 
+@MainActor
 class ConvertJob: ObservableObject, Identifiable {
     /// Formats a remaining-seconds countdown as "Ns" or "Nm Ss", matching the
     /// plain style yt-dlp's own ETA strings use on the Download tab.
-    static func formatETA(_ seconds: Double) -> String {
+    nonisolated static func formatETA(_ seconds: Double) -> String {
         let total = Int(seconds.rounded())
         if total < 60 { return "\(total)s" }
         let m = total / 60
@@ -2244,16 +2245,21 @@ struct ConvertView: View {
             queueScrollProxy?.scrollTo(job.id, anchor: .center)
         }
 
+        // Everything that reads the job's state is done here, on the main thread; the background
+        // work below only runs the process and reports back. The process is registered on the job
+        // right away, so a Cancel pressed before ffmpeg has started can still stop it.
+        let p = Process()
+        job.process = p
+        let args = job.ffmpegArgs(outputPath: output.path)
+        let totalDuration = job.mediaInfo?.durationSeconds
+
         DispatchQueue.global(qos: .userInitiated).async {
-            let p = Process()
-            job.process = p
             p.executableURL = URL(fileURLWithPath: ffmpeg)
             // -y: always overwrite, always run a fresh process. See ConvertJob.ffmpegArgs for
             // the actual audio/video stream logic (copy-vs-encode, bitrates, codec-specific
             // flags) -- pulled out as its own pure function so the Dev-only "reveal command"
             // button on the analyze card can show the exact command that would run here,
             // without a second implementation that could drift out of sync with this one.
-            let args = job.ffmpegArgs(outputPath: output.path)
             p.arguments = args
 
             DispatchQueue.main.async {
@@ -2264,7 +2270,6 @@ struct ConvertView: View {
             p.standardOutput = Pipe()
             p.standardError = errPipe
 
-            let totalDuration = job.mediaInfo?.durationSeconds
             errPipe.fileHandleForReading.readabilityHandler = { fh in
                 let data = fh.availableData
                 guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else { return }
@@ -2336,10 +2341,12 @@ struct ConvertView: View {
                         }
                     }
                 }
+                // Copies, so the main-thread block below doesn't share variables with this thread.
+                let shownText = friendly, shownFraction = fraction, shownETA = eta
                 DispatchQueue.main.async {
-                    job.progress = friendly
-                    if let fraction { job.progressFraction = fraction }
-                    if !eta.isEmpty { job.etaText = eta }
+                    job.progress = shownText
+                    if let shownFraction { job.progressFraction = shownFraction }
+                    if !shownETA.isEmpty { job.etaText = shownETA }
                 }
             }
 

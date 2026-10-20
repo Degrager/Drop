@@ -3232,7 +3232,7 @@ struct ContentView: View {
                     lp.analyzeError = "Blocked by source (HTTP 403) — this link can't be read, even with browser impersonation."
                     lp.analyzeErrorIsForbidden = true
                     preview = lp
-                    manager.appendLog("Analyze failed (blocked, HTTP 403): \(url)")
+                    manager.logFromBackground("Analyze failed (blocked, HTTP 403): \(url)")
                 } else if analyzeTimedOut {
                     // The watchdog killed a hung yt-dlp process -- distinct from every other
                     // empty-output case below so the card (and the Log tab) say what actually
@@ -3244,7 +3244,7 @@ struct ContentView: View {
                     )
                     lp.analyzeError = "Couldn't read this link — the request timed out."
                     preview = lp
-                    manager.appendLog("Analyze timed out after \(Int(Self.analyzeTimeoutSeconds))s: \(url)")
+                    manager.logFromBackground("Analyze timed out after \(Int(Self.analyzeTimeoutSeconds))s: \(url)")
                 } else {
                     // Empty output and not a detected 403 -- most commonly
                     // an unsupported/incompatible source (a syntactically
@@ -3275,7 +3275,7 @@ struct ContentView: View {
                         .split(separator: "\n")
                         .map { $0.trimmingCharacters(in: .whitespaces) }
                         .last { !$0.isEmpty } ?? "no stderr output"
-                    manager.appendLog("Analyze failed for \(url): \(stderrSummary)")
+                    manager.logFromBackground("Analyze failed for \(url): \(stderrSummary)")
                 }
                 lock.lock()
                 results.append((i, preview))

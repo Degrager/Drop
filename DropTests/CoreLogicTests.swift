@@ -168,6 +168,7 @@ final class HistoryEntryTests: XCTestCase {
     }
 }
 
+@MainActor
 final class ConvertCommandTests: XCTestCase {
     private let input = "/tmp/in.mp4", output = "/tmp/out.mp4"
 
@@ -227,6 +228,7 @@ final class ConvertCommandTests: XCTestCase {
 
 /// Convert must never write over a file that is already there: ffmpeg runs with -y, and Cancel deletes
 /// the run's own output, so a shared path meant a finished conversion could vanish.
+@MainActor
 final class ConvertOutputNamingTests: XCTestCase {
     private let dir = URL(fileURLWithPath: "/out")
 

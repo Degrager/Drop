@@ -367,3 +367,26 @@ final class YtDlpOutputUpdateTests: XCTestCase {
         XCTAssertNil(u.eta)
     }
 }
+
+// MARK: - Re-encode hint
+
+final class ReencodeHintTests: XCTestCase {
+    func testAV1AndVP9KeptInAnMP4GetTheHint() {
+        XCTAssertEqual(reencodeHint(sourceCodec: "AV1", format: .mp4, reencode: .off),
+                       "AV1 may not play in some media players. Re-encode to fix.")
+        XCTAssertEqual(reencodeHint(sourceCodec: "VP9", format: .mp4, reencode: .off),
+                       "VP9 may not play in some media players. Re-encode to fix.")
+    }
+
+    func testNoHintOnceAReencodeIsChosen() {
+        XCTAssertNil(reencodeHint(sourceCodec: "AV1", format: .mp4, reencode: .h264))
+        XCTAssertNil(reencodeHint(sourceCodec: "AV1", format: .mp4, reencode: .hevc))
+    }
+
+    func testNoHintWhereAReencodeIsNotTheFix() {
+        XCTAssertNil(reencodeHint(sourceCodec: "AV1", format: .mkv, reencode: .off))   // MKV/WebM hold AV1 on purpose
+        XCTAssertNil(reencodeHint(sourceCodec: "AV1", format: .webm, reencode: .off))
+        XCTAssertNil(reencodeHint(sourceCodec: "H264", format: .mp4, reencode: .off))  // plays everywhere
+        XCTAssertNil(reencodeHint(sourceCodec: nil, format: .mp4, reencode: .off))     // codec unknown / audio only
+    }
+}

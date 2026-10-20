@@ -198,6 +198,16 @@ func sourceResolutionLabel(_ height: Int) -> String? {
 /// Download's RESOLUTION picker and Convert's, so the same height always reads the same way in
 /// both places. "4K"/"2K" only where that nickname is unambiguous; 1080 and below use their
 /// well-known name alone.
+/// The short heads-up under a Download card's options when its video would be kept as AV1 or VP9
+/// inside an MP4: many media players can't open those, and a re-encode is the fix. nil when there
+/// is nothing to say -- a different codec, audio only, MKV/WebM (which are meant to hold them), or
+/// a re-encode already chosen. `reencode` is the EFFECTIVE choice (MOV can't honor Off).
+func reencodeHint(sourceCodec: String?, format: VideoFormat, reencode: ReencodeCodec) -> String? {
+    guard let codec = sourceCodec, codec == "AV1" || codec == "VP9",
+          format == .mp4 || format == .mov, reencode == .off else { return nil }
+    return "\(codec) may not play in some media players. Re-encode to fix."
+}
+
 func resolutionMarketingName(forMaxHeight height: Int) -> String? {
     switch height {
     case 2160: return "4K Ultra HD"

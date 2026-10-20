@@ -1995,6 +1995,17 @@ struct ContentView: View {
                 // needs one Equatable value, and a raw tuple of two Equatable enums isn't
                 // itself Equatable.
                 .animation(.easeOut(duration: 0.2), value: "\(p.mediaMode.rawValue)|\(p.audioFormat.rawValue)")
+                // A short note in the same small dim type as Convert's "N changed from source"
+                // line, only while the video would be kept as AV1/VP9 in an MP4.
+                if p.mediaMode != .audioOnly,
+                   let hint = reencodeHint(sourceCodec: p.sourceVideoCodec, format: p.videoFormat,
+                                           reencode: effectiveReencodeCodec(choice: p.reencodeCodec, default: config.reencodeCodec, videoFormat: p.videoFormat)) {
+                    Text(hint)
+                        .font(.appMono(size: 10.5))
+                        .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
+                        .reportsFacadeFieldShape(id: "download.reencodeHint.\(p.id)", kind: .text)
+                        .transition(.blurInTop)
+                }
             }
         }
     }
@@ -2110,6 +2121,9 @@ struct ContentView: View {
             SegmentOption(
                 id: c.rawValue, label: c.label, help: c.note,
                 isSelected: effective == c, tint: DesignTokens.Accent.primary,
+                // Off keeps the source as it is, so it names that codec the way Convert's
+                // "Same as Source" does.
+                subtext: c == .off ? p.sourceVideoCodec : nil,
                 // .off is the untouched/do-nothing choice, same role "Same as Source" plays
                 // on every other field -- without this the field was always blue regardless
                 // of selection, same bug as RESOLUTION's (see downloadVideoQualityOptions'

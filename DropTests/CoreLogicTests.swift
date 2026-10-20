@@ -270,8 +270,9 @@ final class ConvertOutputNamingTests: XCTestCase {
         XCTAssertNotEqual(first, second)
     }
 
-    /// The scenario that lost a file: convert, convert the same source again, cancel the second run.
-    func testCancellingASecondRunLeavesTheFirstFinishedFileAlone() throws {
+    /// The scenario that once lost a file: convert, convert the same source again, cancel the second
+    /// run. A run now writes into a work folder of its own, so cancelling removes only that folder.
+    func testCancellingARunRemovesItsWorkFolderAndLeavesFinishedFilesAlone() throws {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("drop-naming-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -281,14 +282,17 @@ final class ConvertOutputNamingTests: XCTestCase {
         try Data("finished first conversion".utf8).write(to: firstOutput)
 
         let second = ConvertJob(inputURL: source)
-        second.outputURL = ConvertJob.uniqueOutputURL(filename: second.outputFilename, in: tmp)
-        XCTAssertNotEqual(second.outputURL, firstOutput)
-        try Data("half-written".utf8).write(to: second.outputURL!)
+        let work = tmp.appendingPathComponent("work-folder")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("half-written".utf8).write(to: work.appendingPathComponent("Clip_converted.mp4"))
+        second.workDir = work
+        // Even a job whose target name is a finished file's must never delete it.
+        second.outputURL = firstOutput
 
         second.cancel()
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: firstOutput.path), "the first finished file must survive")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: second.outputURL!.path), "the cancelled run's own file is removed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: work.path), "the cancelled run's work folder is removed")
     }
 }
 
@@ -390,5 +394,75 @@ final class ReencodeHintTests: XCTestCase {
         XCTAssertNil(reencodeHint(sourceCodec: "AV1", format: .webm, reencode: .off))
         XCTAssertNil(reencodeHint(sourceCodec: "H264", format: .mp4, reencode: .off))  // plays everywhere
         XCTAssertNil(reencodeHint(sourceCodec: nil, format: .mp4, reencode: .off))     // codec unknown / audio only
+    }
+}
+
+// MARK: - Temporary files
+
+final class TemporaryFilesTests: XCTestCase {
+    private func makeFolder() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("drop-tmp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    func testEachDownloadGetsItsOwnFolderInsideTheAppSupportFolder() {
+        let a = UUID(), b = UUID()
+        XCTAssertNotEqual(DownloadManager.workDir(for: a), DownloadManager.workDir(for: b))
+        XCTAssertEqual(DownloadManager.workDir(for: a).deletingLastPathComponent(), DownloadManager.workRoot)
+        XCTAssertTrue(DownloadManager.workRoot.path.hasSuffix("Drop/tmp"))
+    }
+
+    func testRemovingAWorkFolderRemovesItsFilesAndLeavesOthersAlone() throws {
+        let a = UUID(), b = UUID()
+        for id in [a, b] {
+            try FileManager.default.createDirectory(at: DownloadManager.workDir(for: id), withIntermediateDirectories: true)
+            try Data("x".utf8).write(to: DownloadManager.workDir(for: id).appendingPathComponent("video.f616.mp4.part"))
+        }
+        defer { DownloadManager.removeWorkDir(for: a); DownloadManager.removeWorkDir(for: b) }
+        DownloadManager.removeWorkDir(for: a)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: DownloadManager.workDir(for: a).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: DownloadManager.workDir(for: b).appendingPathComponent("video.f616.mp4.part").path))
+    }
+
+    func testReencodedFileReplacesTheOriginalOfTheSameName() throws {
+        let out = try makeFolder(), work = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: out); try? FileManager.default.removeItem(at: work) }
+        let original = out.appendingPathComponent("clip.mp4"), temp = work.appendingPathComponent("clip.reencode.mp4")
+        try Data("original av1".utf8).write(to: original)
+        try Data("re-encoded h264".utf8).write(to: temp)
+
+        try DownloadManager.placeReencodedFile(tempPath: temp.path, originalPath: original.path, finalPath: original.path)
+
+        XCTAssertEqual(try String(contentsOf: original), "re-encoded h264")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: out.path), ["clip.mp4"], "nothing else is left in the output folder")
+    }
+
+    func testReencodedMovReplacesTheMp4IntermediateWithoutLosingIt() throws {
+        let out = try makeFolder(), work = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: out); try? FileManager.default.removeItem(at: work) }
+        let intermediate = out.appendingPathComponent("clip.mp4"), finalMov = out.appendingPathComponent("clip.mov")
+        let temp = work.appendingPathComponent("clip.reencode.mov")
+        try Data("original".utf8).write(to: intermediate)
+        try Data("re-encoded".utf8).write(to: temp)
+
+        try DownloadManager.placeReencodedFile(tempPath: temp.path, originalPath: intermediate.path, finalPath: finalMov.path)
+
+        XCTAssertEqual(try String(contentsOf: finalMov), "re-encoded")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: intermediate.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: out.path), ["clip.mov"])
+    }
+
+    func testAFailedMoveKeepsTheOriginal() throws {
+        let out = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: out) }
+        let original = out.appendingPathComponent("clip.mp4")
+        try Data("original".utf8).write(to: original)
+
+        XCTAssertThrowsError(try DownloadManager.placeReencodedFile(
+            tempPath: out.appendingPathComponent("does-not-exist.mov").path, originalPath: original.path,
+            finalPath: out.appendingPathComponent("clip.mov").path))
+        XCTAssertEqual(try String(contentsOf: original), "original", "the original must survive a failed re-encode swap")
     }
 }

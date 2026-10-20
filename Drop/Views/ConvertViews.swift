@@ -328,6 +328,8 @@ class ConvertJob: ObservableObject, Identifiable {
     /// on the right, mirroring Download's activityText/etaText split.
     @Published var etaText: String = ""
     @Published var outputURL: URL? = nil
+    /// Where ffmpeg is writing while a run is in progress (the finished file is moved to outputURL).
+    var workDir: URL? = nil
     /// Real on-disk size of the finished output, read once when the job
     /// completes (see runConversion) rather than on every render of its row.
     @Published var outputSizeLabel: String? = nil
@@ -395,11 +397,10 @@ class ConvertJob: ObservableObject, Identifiable {
         }
         status = .cancelled
         progress = "Cancelled"
-        // ffmpeg writes straight to the destination path as it encodes, so a
-        // cancelled run leaves a truncated, unplayable file behind unless we
-        // remove it here.
-        if let url = outputURL {
-            try? FileManager.default.removeItem(at: url)
+        // ffmpeg writes to a folder of its own while it encodes, so a cancelled run's
+        // truncated, unplayable file is removed along with it; nothing is in the output folder yet.
+        if let work = workDir {
+            try? FileManager.default.removeItem(at: work)
         }
     }
 
@@ -687,7 +688,7 @@ class ConvertJob: ObservableObject, Identifiable {
     /// numbers its files. ffmpeg runs with -y, so without this a second conversion of the same
     /// source (or of another file with the same name from a different folder) silently
     /// overwrote the first one's finished file, and cancelling it then deleted that file.
-    static func uniqueOutputURL(
+    nonisolated static func uniqueOutputURL(
         filename: String, in dir: URL,
         exists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
     ) -> URL {
@@ -2250,10 +2251,20 @@ struct ConvertView: View {
         // right away, so a Cancel pressed before ffmpeg has started can still stop it.
         let p = Process()
         job.process = p
-        let args = job.ffmpegArgs(outputPath: output.path)
+        // ffmpeg writes into a folder of its own inside the app's support folder, and the finished
+        // file is moved into the output folder at the end, so that folder never holds a half-written
+        // file.
+        let work = DownloadManager.workRoot.appendingPathComponent("convert-\(job.id.uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        job.workDir = work
+        let tempOutput = work.appendingPathComponent(output.lastPathComponent)
+        let wantedName = job.outputFilename
+        let args = job.ffmpegArgs(outputPath: tempOutput.path)
         let totalDuration = job.mediaInfo?.durationSeconds
 
         DispatchQueue.global(qos: .userInitiated).async {
+            // Whatever the outcome, the temporary folder goes when this run is over.
+            defer { try? FileManager.default.removeItem(at: work) }
             p.executableURL = URL(fileURLWithPath: ffmpeg)
             // -y: always overwrite, always run a fresh process. See ConvertJob.ffmpegArgs for
             // the actual audio/video stream logic (copy-vs-encode, bitrates, codec-specific
@@ -2353,6 +2364,20 @@ struct ConvertView: View {
             do {
                 try p.run(); p.waitUntilExit()
                 errPipe.fileHandleForReading.readabilityHandler = nil
+                // A finished file is moved next to the others. The name is checked again, in case
+                // it was taken while this ran.
+                var finishedURL = output
+                var moveError: String? = nil
+                let wasCancelled = DispatchQueue.main.sync { job.status == .cancelled }
+                if p.terminationStatus == 0, !wasCancelled {
+                    if FileManager.default.fileExists(atPath: output.path) {
+                        finishedURL = ConvertJob.uniqueOutputURL(filename: wantedName, in: dir)
+                    }
+                    do { try FileManager.default.moveItem(at: tempOutput, to: finishedURL) }
+                    catch { moveError = error.localizedDescription }
+                }
+                let placedURL = finishedURL
+                let placeError = moveError
                 DispatchQueue.main.async {
                     // advanceQueue on the way out of every branch below
                     // (including this early return) so a cancelled job
@@ -2368,17 +2393,15 @@ struct ConvertView: View {
                         }
                         return
                     }
-                    let success = p.terminationStatus == 0
-                    // A failed run leaves a truncated file at `output`, same as a cancel does. It's
-                    // this run's own uniquely named file, so removing it can't touch anything else.
-                    if !success { try? FileManager.default.removeItem(at: output) }
+                    let success = p.terminationStatus == 0 && placeError == nil
+                    if success { job.outputURL = placedURL }
                     job.status = success ? .done : .failed
                     self.selectionVersion += 1
-                    job.progress = success ? "Done" : "Failed (exit \(p.terminationStatus))"
+                    job.progress = success ? "Done" : (placeError != nil ? "Couldn't save the file" : "Failed (exit \(p.terminationStatus))")
                     job.etaText = ""
-                    self.manager.appendLog(success ? "Convert: ✓ Done: \(output.lastPathComponent)" : "Convert: ERROR — \(job.inputURL.lastPathComponent) failed (exit \(p.terminationStatus))")
+                    self.manager.appendLog(success ? "Convert: ✓ Done: \(placedURL.lastPathComponent)" : "Convert: ERROR — \(job.inputURL.lastPathComponent) failed (exit \(p.terminationStatus))")
                     // Real output size, read from disk now that the file exists.
-                    let outputSizeString: String? = success ? ConvertJob.fileSizeLabel(at: output) : nil
+                    let outputSizeString: String? = success ? ConvertJob.fileSizeLabel(at: placedURL) : nil
                     job.outputSizeLabel = outputSizeString
                     // Codec/quality descriptor for the history chip — video gets codec + resolution,
                     // audio-only gets codec + bitrate. Falls back gracefully if info is unavailable.
@@ -2397,7 +2420,7 @@ struct ConvertView: View {
                     // reference, while `outputFilePath` points at the actual
                     // produced file so subtext/Reveal can target the real result.
                     let e = HistoryEntry(
-                        title: output.deletingPathExtension().lastPathComponent,
+                        title: placedURL.deletingPathExtension().lastPathComponent,
                         url: job.inputURL.path,
                         format: job.outputFormat.rawValue,  // use output format, not audio codec
                         quality: qualityDescriptor,
@@ -2408,12 +2431,12 @@ struct ConvertView: View {
                         mediaModeRaw: job.isVideoFile ? "video" : "audio",
                         thumbnailURL: "",
                         entryType: "conversion",
-                        outputFilePath: success ? output.path : job.inputURL.path,
+                        outputFilePath: success ? placedURL.path : job.inputURL.path,
                         audioCodecLabel: job.mediaMode != .videoOnly ? job.displayAudioCodec : ""
                     )
                     self.history.add(e)
                     if success {
-                        HistoryThumbnailer.generate(for: output) { fileURLString in
+                        HistoryThumbnailer.generate(for: placedURL) { fileURLString in
                             guard let fileURLString else { return }
                             DispatchQueue.main.async {
                                 self.history.updateThumbnail(id: e.id, thumbnailURL: fileURLString)

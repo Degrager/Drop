@@ -219,6 +219,9 @@ class DownloadManager: ObservableObject {
 
     /// Returns a unique file path in outputDir — appends (2), (3), … if needed.
     init() {
+        // Nothing is downloading yet, so anything left in the temporary folder is from a run that
+        // was interrupted.
+        try? FileManager.default.removeItem(at: Self.workRoot)
         // The only indication of what's actually running was yt-dlp/ffmpeg's own paths/update
         // status (reported live: "no indication of the Drop version in the log like there is for
         // yt-dlp and ffmpeg") -- useful on its own (a source build reads as "dev", distinguishing
@@ -874,6 +877,7 @@ class DownloadManager: ObservableObject {
             downloads[idx].status = .cancelled
             appendLog("Cancelled: \(downloads[idx].title)")
             Self.deletePartialFiles(baseName: downloads[idx].resolvedBaseName, in: downloads[idx].outputDir, log: { self.appendLog($0) })
+            Self.removeWorkDir(for: download.id)
         }
     }
 
@@ -893,7 +897,24 @@ class DownloadManager: ObservableObject {
         for download in running {
             appendLog("Stopped on quit: \(download.title)")
             Self.deletePartialFiles(baseName: download.resolvedBaseName, in: download.outputDir, log: { self.appendLog($0) })
+            Self.removeWorkDir(for: download.id)
         }
+    }
+
+    /// Where one download keeps its temporary files -- the .part and fragment files, the merge
+    /// step, a re-encode in progress -- until the finished file is moved into the output folder,
+    /// so that folder only ever shows the final file. Inside the app's own support folder, one
+    /// folder per download. Kept after a failure so a retry can pick up where it left off, and
+    /// emptied on success, cancel, quit and the next launch.
+    nonisolated static func workDir(for id: UUID) -> URL {
+        workRoot.appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+    nonisolated static var workRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Drop/tmp", isDirectory: true)
+    }
+    nonisolated static func removeWorkDir(for id: UUID) {
+        try? FileManager.default.removeItem(at: workDir(for: id))
     }
 
     /// Cancel kills yt-dlp/ffmpeg but doesn't remove whatever they'd already
@@ -1090,6 +1111,19 @@ class DownloadManager: ObservableObject {
     /// deleting the intermediate. Returns the resulting file's path if a re-encode happened
     /// (which may differ from `path` when finalExtension changed it), nil if none was
     /// needed/possible (the caller re-measures file size either way, from whichever path is current).
+    /// Puts a re-encoded file, which sits in the download's temporary folder (possibly on another
+    /// disk than the output folder), where the download is. The original is only removed once the
+    /// new file is safely in place: replaceItemAt swaps it in one step when the name is the same.
+    nonisolated static func placeReencodedFile(tempPath: String, originalPath: String, finalPath: String) throws {
+        let fm = FileManager.default
+        if finalPath == originalPath {
+            _ = try fm.replaceItemAt(URL(fileURLWithPath: originalPath), withItemAt: URL(fileURLWithPath: tempPath))
+        } else {
+            try fm.moveItem(atPath: tempPath, toPath: finalPath)
+            try? fm.removeItem(atPath: originalPath)
+        }
+    }
+
     private nonisolated func reencodeIfNeeded(atPath path: String, ffmpegPath: String, finalExtension: String, targetCodec: ReencodeCodec, downloadID: UUID) -> String? {
         guard let sourceCodec = actualVideoCodec(atPath: path, ffmpegPath: ffmpegPath),
               sourceCodec == "av1" || sourceCodec == "vp9" else { return nil }
@@ -1110,7 +1144,11 @@ class DownloadManager: ObservableObject {
         }
         logFromBackground("⚠ Source had no \(effectiveCodec.label) stream at this resolution (got \(sourceCodec.uppercased())) — re-encoding for Preview/QuickTime compatibility…")
         let finalPath = (path as NSString).deletingPathExtension + ".\(finalExtension)"
-        let tempPath = (path as NSString).deletingPathExtension + ".reencode.\(finalExtension)"
+        // The re-encode in progress lives in the download's temporary folder; only the finished
+        // file is moved next to the original.
+        let workFolder = Self.workDir(for: downloadID)
+        try? FileManager.default.createDirectory(at: workFolder, withIntermediateDirectories: true)
+        let tempPath = workFolder.appendingPathComponent(((path as NSString).lastPathComponent as NSString).deletingPathExtension + ".reencode.\(finalExtension)").path
 
         // Apple Silicon's dedicated encode hardware (guaranteed present since Drop ships
         // arm64-only) has no CRF/quality-value option for either codec -- -b:v is the only
@@ -1218,8 +1256,7 @@ class DownloadManager: ObservableObject {
             return nil
         }
         do {
-            try FileManager.default.removeItem(atPath: path)
-            try FileManager.default.moveItem(atPath: tempPath, toPath: finalPath)
+            try Self.placeReencodedFile(tempPath: tempPath, originalPath: path, finalPath: finalPath)
         } catch {
             logFromBackground("❌ Couldn't replace the original file after re-encoding: \(error.localizedDescription)")
             try? FileManager.default.removeItem(atPath: tempPath)
@@ -1477,6 +1514,9 @@ class DownloadManager: ObservableObject {
             }
             DispatchQueue.main.async { self.withDownload(downloadID) { $0.resolvedBaseName = resolvedName } }
 
+            let work = Self.workDir(for: downloadID)
+            try? FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+
             ytArgs += [
                 isPlaylist ? "--yes-playlist" : "--no-playlist",
                 "--embed-metadata",
@@ -1494,8 +1534,12 @@ class DownloadManager: ObservableObject {
                 "--extractor-retries", "3",
                 "--retry-sleep", "2",
                 "--file-access-retries", "3",
-                // Write directly to outputDir — no /tmp staging, no file scanner needed
-                "-o", "\(outputDir)/\(resolvedName).%(ext)s",
+                // Everything in progress goes to this download's own temporary folder; yt-dlp
+                // moves the finished file into the output folder at the very end. The -o template
+                // has to be relative for that: an absolute one overrides both paths.
+                "--paths", "temp:\(work.path)",
+                "--paths", "home:\(outputDir)",
+                "-o", "\(resolvedName).%(ext)s",
                 url
             ]
             proc.arguments = ytArgs
@@ -1579,6 +1623,7 @@ class DownloadManager: ObservableObject {
                 // pick up a file that finished just as Cancel landed and re-encode it. Hand straight
                 // to the completion below, which skips a cancelled row.
                 if DispatchQueue.main.sync(execute: { self.readDownload(downloadID) { $0.status } }) == .cancelled {
+                    Self.removeWorkDir(for: downloadID)
                     DispatchQueue.main.async { self.startNextPending(after: idx) }
                     return
                 }
@@ -1692,6 +1737,10 @@ class DownloadManager: ObservableObject {
                         self.logFromBackground("⚠ Requested \(videoQuality.label) but source only delivered \(h)p -- history will reflect the actual resolution.")
                     }
                 }
+
+                // The finished file is in the output folder, so whatever is left in the temporary
+                // folder is not needed. After a failure it is kept, for the retry to continue from.
+                if proc.terminationStatus == 0 { Self.removeWorkDir(for: downloadID) }
 
                 DispatchQueue.main.async {
                     let curStatus = self.readDownload(downloadID) { $0.status }

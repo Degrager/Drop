@@ -358,9 +358,24 @@ func dropAllLinesAreURLs(_ text: String) -> Bool {
         guard let url = URL(string: line),
               let scheme = url.scheme,
               (scheme == "http" || scheme == "https"),
-              url.host != nil else { return false }
+              let host = url.host, dropHostLooksReal(host) else { return false }
         return true
     }
+}
+
+/// Whether a URL's host could be a real address. Foundation's URL parsing is lenient: any text at
+/// all becomes a "host" once `https://` is put in front of it (Japanese words turn into a
+/// punycode name like `xn--q6jaa…`, a lone word like `foo` is a host), so "has a host" alone let
+/// ordinary text pass as a link. A real one has dots with a real top-level domain (`example.com`,
+/// `日本語.jp`, `xn--…`), or is `localhost` or an IP address.
+func dropHostLooksReal(_ host: String) -> Bool {
+    if host == "localhost" || host.contains(":") { return true }   // `:` -> an IPv6 literal
+    let name = host.hasSuffix(".") ? String(host.dropLast()) : host
+    let labels = name.split(separator: ".", omittingEmptySubsequences: false)
+    guard labels.count >= 2, labels.allSatisfy({ !$0.isEmpty }) else { return false }
+    if labels.count == 4, labels.allSatisfy({ Int($0).map { (0...255).contains($0) } ?? false }) { return true }   // IPv4
+    guard let tld = labels.last else { return false }
+    return tld.hasPrefix("xn--") || (tld.count >= 2 && tld.allSatisfy(\.isLetter))
 }
 
 // MARK: - App Tab

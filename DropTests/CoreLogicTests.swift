@@ -72,6 +72,28 @@ final class URLValidationTests: XCTestCase {
         XCTAssertFalse(dropAllLinesAreURLs("ftp://files.example.com/a"))
         XCTAssertFalse(dropAllLinesAreURLs("https://a.com/x\nnot a link"))
     }
+
+    /// Foundation turns any text into a host once `https://` is added, so ordinary words (a
+    /// Japanese sentence turns into a punycode name, a lone word is a host) used to pass.
+    func testOrdinaryTextIsNotALinkEvenWithoutSpaces() {
+        XCTAssertFalse(dropAllLinesAreURLs("さん、し、じゅうご、ご、じゅうに、じゅう、さんじゅう、"))
+        XCTAssertFalse(dropAllLinesAreURLs("foo"))
+        XCTAssertFalse(dropAllLinesAreURLs("hello"))
+        XCTAssertFalse(dropAllLinesAreURLs("https://notahost"))
+        XCTAssertFalse(dropAllLinesAreURLs("version 1.5"))
+        XCTAssertFalse(dropAllLinesAreURLs("https://a.com/x\nさん、し"))
+    }
+
+    func testRealHostsStillPass() {
+        XCTAssertTrue(dropAllLinesAreURLs("youtube.com/watch?v=abc"))
+        XCTAssertTrue(dropAllLinesAreURLs("https://日本語.jp/ページ"))
+        XCTAssertTrue(dropAllLinesAreURLs("https://example.co.uk/a"))
+        XCTAssertTrue(dropAllLinesAreURLs("http://localhost:8000/a"))
+        XCTAssertTrue(dropAllLinesAreURLs("http://192.168.1.5:8000/a"))
+        XCTAssertTrue(dropAllLinesAreURLs("https://[::1]/x"))
+        XCTAssertTrue(dropAllLinesAreURLs("https://example.com./x"))
+        XCTAssertFalse(dropAllLinesAreURLs("https://999.1.1.1.1/x"))
+    }
 }
 
 final class StreamSizeEstimateTests: XCTestCase {

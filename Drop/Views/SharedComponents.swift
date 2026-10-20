@@ -1429,7 +1429,7 @@ extension ChipData {
         case "internaldrive": return "Size"
         case "video": return "Video"
         case "waveform": return "Audio"
-        case "video.badge.waveform": return "Video and Audio"
+        case "video.badge.waveform": return "Video + Audio"
         default: return nil
         }
     }

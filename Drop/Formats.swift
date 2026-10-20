@@ -27,10 +27,10 @@ enum AudioFormat: String, CaseIterable, Identifiable {
     }
     var note: String {
         switch self {
-        case .mp3:  return "Universal Compatibility"
-        case .m4a:  return "Not Good for DaVinci Resolve"
-        case .wav:  return "Best for DaVinci Resolve"
-        case .flac: return "Lossless, Large Files"
+        case .mp3:  return "MP3 (Universal Compatibility)"
+        case .m4a:  return "M4A (High Quality, Less Compatible)"
+        case .wav:  return "WAV (Highest Quality)"
+        case .flac: return "FLAC (Lossless)"
         }
     }
     /// True if this format is a direct stream copy from the source (no ffmpeg decode/encode pass).
@@ -125,10 +125,10 @@ enum VideoFormat: String, CaseIterable, Identifiable {
     var label: String { rawValue.uppercased() }
     var note: String {
         switch self {
-        case .mp4:  return "Universal Compatibility, QuickTime-Ready"
-        case .mov:  return "QuickTime, Final Cut Pro Native"
-        case .mkv:  return "Best Quality Container"
-        case .webm: return "Web Optimized"
+        case .mp4:  return "MP4 (Universal Compatibility)"
+        case .mov:  return "MOV (Quicktime)"
+        case .mkv:  return "MKV (Highest Quality)"
+        case .webm: return "WEBM (Web Optimized)"
         }
     }
     /// All containers here are stream remuxes, not re-encodes — video/audio codecs are untouched.
@@ -170,9 +170,9 @@ enum ReencodeCodec: String, CaseIterable, Identifiable {
     }
     var note: String {
         switch self {
-        case .h264: return "Fastest, Plays Everywhere"
-        case .hevc: return "Smaller File, Same Quality"
-        case .off:  return "Keep Original — May Not Open in Preview/QuickTime"
+        case .h264: return "H.264 (Fastest, Compatible)"
+        case .hevc: return "HEVC (Smaller File, Same Quality)"
+        case .off:  return "Off"
         }
     }
     var videotoolboxEncoder: String? {

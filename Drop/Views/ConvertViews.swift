@@ -1617,7 +1617,7 @@ struct ConvertView: View {
             .overlay(Capsule().stroke(Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .help("Choose Which Staged File to Review")
+        .help("Switch File")
         .anchorPreference(key: FileSwitcherPreferenceKey.self, value: .bounds) { anchor in
             guard isFileSwitcherOpen else { return nil }
             // Width/height are estimates for the host's own on-screen-keeping math

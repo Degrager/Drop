@@ -3799,7 +3799,7 @@ struct GlassButton: View {
 /// Tooltip and accessibility wording that more than one place shows.
 enum HelpText {
     /// yt-dlp / ffmpeg ship inside the app, so a missing one means a broken install.
-    static let toolsMissing = "Bundled yt-dlp or ffmpeg Is Missing — Reinstall Drop"
+    static let toolsMissing = "yt-dlp or ffmpeg Is Missing"
 }
 
 extension View {

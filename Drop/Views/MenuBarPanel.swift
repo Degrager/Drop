@@ -239,7 +239,7 @@ struct MenuBarQuickView: View {
         // Not `.disabled`: a disabled plain-style button fades its whole label,
         // glass included, to a grey slab (see FocusEffect).
         .allowsHitTesting(!inactive)
-        .accessibilityHint(inactive ? "Copy a link first" : "")
+        .accessibilityHint(inactive ? "Clipboard Empty" : "")
     }
 
     private var openButton: some View {

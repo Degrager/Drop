@@ -3,38 +3,31 @@
     <channel>
         <title>Drop</title>
         <item>
-            <title>1.6</title>
-            <pubDate>Thu, 15 Oct 2026 00:06:20 -0700</pubDate>
-            <sparkle:version>1.6</sparkle:version>
-            <sparkle:shortVersionString>1.6</sparkle:shortVersionString>
+            <title>1.7</title>
+            <pubDate>Tue, 10 Nov 2026 21:25:21 -0800</pubDate>
+            <sparkle:version>1.7</sparkle:version>
+            <sparkle:shortVersionString>1.7</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[Redesigned progress cards and logo, smarter History, better re-encode quality, and download and layout fixes
-
-## What's New
-- Download/Convert progress indicator is now a fixed-size status card
-- Updated the menu bar icon, popup, and sidebar to the app's drop logo
-- Added a button to refresh the clipboard preview on the Download tab
-- Added an analyze timeout and logging for analyze failures
-- Added a MISSING marker to History entries whose file was moved or deleted
-- Grouped repeated History entries into one row with a count and an expand toggle
-- Added a clear "not supported" message when Drop is opened on an Intel Mac
-- Added quality-tier subtext (4K Ultra HD, Full HD, etc) to the Download tab's resolution options
-- Added a re-encode indicator to Download's MOV option
+            <description><![CDATA[## What's New
+- Added Retry and Show in Log to links that could not be analyzed
+- Added a short note to Download options when an AV1 or VP9 video may not play in some media players
+- Added a frame rate option to Convert
+- Added the source video codec beside the Off option in Re-encode
 
 ## Changed
-- Improved re-encode quality with better VideoToolbox settings and a higher bitrate target
-- Bottom bar is now always visible
-- Removed Reveal in Finder from Download cards and Convert queue items
-- Improved tooltips and accessibility labels across the app
-- Matched the main top-bar button width across Download, Convert, and History
+- Improved downloads and conversions to keep their temporary files in the app's own folder, so the output folder only shows the finished file
+- Changed the wording of four tooltips and accessibility labels
+- Changed the wording of the format and re-encode tooltips
 
 ## Fixes
-- Fixed TikTok and other single-stream sources failing to download
-- Fixed the metadata VIDEO chip ignoring the re-encode selector
-- Fixed the window sometimes refusing to shrink back to its minimum height
-- Fixed failed downloads sometimes missing the last line of their error message
-- Fixed partial files being left in the download folder when quitting during a download]]></description>
-            <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.6/Drop-1.6.dmg" length="6780497" type="application/octet-stream" sparkle:edSignature="91oRFvAlFmF+7Q7qhQqUA6mpOg13n+XpqT/qopABPsuoPKEeporSPakejaig862cCc+mV7ENxUhj6olUp3x4Bg=="/>
+- Fixed Convert overwriting a finished file when the same file is converted again
+- Fixed failed conversions leaving a partial file in the output folder
+- Fixed plain text without spaces, such as Japanese words, being accepted as a link
+- Fixed a crash when adding a folder from the output folder picker
+- Fixed the resize placeholder not matching the status box, footer, legend and queue rows
+- Fixed the bottom bar sitting lower than the bottom of the sidebar
+- Fixed the log showing a "File not found" error after cancelling a download]]></description>
+            <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.7/Drop-1.7.dmg" length="6865848" type="application/octet-stream" sparkle:edSignature="MwmIl2g7XdZ8cESN+it/3YG4tSEQb4+ZYjs2c0Bxv5Uf0jMoJX1xbsWi6iDDUyKF2KJz1XEwi6t1oEqFSxP4BQ=="/>
         </item>
     </channel>
 </rss>

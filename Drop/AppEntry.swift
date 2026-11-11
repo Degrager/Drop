@@ -59,13 +59,18 @@ extension Notification.Name {
 // MARK: - App Delegate (enforces the screen-relative minimum window size)
 
 @MainActor
-class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+class DropAppDelegate: NSObject, NSApplicationDelegate {
     static var shared: DropAppDelegate!
     /// The status item, its panel and its right-click menu (MenuBarPanel.swift).
     private let menuBar = MenuBarController()
     /// Keeps titlebarSeparatorStyle pinned to .none -- see configureWindow's
     /// comment on why a one-time assignment doesn't hold.
     private var titlebarSeparatorObservation: NSKeyValueObservation?
+    private var resettingTitlebarSeparator = false
+    /// The window configureWindow last set up. A different one means SwiftUI made a new window
+    /// (the old one was closed and reopened from the Dock), which has none of the setup yet.
+    private weak var configuredWindow: NSWindow?
+    private var liveResizeObservers: [NSObjectProtocol] = []
 
     override init() {
         super.init()
@@ -119,15 +124,14 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // THIS launch. Closing the window (not quitting -- Drop stays alive via the
         // menu bar) and reopening it from the Dock hands WindowGroup a BRAND NEW
         // NSWindow that block never sees, so it kept none of the setup below --
-        // no delegate, so windowWillResize never fired, so minSize's own floor (which
-        // SwiftUI can silently rewrite smaller from its own content minimum, per
-        // applyMinimumSize's comment) had nothing enforcing it -- reported live as
-        // "closed the window and reopened it and it overrode the strict minimum
-        // window size." didBecomeKeyNotification fires for every window as it's
-        // first shown, launch's included, so `delegate !== self` (never yet
-        // configured) is what actually gates a fresh run here -- not "just
-        // reopened," since it must stay a no-op for the ordinary case of simply
-        // clicking back into the same, already-configured window.
+        // no minimum-size observers, so minSize's own floor (which SwiftUI can silently
+        // rewrite from its own content minimum, per applyMinimumSize's comment) had
+        // nothing enforcing it -- reported live as "closed the window and reopened it
+        // and it overrode the strict minimum window size." didBecomeKeyNotification
+        // fires for every window as it's first shown, launch's included, so
+        // `configuredWindow !== window` (never yet configured) is what actually gates
+        // a fresh run here -- not "just reopened," since it must stay a no-op for the
+        // ordinary case of simply clicking back into the same, already-configured window.
         NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
         ) { [weak self] note in
@@ -135,7 +139,7 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             nonisolated(unsafe) let note = note
             MainActor.assumeIsolated {
                 guard let self, let window = note.object as? NSWindow,
-                      !(window is NSPanel), window.delegate !== self else { return }
+                      !(window is NSPanel), window !== self.configuredWindow else { return }
                 self.configureWindow(window)
             }
         }
@@ -148,7 +152,13 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func configureWindow(_ window: NSWindow) {
-        window.delegate = self
+        // Deliberately NOT `window.delegate = self`: SwiftUI installs its own delegate on the
+        // window it creates, and replacing it -- even with a proxy that forwards to it --
+        // crashed the app inside macOS (HIServices) whenever the folder picker's New Folder
+        // prompt was created or cancelled. Live resize is observed through notifications and
+        // the minimum size through KVO (applyMinimumSize) instead.
+        configuredWindow = window
+        observeLiveResize(of: window)
         applyMinimumSize(to: window)
         applyLaunchSize(to: window)
         window.collectionBehavior = [.managed, .fullScreenPrimary]
@@ -193,11 +203,18 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // on the property itself snaps it back to .none every time AppKit
         // tries to reassert it, instead of fighting that per scroll event.
         window.titlebarSeparatorStyle = .none
-        titlebarSeparatorObservation = window.observe(\.titlebarSeparatorStyle, options: [.new]) { window, change in
+        titlebarSeparatorObservation = window.observe(\.titlebarSeparatorStyle, options: [.new]) { [weak self] window, change in
             // Window properties change on the main thread. (Compared as the style itself: a bare
             // `.none` here meant the Optional's own `.none`, so this fired on every change.)
             MainActor.assumeIsolated {
-                if change.newValue != NSTitlebarSeparatorStyle.none { window.titlebarSeparatorStyle = .none }
+                guard let self, change.newValue != NSTitlebarSeparatorStyle.none else { return }
+                // Setting the property from inside its own change notification notifies again; when
+                // AppKit puts the line style straight back (it does while a sheet opens or closes)
+                // that never ended -- a stack overflow, reproduced on quit. One reset at a time.
+                guard !self.resettingTitlebarSeparator else { return }
+                self.resettingTitlebarSeparator = true
+                window.titlebarSeparatorStyle = .none
+                self.resettingTitlebarSeparator = false
             }
         }
         window.isMovableByWindowBackground = true
@@ -236,9 +253,9 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var minSizeObservations: [NSKeyValueObservation] = []
 
-    /// The floor is `currentMinimumSize`, and nothing may raise it. (SwiftUI can also
-    /// rewrite the minimum DOWN to its content's, so windowWillResize below enforces the
-    /// same floor from the other side.) SwiftUI overwrites the
+    /// The floor is `currentMinimumSize`, and nothing may move it either way. (SwiftUI can
+    /// rewrite the minimum DOWN to its content's as well as up, and this used to leave the
+    /// downward case to a windowWillResize delegate method, which needed a window delegate.) SwiftUI overwrites the
     /// window's minimum with its own content minimum, and for a moment that is far above
     /// ours: with Convert showing, the file dialog opening (Browse) made it 293 x 1005. A
     /// dialog that was then cancelled never triggered another layout, so the window stayed
@@ -251,19 +268,13 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let capMinimum: @MainActor @Sendable (NSWindow) -> Void = { [weak self] window in
             guard let self else { return }
             let floor = self.currentMinimumSize
-            guard window.minSize.width > floor.width || window.minSize.height > floor.height else { return }
-            window.minSize = NSSize(width: min(window.minSize.width, floor.width),
-                                    height: min(window.minSize.height, floor.height))
+            guard window.minSize != floor else { return }
+            window.minSize = floor
         }
         minSizeObservations = [
             window.observe(\.minSize, options: [.new]) { window, _ in MainActor.assumeIsolated { capMinimum(window) } },
             window.observe(\.contentMinSize, options: [.new]) { window, _ in MainActor.assumeIsolated { capMinimum(window) } },
         ]
-    }
-
-    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        let minimum = currentMinimumSize
-        return NSSize(width: max(frameSize.width, minimum.width), height: max(frameSize.height, minimum.height))
     }
 
     /// Posted by ContentView when the user toggles the sidebar (see .dropSidebarCollapsedChanged).
@@ -284,24 +295,31 @@ class DropAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.setFrame(window.constrainFrameRect(frame, to: window.screen), display: true)
     }
 
-    // Fires once when the user releases a window-edge drag (not on every
-    // in-between resize tick, unlike windowWillResize above). ContentView uses
-    // this to defer recomputing its layout breakpoints (compact sidebar/height,
-    // content column width, chip wrapping) until the drag actually ends,
-    // instead of re-deciding all of them on every one of the dozens of frames
-    // a drag produces -- see settledWindowSize. Standard
-    // AppKit-recommended pattern for expensive live-resize content (Apple's
-    // "Cocoa Live Window Resizing" guide): let the raw frame track the mouse,
-    // defer real relayout to resize's end.
-    func windowDidEndLiveResize(_ notification: Notification) {
-        LiveResizeState.shared.set(false)
-        NotificationCenter.default.post(name: .dropLiveResizeEnded, object: nil)
+    /// Fires once when a window-edge drag starts and once when the user releases it (not on every
+    /// in-between resize tick). ContentView uses this to defer recomputing its layout breakpoints
+    /// (compact sidebar/height, content column width, chip wrapping) until the drag actually
+    /// ends, instead of re-deciding all of them on every one of the dozens of frames a drag
+    /// produces -- see settledWindowSize. Standard AppKit-recommended pattern for expensive
+    /// live-resize content (Apple's "Cocoa Live Window Resizing" guide): let the raw frame track
+    /// the mouse, defer real relayout to resize's end.
+    private func observeLiveResize(of window: NSWindow) {
+        liveResizeObservers.forEach(NotificationCenter.default.removeObserver)
+        liveResizeObservers = [
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willStartLiveResizeNotification, object: window, queue: .main
+            ) { _ in
+                MainActor.assumeIsolated { LiveResizeState.shared.set(true) }
+            },
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
+            ) { _ in
+                MainActor.assumeIsolated {
+                    LiveResizeState.shared.set(false)
+                    NotificationCenter.default.post(name: .dropLiveResizeEnded, object: nil)
+                }
+            },
+        ]
     }
-
-    func windowWillStartLiveResize(_ notification: Notification) {
-        LiveResizeState.shared.set(true)
-    }
-
 }
 
 /// The two sidebar collapse/expand animations, switchable from the View menu >

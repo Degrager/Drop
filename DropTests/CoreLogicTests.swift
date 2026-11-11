@@ -241,6 +241,21 @@ final class ConvertCommandTests: XCTestCase {
         XCTAssertEqual(j.ffmpegArgs(outputPath: output), ["-y", "-i", input, "-c:a", "copy", "-c:v", "copy", output])
     }
 
+    func testTheFrameRateSliderMapsNotchesToRates() {
+        let j = job(fps: 60)   // notches: Source, 50, 30, 25, 24, 15
+        XCTAssertEqual(j.frameRateStepIndex, 0)
+        j.chooseFrameRateStep(2)
+        XCTAssertEqual(j.chosenFrameRate, 30)
+        XCTAssertEqual(j.frameRateStepIndex, 2)
+        j.chooseFrameRateStep(5)
+        XCTAssertEqual(j.chosenFrameRate, 15)
+        j.chooseFrameRateStep(9)   // past the end: ignored
+        XCTAssertEqual(j.chosenFrameRate, 15)
+        j.chooseFrameRateStep(0)
+        XCTAssertNil(j.chosenFrameRate)
+        XCTAssertEqual(j.frameRateStepIndex, 0)
+    }
+
     func testFrameRateShowsOnTheOutputChipAndResetsWithTheRest() {
         let j = job(fps: 60)
         XCTAssertEqual(j.outputFrameRateLabel, "60.0fps")

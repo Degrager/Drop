@@ -2920,8 +2920,8 @@ struct DropdownField: View {
 }
 
 /// Same shell as DropdownField, but its menu is a SteppedSlider instead of a
-/// list -- for VIDEO BITRATE / AUDIO BITRATE, where "a handful of discrete
-/// options" is better shown as a slider than a scrolling list of numbers.
+/// list -- for VIDEO BITRATE / AUDIO BITRATE / FRAME RATE, where "a handful of
+/// discrete options" is better shown as a slider than a scrolling list of numbers.
 /// Stays open across a drag (unlike DropdownField, which closes the instant
 /// something is picked): a slider is something you settle into, not a single
 /// tap.
@@ -2931,6 +2931,8 @@ struct DropdownBitrateField: View {
     let steps: [SliderStep]
     let selected: Int
     let isChanged: Bool
+    /// The line under the slider: what the first step means.
+    var note: String = "Auto keeps the source's own quality target."
     @Binding var openID: String?
     let onSelect: (Int) -> Void
 
@@ -3005,7 +3007,7 @@ struct DropdownBitrateField: View {
         DropdownMenuChrome {
             VStack(alignment: .leading, spacing: 10) {
                 SteppedSlider(steps: steps, selected: selected, onSelect: onSelect)
-                Text("Auto keeps the source's own quality target.")
+                Text(note)
                     .font(.appMono(size: 9.5))
                     .foregroundColor(.white.opacity(DesignTokens.Text.disabled))
             }

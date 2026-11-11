@@ -564,6 +564,18 @@ class ConvertJob: ObservableObject, Identifiable {
         return chosen
     }
 
+    /// The FRAME RATE slider's selected notch: 0 is Source, then one per offered rate.
+    var frameRateStepIndex: Int {
+        guard let rate = scaledFrameRate, let index = availableFrameRates.firstIndex(of: rate) else { return 0 }
+        return index + 1
+    }
+
+    /// Moves the FRAME RATE slider to a notch (0 = Source). An index past the end is ignored.
+    func chooseFrameRateStep(_ index: Int) {
+        if index <= 0 { chosenFrameRate = nil }
+        else if index <= availableFrameRates.count { chosenFrameRate = availableFrameRates[index - 1] }
+    }
+
     /// ProRes is a profile, not a bitrate: it has nothing to choose.
     var supportsVideoBitrate: Bool { mediaMode.isVideo && videoCodec != .prores }
     var videoBitrateChoices: [Int] {
@@ -2883,34 +2895,36 @@ struct ConvertPreviewCard: View {
         return options
     }
 
-    /// FRAME RATE -- "Same as Source" (the source's own rate as its subtext) then the usual
-    /// rates below it. Like RESOLUTION, anything but "Same as Source" re-encodes the video.
-    private var frameRateOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledFrameRate == nil,
-                                     subtext: job.mediaInfo?.videoFrameRateLabel, isSourceDefault: true) {
-            withAnimation(.spring(response: 0.25)) { job.chosenFrameRate = nil }
-        }]
-        options += job.availableFrameRates.map { rate in
-            SegmentOption(id: "\(rate)", label: "\(rate) fps", isSelected: job.scaledFrameRate == rate, subtext: frameRateNote(rate)) {
-                withAnimation(.spring(response: 0.25)) { job.chosenFrameRate = rate }
-            }
+    /// The VIDEO track's fields, in order -- each only where it applies.
+    private var videoFields: [AnyView] {
+        var fields = [AnyView(DropdownField(id: "video.codec", caption: "CODEC", options: videoCodecOptions, openID: $openDropdownID))]
+        // Only offered when the source is bigger than a standard size to go down to.
+        if !job.availableResolutions.isEmpty {
+            fields.append(AnyView(DropdownField(id: "video.resolution", caption: "RESOLUTION", options: resolutionOptions, openID: $openDropdownID)))
         }
-        return options
+        // Only offered when the source runs faster than a standard rate to go down to.
+        if !job.availableFrameRates.isEmpty {
+            fields.append(AnyView(DropdownBitrateField(id: "video.framerate", caption: "FRAME RATE", steps: frameRateSteps, selected: job.frameRateStepIndex,
+                                                       isChanged: job.scaledFrameRate != nil, note: "Source keeps the source's own frame rate.",
+                                                       openID: $openDropdownID) { index in
+                job.chooseFrameRateStep(index)
+            }))
+        }
+        if job.supportsVideoBitrate {
+            fields.append(AnyView(DropdownBitrateField(id: "video.bitrate", caption: "BITRATE", steps: videoBitrateSteps, selected: videoBitrateSelection,
+                                                       isChanged: job.overridesVideoBitrate, openID: $openDropdownID) { index in
+                job.chosenVideoBitrateKbps = index == 0 ? nil : job.videoBitrateChoices[index - 1]
+            }))
+        }
+        return fields
     }
 
-    /// What a common frame rate is for, as an option's subtext.
-    private func frameRateNote(_ rate: Int) -> String? {
-        switch rate {
-        case 60: return "Smooth motion"
-        case 50: return "Smooth, PAL"
-        case 30: return "Standard"
-        case 25: return "PAL standard"
-        case 24: return "Cinema"
-        case 15: return "Smallest file"
-        default: return nil
-        }
+    /// FRAME RATE -- a stepped slider like the bitrates: Source (the source's own rate as its subtext)
+    /// then the usual rates below it. Like RESOLUTION, anything but Source re-encodes the video.
+    private var frameRateSteps: [SliderStep] {
+        [SliderStep(id: "source", label: "Source", subtext: job.mediaInfo?.videoFrameRateLabel)]
+            + job.availableFrameRates.map { SliderStep(id: "\($0)", label: "\($0) fps") }
     }
-
     /// VIDEO BITRATE -- a stepped slider: Auto (today's behaviour, the encoder's own quality target or
     /// the source untouched; the source's bitrate is its subtext) then the ladder for the output size.
     private var videoBitrateSteps: [SliderStep] {
@@ -3018,20 +3032,23 @@ struct ConvertPreviewCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if job.mediaMode.isVideo {
-                    FieldsTrackRow(icon: "video", label: "VIDEO", captionID: "video.caption") {
-                        DropdownField(id: "video.codec", caption: "CODEC", options: videoCodecOptions, openID: $openDropdownID)
-                        // Only offered when the source is bigger than a standard size to go down to.
-                        if !job.availableResolutions.isEmpty {
-                            DropdownField(id: "video.resolution", caption: "RESOLUTION", options: resolutionOptions, openID: $openDropdownID)
+                    // Two columns, so the audio row below lines up under them: CODEC and RESOLUTION on
+                    // the first line, FRAME RATE and BITRATE on the second. Four fields in one row left
+                    // "Same as Source" no room for its subtext.
+                    let fields = videoFields
+                    VStack(alignment: .leading, spacing: 12) {
+                        FieldsTrackRow(icon: "video", label: "VIDEO", captionID: "video.caption") {
+                            ForEach(Array(fields.prefix(2).enumerated()), id: \.offset) { $0.element }
                         }
-                        // Only offered when the source runs faster than a standard rate to go down to.
-                        if !job.availableFrameRates.isEmpty {
-                            DropdownField(id: "video.framerate", caption: "FRAME RATE", options: frameRateOptions, openID: $openDropdownID)
-                        }
-                        if job.supportsVideoBitrate {
-                            DropdownBitrateField(id: "video.bitrate", caption: "BITRATE", steps: videoBitrateSteps, selected: videoBitrateSelection,
-                                                  isChanged: job.overridesVideoBitrate, openID: $openDropdownID) { index in
-                                job.chosenVideoBitrateKbps = index == 0 ? nil : job.videoBitrateChoices[index - 1]
+                        if fields.count > 2 {
+                            HStack(alignment: .bottom, spacing: 10) {
+                                // The width of the VIDEO / AUDIO caption column, so the fields line up.
+                                Spacer(minLength: 0).frame(width: 60)
+                                ForEach(Array(fields.dropFirst(2).enumerated()), id: \.offset) { $0.element }
+                                // A lone field keeps its column's width instead of stretching across: the
+                                // placeholder takes an equal flexible share. (A Spacer claims far less than
+                                // a field does, and a Color with no height set grows tall.)
+                                if fields.count == 3 { Color.clear.frame(maxWidth: .infinity).frame(height: 0) }
                             }
                         }
                     }

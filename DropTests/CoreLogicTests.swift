@@ -197,6 +197,61 @@ final class ConvertCommandTests: XCTestCase {
         XCTAssertEqual(args[args.firstIndex(of: "-c:a")! + 1], "copy")
     }
 
+    /// A job like `job()` whose video runs at `fps`.
+    private func job(fps: Double) -> ConvertJob {
+        let j = job()
+        j.mediaInfo?.videoFrameRate = fps
+        j.mediaInfo?.videoFrameRateLabel = "\(fps)fps"
+        return j
+    }
+
+    func testFrameRateChoicesAreOnlyRatesBelowTheSource() {
+        XCTAssertEqual(job(fps: 60).availableFrameRates, [50, 30, 25, 24, 15])
+        XCTAssertEqual(job(fps: 59.94).availableFrameRates, [50, 30, 25, 24, 15])
+        // 30 is not slower than a 29.97 source, so only the lower ones are offered.
+        XCTAssertEqual(job(fps: 29.97).availableFrameRates, [25, 24, 15])
+        XCTAssertEqual(job(fps: 24).availableFrameRates, [15])
+        XCTAssertEqual(job(fps: 15).availableFrameRates, [])
+        XCTAssertEqual(job().availableFrameRates, [], "an unread frame rate offers nothing")
+    }
+
+    func testChoosingALowerFrameRateReEncodesTheVideoOnly() {
+        let j = job(fps: 60)
+        j.chosenFrameRate = 30
+        let args = j.ffmpegArgs(outputPath: output)
+        XCTAssertTrue(args.contains("libx264"))
+        XCTAssertEqual(args[args.firstIndex(of: "-vf")! + 1], "fps=30")
+        XCTAssertEqual(args[args.firstIndex(of: "-c:a")! + 1], "copy")
+    }
+
+    func testFrameRateAndResolutionShareOneFilterChain() {
+        let j = job(fps: 60)
+        j.chosenFrameRate = 30
+        j.chooseResolution(720)
+        let args = j.ffmpegArgs(outputPath: output)
+        XCTAssertEqual(args.filter { $0 == "-vf" }.count, 1)
+        XCTAssertEqual(args[args.firstIndex(of: "-vf")! + 1],
+                       "fps=30,scale=w='if(gt(iw,ih),-2,720)':h='if(gt(iw,ih),720,-2)':flags=lanczos")
+    }
+
+    func testAFrameRateAtOrAboveTheSourceIsIgnored() {
+        let j = job(fps: 30)
+        j.chosenFrameRate = 60
+        XCTAssertNil(j.scaledFrameRate)
+        XCTAssertEqual(j.ffmpegArgs(outputPath: output), ["-y", "-i", input, "-c:a", "copy", "-c:v", "copy", output])
+    }
+
+    func testFrameRateShowsOnTheOutputChipAndResetsWithTheRest() {
+        let j = job(fps: 60)
+        XCTAssertEqual(j.outputFrameRateLabel, "60.0fps")
+        j.chosenFrameRate = 24
+        XCTAssertEqual(j.outputFrameRateLabel, "24fps")
+        XCTAssertEqual(j.encodeSettingsChangedCount, 1)
+        j.resetEncodeSettingsToSource()
+        XCTAssertNil(j.chosenFrameRate)
+        XCTAssertEqual(j.encodeSettingsChangedCount, 0)
+    }
+
     func testVideoOnlyDropsAudio() {
         let j = job()
         j.mediaMode = .videoOnly

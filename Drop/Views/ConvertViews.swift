@@ -294,6 +294,7 @@ struct ConvertMediaInfo {
     var pixelHeight: Int? = nil
     var fileSizeBytes: Int? = nil  // raw source size, for stream-copy size estimation
     var videoFrameRateLabel: String? = nil  // e.g. "30fps", "29.97fps" -- from r_frame_rate
+    var videoFrameRate: Double? = nil       // the same rate as a number, for the FRAME RATE choices
     var audioBitrateKbps: Int? = nil        // from the audio stream's own bit_rate, or estimated -- see loadMediaInfo
     var videoBitrateKbps: Int? = nil        // from the video stream's own bit_rate, or estimated -- see loadMediaInfo
     var audioBitrateIsEstimated: Bool = false  // derived from the container total, not read directly -- "~" in the UI
@@ -352,6 +353,8 @@ class ConvertJob: ObservableObject, Identifiable {
     /// The video's SHORT side to scale it to (so a portrait clip reads the same as a landscape
     /// one: "720p" is 720 across the short edge). nil = "Same as Source", untouched.
     @Published var chosenResolution: Int? = nil
+    /// Frames per second to convert the video to. nil = "Same as Source", untouched.
+    @Published var chosenFrameRate: Int? = nil
     /// Target video bitrate in kbps. nil = Auto: the encoder's own quality target, or the source
     /// untouched while it is stream-copied.
     @Published var chosenVideoBitrateKbps: Int? = nil
@@ -538,6 +541,29 @@ class ConvertJob: ObservableObject, Identifiable {
         return chosen
     }
 
+    /// The source's own frame rate, when it was read.
+    var sourceFrameRate: Double? {
+        guard let fps = mediaInfo?.videoFrameRate, fps > 0 else { return nil }
+        return fps
+    }
+
+    /// Whether `rate` is a real reduction from the source: a rate at or above it (within half a
+    /// frame, so 30 does not count as slower than a 29.97 source) is never offered or applied --
+    /// adding frames only duplicates them.
+    private func isLower(_ rate: Int, than source: Double) -> Bool { Double(rate) < source - 0.5 }
+
+    /// The frame rates offered: the usual ones below the source's own.
+    var availableFrameRates: [Int] {
+        guard mediaMode.isVideo, let fps = sourceFrameRate else { return [] }
+        return [60, 50, 30, 25, 24, 15].filter { isLower($0, than: fps) }
+    }
+
+    /// The frame rate the video is converted to, or nil while it keeps the source's own.
+    var scaledFrameRate: Int? {
+        guard mediaMode.isVideo, let chosen = chosenFrameRate, let fps = sourceFrameRate, isLower(chosen, than: fps) else { return nil }
+        return chosen
+    }
+
     /// ProRes is a profile, not a bitrate: it has nothing to choose.
     var supportsVideoBitrate: Bool { mediaMode.isVideo && videoCodec != .prores }
     var videoBitrateChoices: [Int] {
@@ -549,11 +575,11 @@ class ConvertJob: ObservableObject, Identifiable {
     var overridesAudioBitrate: Bool { supportsAudioBitrate && chosenAudioBitrateKbps != nil }
 
     /// THE copy-or-encode rule. A track is stream-copied only when its codec already is the
-    /// source's AND nothing asked for a change to it: a smaller resolution or a bitrate cannot be
-    /// applied to a copy, so choosing one re-encodes the track (with the source's own codec while
+    /// source's AND nothing asked for a change to it: a smaller resolution, a lower frame rate or a
+    /// bitrate cannot be applied to a copy, so choosing one re-encodes the track (with the source's own codec while
     /// "Same as Source" is selected). Everything that estimates, describes or runs a conversion
     /// asks this, so they cannot disagree.
-    var encodesVideo: Bool { !videoCodecMatchesSource || scaledShortSide != nil || overridesVideoBitrate }
+    var encodesVideo: Bool { !videoCodecMatchesSource || scaledShortSide != nil || scaledFrameRate != nil || overridesVideoBitrate }
     var encodesAudio: Bool { !audioCodecMatchesSource || overridesAudioBitrate }
 
     /// The exact ffmpeg argument list runConversion would launch for this job's CURRENT
@@ -591,9 +617,13 @@ class ConvertJob: ObservableObject, Identifiable {
         if mediaMode.isVideo {
             let encodeVideo = encodesVideo
             args += ["-c:v", encodeVideo ? videoCodec.ffmpegCodec : "copy"]
+            // The frame rate first, so the (costlier) scaling only sees the frames that are kept.
+            var filters: [String] = []
+            if let rate = scaledFrameRate { filters.append("fps=\(rate)") }
             if let side = scaledShortSide {
-                args += ["-vf", "scale=w='if(gt(iw,ih),-2,\(side))':h='if(gt(iw,ih),\(side),-2)':flags=lanczos"]
+                filters.append("scale=w='if(gt(iw,ih),-2,\(side))':h='if(gt(iw,ih),\(side),-2)':flags=lanczos")
             }
+            if !filters.isEmpty { args += ["-vf", filters.joined(separator: ",")] }
             let videoKbps: Int? = (encodeVideo && overridesVideoBitrate) ? chosenVideoBitrateKbps : nil
             if let kbps = videoKbps { args += ["-b:v", "\(kbps)k"] }
             if encodeVideo && (videoCodec == .h264 || videoCodec == .h265) {
@@ -638,6 +668,11 @@ class ConvertJob: ObservableObject, Identifiable {
         return w >= h ? "\(even(Double(w) * scale / Double(h)))×\(side)" : "\(side)×\(even(Double(h) * scale / Double(w)))"
     }
 
+    /// "24fps" once converted to a lower rate, else the source's own.
+    var outputFrameRateLabel: String? {
+        scaledFrameRate.map { "\($0)fps" } ?? mediaInfo?.videoFrameRateLabel
+    }
+
     /// Set only when a bitrate was chosen: an Auto encode has no single figure to show.
     var videoBitrateLabel: String? {
         overridesVideoBitrate ? chosenVideoBitrateKbps.map { bitrateChoiceLabel($0, compact: true) } : nil
@@ -648,6 +683,7 @@ class ConvertJob: ObservableObject, Identifiable {
     func pruneChoices() {
         if let bitrate = chosenAudioBitrateKbps, !audioCodec.bitrateChoices.contains(bitrate) { chosenAudioBitrateKbps = nil }
         if let resolution = chosenResolution, let side = sourceShortSide, resolution >= side { chosenResolution = nil }
+        if let rate = chosenFrameRate, let fps = sourceFrameRate, !isLower(rate, than: fps) { chosenFrameRate = nil }
         if let bitrate = chosenVideoBitrateKbps, videoCodec == .prores || !videoBitrateChoices.contains(bitrate) { chosenVideoBitrateKbps = nil }
     }
 
@@ -657,13 +693,13 @@ class ConvertJob: ObservableObject, Identifiable {
         pruneChoices()
     }
 
-    /// How many of the five dropdown fields (video codec, resolution, video
+    /// How many of the six dropdown fields (video codec, resolution, frame rate, video
     /// bitrate, audio codec, audio bitrate) differ from Same as Source / Auto
     /// -- drives the analyze card's "N changed from source" note. CONVERT AS
     /// and OUTPUT FORMAT aren't counted: they pick what's IN the output, not
     /// how a kept track is encoded, so Reset (below) leaves them alone.
     var encodeSettingsChangedCount: Int {
-        [transcodeVideo, chosenResolution != nil, overridesVideoBitrate, transcodeAudio, overridesAudioBitrate]
+        [transcodeVideo, chosenResolution != nil, chosenFrameRate != nil, overridesVideoBitrate, transcodeAudio, overridesAudioBitrate]
             .filter { $0 }.count
     }
 
@@ -674,6 +710,7 @@ class ConvertJob: ObservableObject, Identifiable {
         useSameAsSourceForVideo()
         useSameAsSourceForAudio()
         chooseResolution(nil)
+        chosenFrameRate = nil
         chosenVideoBitrateKbps = nil
         chosenAudioBitrateKbps = nil
     }
@@ -781,6 +818,7 @@ class ConvertJob: ObservableObject, Identifiable {
                                         ? String(format: "%.0ffps", rounded)
                                         : String(format: "%.2ffps", rounded)
                                     info.videoFrameRateLabel = label
+                                    info.videoFrameRate = fps
                                 }
                             }
                         }
@@ -931,7 +969,7 @@ class ConvertJob: ObservableObject, Identifiable {
             } else if overridesVideoBitrate, let chosen = chosenVideoBitrateKbps {
                 totalKbps += Double(chosen)
             } else {
-                totalKbps += videoCodec.typicalMbpsAt1080p * 1000 * outputResolutionRatio(info)
+                totalKbps += videoCodec.typicalMbpsAt1080p * 1000 * outputResolutionRatio(info) * outputFrameRateRatio
             }
         }
         if mediaMode != .videoOnly {
@@ -952,6 +990,14 @@ class ConvertJob: ObservableObject, Identifiable {
         let w = info.pixelWidth ?? 1920
         let h = info.pixelHeight ?? 1080
         return max(Double(w * h) / Double(1920 * 1080), 0.1)
+    }
+
+    /// How much of the source's frames a lower frame rate keeps, as a size factor. Less than
+    /// proportional, because neighbouring frames compress against each other: halving the rate
+    /// does not halve the file. A rule of thumb like the rest of the estimate.
+    private var outputFrameRateRatio: Double {
+        guard let rate = scaledFrameRate, let fps = sourceFrameRate else { return 1 }
+        return pow(Double(rate) / fps, 0.75)
     }
 
     /// The same, for what will be written: the scaled size when the video is scaled.
@@ -1005,9 +1051,9 @@ class ConvertJob: ObservableObject, Identifiable {
         let size = status == .done ? (outputSizeLabel ?? estimatedOutputSizeLabel) : estimatedOutputSizeLabel
         if let length = ChipData.lengthAndSize(length: dur, size: size, reservesEstimateMark: true) { result.append(length) }
         if mediaMode != .audio {
-            // Frame rate and resolution are unchanged by conversion (Convert
-            // never retimes or resizes), so they carry over from the source.
-            result.append(ChipData.video([outputFormat.rawValue.uppercased(), displayVideoCodec, mediaInfo?.videoFrameRateLabel, outputResolutionLabel, videoBitrateLabel])
+            // Frame rate and resolution are the source's own unless FRAME RATE or RESOLUTION
+            // chose something lower.
+            result.append(ChipData.video([outputFormat.rawValue.uppercased(), displayVideoCodec, outputFrameRateLabel, outputResolutionLabel, videoBitrateLabel])
                           ?? .videoPlaceholder)
         }
         if mediaMode != .videoOnly {
@@ -2405,11 +2451,12 @@ struct ConvertView: View {
                     // audio-only gets codec + bitrate. Falls back gracefully if info is unavailable.
                     let qualityDescriptor: String = {
                         if job.mediaMode.isVideo {
-                            if let side = job.scaledShortSide { return "\(job.displayVideoCodec) · \(side)p" }
+                            let rate = job.scaledFrameRate.map { " · \($0)fps" } ?? ""
+                            if let side = job.scaledShortSide { return "\(job.displayVideoCodec) · \(side)p" + rate }
                             if let w = job.mediaInfo?.pixelWidth, let h = job.mediaInfo?.pixelHeight, w > 0, h > 0 {
-                                return "\(job.displayVideoCodec) · \(h)p"
+                                return "\(job.displayVideoCodec) · \(h)p" + rate
                             }
-                            return job.displayVideoCodec
+                            return job.displayVideoCodec + rate
                         } else {
                             return "\(job.displayAudioCodec) · \(job.plannedAudioKbps)kbps"
                         }
@@ -2836,6 +2883,34 @@ struct ConvertPreviewCard: View {
         return options
     }
 
+    /// FRAME RATE -- "Same as Source" (the source's own rate as its subtext) then the usual
+    /// rates below it. Like RESOLUTION, anything but "Same as Source" re-encodes the video.
+    private var frameRateOptions: [SegmentOption] {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledFrameRate == nil,
+                                     subtext: job.mediaInfo?.videoFrameRateLabel, isSourceDefault: true) {
+            withAnimation(.spring(response: 0.25)) { job.chosenFrameRate = nil }
+        }]
+        options += job.availableFrameRates.map { rate in
+            SegmentOption(id: "\(rate)", label: "\(rate) fps", isSelected: job.scaledFrameRate == rate, subtext: frameRateNote(rate)) {
+                withAnimation(.spring(response: 0.25)) { job.chosenFrameRate = rate }
+            }
+        }
+        return options
+    }
+
+    /// What a common frame rate is for, as an option's subtext.
+    private func frameRateNote(_ rate: Int) -> String? {
+        switch rate {
+        case 60: return "Smooth motion"
+        case 50: return "Smooth, PAL"
+        case 30: return "Standard"
+        case 25: return "PAL standard"
+        case 24: return "Cinema"
+        case 15: return "Smallest file"
+        default: return nil
+        }
+    }
+
     /// VIDEO BITRATE -- a stepped slider: Auto (today's behaviour, the encoder's own quality target or
     /// the source untouched; the source's bitrate is its subtext) then the ladder for the output size.
     private var videoBitrateSteps: [SliderStep] {
@@ -2949,6 +3024,10 @@ struct ConvertPreviewCard: View {
                         if !job.availableResolutions.isEmpty {
                             DropdownField(id: "video.resolution", caption: "RESOLUTION", options: resolutionOptions, openID: $openDropdownID)
                         }
+                        // Only offered when the source runs faster than a standard rate to go down to.
+                        if !job.availableFrameRates.isEmpty {
+                            DropdownField(id: "video.framerate", caption: "FRAME RATE", options: frameRateOptions, openID: $openDropdownID)
+                        }
                         if job.supportsVideoBitrate {
                             DropdownBitrateField(id: "video.bitrate", caption: "BITRATE", steps: videoBitrateSteps, selected: videoBitrateSelection,
                                                   isChanged: job.overridesVideoBitrate, openID: $openDropdownID) { index in
@@ -3030,11 +3109,10 @@ struct ConvertPreviewCard: View {
         }
 
         // Blue: format, codec, framerate, resolution. Framerate and resolution
-        // are unchanged by conversion (Convert never retimes or resizes), so
-        // they carry over from the source media info, matching the input row's
-        // video chip.
+        // are the source's own unless FRAME RATE or RESOLUTION chose something
+        // lower, matching the input row's video chip otherwise.
         if job.mediaMode.isVideo,
-           let video = ChipData.video([job.outputFormat.rawValue.uppercased(), job.displayVideoCodec, job.mediaInfo?.videoFrameRateLabel, job.mediaInfo?.resolution]) {
+           let video = ChipData.video([job.outputFormat.rawValue.uppercased(), job.displayVideoCodec, job.outputFrameRateLabel, job.outputResolutionLabel]) {
             chips.append(video)
         }
 

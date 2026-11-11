@@ -2213,6 +2213,10 @@ struct SegmentOption: Identifiable {
     /// just "Same as Source"), which would otherwise have made every resolution read as
     /// unchanged the moment it had explanatory text of its own.
     var isSourceDefault: Bool = false
+    /// What a DropdownField's closed state says instead of `label`, in the accent colour: "Source"
+    /// for "Same as Source", which left no room for the subtext beside it in a row of four fields.
+    /// The open menu still lists the full label.
+    var closedLabel: String? = nil
     let action: () -> Void
 }
 
@@ -2371,6 +2375,8 @@ private struct SegmentButton: View {
 struct SliderStep: Identifiable {
     let id: String
     let label: String
+    /// Draws the label in the accent colour in the field's closed state (the "Source" step).
+    var accentLabel: Bool = false
     /// Small text under the label (the source's own value, beside "Auto").
     var subtext: String? = nil
 }
@@ -2852,7 +2858,8 @@ struct DropdownField: View {
                 // instead of by baseline reads as the subtext floating above the
                 // text line instead of sitting on it (reported live).
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(selected?.label ?? "—")
+                    Text(selected?.closedLabel ?? selected?.label ?? "—")
+                        .foregroundColor(selected?.closedLabel != nil && !disabled ? DesignTokens.Accent.primaryLight : nil)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                     if let subtext = selected?.subtext {
@@ -2950,6 +2957,7 @@ struct DropdownBitrateField: View {
                 // .firstTextBaseline -- see DropdownField's identical fix.
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(chosen.label)
+                        .foregroundColor(chosen.accentLabel ? DesignTokens.Accent.primaryLight : nil)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                     if let subtext = chosen.subtext {

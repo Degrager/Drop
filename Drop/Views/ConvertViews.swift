@@ -2833,7 +2833,7 @@ struct ConvertPreviewCard: View {
     /// Lets you change only the audio (or only the video) on a clip without
     /// touching the other track.
     private var videoCodecOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeVideo, subtext: job.sourceVideoCodecLabel, isSourceDefault: true) {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeVideo, subtext: job.sourceVideoCodecLabel, isSourceDefault: true, closedLabel: "Source") {
             withAnimation(.spring(response: 0.25)) { job.useSameAsSourceForVideo() }
         }]
         options += job.availableVideoCodecs.filter(\.isOffered).map { codec in
@@ -2853,7 +2853,7 @@ struct ConvertPreviewCard: View {
     /// Same as Source vs. that one codec, and picking the format already implies
     /// the latter).
     private var audioCodecOptions: [SegmentOption] {
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeAudio, subtext: job.sourceAudioCodecLabel, isSourceDefault: true) {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: !job.transcodeAudio, subtext: job.sourceAudioCodecLabel, isSourceDefault: true, closedLabel: "Source") {
             withAnimation(.spring(response: 0.25)) { job.useSameAsSourceForAudio() }
         }]
         let codecs = job.availableAudioCodecs.filter(\.isOffered)
@@ -2884,7 +2884,7 @@ struct ConvertPreviewCard: View {
         // explicit options below always are), falling back to the raw dimension string only for
         // a source so small no common name applies.
         let sameAsSourceSubtext = job.sourceShortSide.flatMap(sourceResolutionMarketingName) ?? job.mediaInfo?.resolution
-        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledShortSide == nil, subtext: sameAsSourceSubtext, isSourceDefault: true) {
+        var options = [SegmentOption(id: "same", label: "Same as Source", isSelected: job.scaledShortSide == nil, subtext: sameAsSourceSubtext, isSourceDefault: true, closedLabel: "Source") {
             withAnimation(.spring(response: 0.25)) { job.chooseResolution(nil) }
         }]
         options += job.availableResolutions.map { side in
@@ -2922,7 +2922,7 @@ struct ConvertPreviewCard: View {
     /// FRAME RATE -- a stepped slider like the bitrates: Source (the source's own rate as its subtext)
     /// then the usual rates below it. Like RESOLUTION, anything but Source re-encodes the video.
     private var frameRateSteps: [SliderStep] {
-        [SliderStep(id: "source", label: "Source", subtext: job.mediaInfo?.videoFrameRateLabel)]
+        [SliderStep(id: "source", label: "Source", accentLabel: true, subtext: job.mediaInfo?.videoFrameRateLabel)]
             + job.availableFrameRates.map { SliderStep(id: "\($0)", label: "\($0) fps") }
     }
     /// VIDEO BITRATE -- a stepped slider: Auto (today's behaviour, the encoder's own quality target or
@@ -3032,25 +3032,8 @@ struct ConvertPreviewCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if job.mediaMode.isVideo {
-                    // Two columns, so the audio row below lines up under them: CODEC and RESOLUTION on
-                    // the first line, FRAME RATE and BITRATE on the second. Four fields in one row left
-                    // "Same as Source" no room for its subtext.
-                    let fields = videoFields
-                    VStack(alignment: .leading, spacing: 12) {
-                        FieldsTrackRow(icon: "video", label: "VIDEO", captionID: "video.caption") {
-                            ForEach(Array(fields.prefix(2).enumerated()), id: \.offset) { $0.element }
-                        }
-                        if fields.count > 2 {
-                            HStack(alignment: .bottom, spacing: 10) {
-                                // The width of the VIDEO / AUDIO caption column, so the fields line up.
-                                Spacer(minLength: 0).frame(width: 60)
-                                ForEach(Array(fields.dropFirst(2).enumerated()), id: \.offset) { $0.element }
-                                // A lone field keeps its column's width instead of stretching across: the
-                                // placeholder takes an equal flexible share. (A Spacer claims far less than
-                                // a field does, and a Color with no height set grows tall.)
-                                if fields.count == 3 { Color.clear.frame(maxWidth: .infinity).frame(height: 0) }
-                            }
-                        }
+                    FieldsTrackRow(icon: "video", label: "VIDEO", captionID: "video.caption") {
+                        ForEach(Array(videoFields.enumerated()), id: \.offset) { $0.element }
                     }
                     // Own transition -- without this, switching mediaMode (e.g. away
                     // from Video + Audio) to hide this row fell back to SwiftUI's

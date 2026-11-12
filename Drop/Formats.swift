@@ -508,12 +508,12 @@ enum SignInGate: Equatable {
     /// What the card says. `browser` is the cookie source already in use, if any: then the sign-in is
     /// there but YouTube still refused it, so the advice is to check the account, not to add cookies.
     func summary(usingBrowser browser: BrowserSource) -> String {
-        let what: String
-        switch self {
-        case .ageRestricted: what = "This video is age-restricted. YouTube only plays it for a signed-in account."
-        case .botCheck:      what = "YouTube is asking for a signed-in session before it will open this video."
+        switch (self, browser) {
+        case (.ageRestricted, .none): return "Age-restricted. YouTube only plays this for a signed-in account."
+        case (.botCheck, .none):      return "YouTube wants a signed-in session before it opens this video."
+        case (.ageRestricted, _):     return "Age-restricted. Sign in to YouTube in \(browser.label), then try again."
+        case (.botCheck, _):          return "YouTube wants a signed-in session. Sign in in \(browser.label), then try again."
         }
-        return browser == .none ? what : what + " Sign in to YouTube in \(browser.label) and try again."
     }
 }
 

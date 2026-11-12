@@ -1859,7 +1859,8 @@ struct ContentView: View {
                 withAnimation(.spring(response: 0.3)) { linkPreviews.removeAll { $0.id == p.id } }
             },
             showCheckbox: isBatchMode && !failedAnalyze,
-            thumbnail: failedAnalyze ? nil : thumbnailView(urlString: p.thumbnailURL),
+            // The failure is flagged in the capsule; the video's own thumbnail stays when it is known.
+            thumbnail: (failedAnalyze && p.thumbnailURL.isEmpty) ? nil : thumbnailView(urlString: p.thumbnailURL),
             thumbnailPlaceholder: failedAnalyze ? failureIcon : "doc",
             title: p.title,
             // The link and the path are only shown while the settings are (expanded).
@@ -2375,8 +2376,7 @@ struct ContentView: View {
         withAnimation(.spring(response: 0.35)) {
             linkPreviews[idx].analyzeError = nil
             linkPreviews[idx].analyzeErrorIsForbidden = false
-            linkPreviews[idx].analyzeFix = nil
-            linkPreviews[idx].title = p.url
+            linkPreviews[idx].analyzeFixes = []
             linkPreviews[idx].isPending = true
         }
         analyzeURL(urls: [p.url], ids: [p.id])
@@ -2401,21 +2401,20 @@ struct ContentView: View {
         }
         return AnyView(
             HStack(spacing: 8) {
-                switch p.analyzeFix {
-                case .signIn:
-                    let browser = BrowserSource.preferred()
-                    chip("person.crop.circle", "Sign in with \(browser.label)",
-                         help: "Reads your YouTube sign-in from \(browser.label) so Drop can open this video. macOS may ask for permission.") {
-                        config.browser = browser
-                        retryAnalysis(of: p)
+                ForEach(p.analyzeFixes, id: \.self) { fix in
+                    switch fix {
+                    case .signIn:
+                        let browser = BrowserSource.preferred()
+                        chip("person.crop.circle", "Sign in with \(browser.label)",
+                             help: "Reads your YouTube sign-in from \(browser.label) so Drop can open this video. macOS may ask for permission.") {
+                            config.browser = browser
+                            retryAnalysis(of: p)
+                        }
+                    case .openFullDiskAccess:
+                        chip("lock.open", "Open Full Disk Access", help: "Opens System Settings. Turn on Drop there, then reopen Drop.") {
+                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+                        }
                     }
-                case .dropCookies:
-                    chip("cookie", "Stop Using Cookies", help: "Go back to anonymous requests and try again.") {
-                        config.browser = .none
-                        retryAnalysis(of: p)
-                    }
-                case nil:
-                    EmptyView()
                 }
                 chip("terminal", "Show in Log", help: "Show in Log") {
                     withAnimation(.spring(response: 0.25)) { activeTab = .log }
@@ -2562,11 +2561,11 @@ struct ContentView: View {
         // instead of silently dropping the card.
         var analyzeError: String? = nil
         var analyzeErrorIsForbidden: Bool = false  // true specifically for HTTP 403 at analyze time
-        /// A one-click way out of the failure, shown beside Show in Log.
-        var analyzeFix: AnalyzeFix? = nil
+        /// One-click ways out of the failure, shown beside Show in Log.
+        var analyzeFixes: [AnalyzeFix] = []
         enum AnalyzeFix: Equatable {
-            case signIn       // age gate / "not a bot": read the YouTube sign-in from the preferred browser
-            case dropCookies  // the browser's cookies could not be read: stop using them
+            case signIn             // age gate / "not a bot": read the YouTube sign-in from the preferred browser
+            case openFullDiskAccess // Safari's cookies are protected: Drop needs Full Disk Access to read them
         }
         var isPlaylist: Bool = false      // true if URL is a playlist
         var playlistCount: Int = 0        // number of items in playlist
@@ -2758,6 +2757,15 @@ struct ContentView: View {
     /// call `didTimeOut()` to tell a genuine timeout apart from every other way an analyze
     /// attempt can end empty-handed (a clean yt-dlp failure, a 403, cancellation) -- those all
     /// reach the same "waitUntilExit returned" point, so only this flag says *why*.
+    /// All of yt-dlp's error output on one log line (a warning before the error is often the real
+    /// reason: a cookie file it could not read, say), bounded so one failure cannot flood the Log.
+    private nonisolated static func allStderrLines(_ stderr: String, limit: Int = 1500) -> String {
+        let lines = stderr.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return "no stderr output" }
+        let joined = lines.joined(separator: " | ")
+        return joined.count > limit ? String(joined.prefix(limit)) + "…" : joined
+    }
+
     private nonisolated func startAnalyzeTimeoutWatchdog(for proc: Process) -> (workItem: DispatchWorkItem, didTimeOut: @Sendable () -> Bool) {
         let timedOut = Locked(false)
         let workItem = DispatchWorkItem {
@@ -3010,6 +3018,9 @@ struct ContentView: View {
                 // Skipped once the primary attempt already timed out -- retrying the same
                 // network call that just stalled for analyzeTimeoutSeconds would most likely
                 // just stall again, doubling the wait before the card can show any result.
+                // Kept: the fallback below runs WITHOUT cookies (so a blocked cookie file cannot break
+                // ordinary videos) and its error replaces this one, which can hide the real reason.
+                let primaryStderr = lastStderr
                 if !analyzeTimedOut && (proc.terminationStatus != 0 || output.isEmpty) {
                     let proc2 = Process()
                     proc2.executableURL = URL(fileURLWithPath: ytdlp)
@@ -3074,7 +3085,8 @@ struct ContentView: View {
                 // both used to fall into the generic "source may not be supported" below, which
                 // sent a signed-out user round in circles. Each gets its own message and fix.
                 let signInGate = output.isEmpty ? SignInGate.detect(in: lastStderr) : nil
-                let cookiesBlocked = output.isEmpty && cookieBrowser != .none && ytdlpCookiesBlocked(lastStderr)
+                let cookiesBlocked = output.isEmpty && cookieBrowser != .none
+                    && (ytdlpCookiesBlocked(primaryStderr) || ytdlpCookiesBlocked(lastStderr))
 
                 var preview: LinkPreview? = nil
                 if !output.isEmpty {
@@ -3288,21 +3300,27 @@ struct ContentView: View {
                         hasVideo: false, duration: "",
                         mediaMode: .audioOnly
                     )
-                    if let gate = signInGate {
+                    // A sign-in that did not work must not stay switched on: with unreadable cookies
+                    // every later download would fail too. The chip below offers it again.
+                    if cookieBrowser != .none { DispatchQueue.main.async { self.config.browser = .none } }
+                    if cookiesBlocked {
+                        if cookieBrowser == .safari {
+                            lp.analyzeError = "Allow Drop in Full Disk Access to use Safari's sign-in, then reopen Drop."
+                            lp.analyzeFixes = [.openFullDiskAccess]
+                        } else {
+                            lp.analyzeError = "Couldn't read \(cookieBrowser.label)'s sign-in. macOS blocked its cookies."
+                            lp.analyzeFixes = [.signIn]
+                        }
+                    } else if let gate = signInGate {
                         // Without Drop's JavaScript runtime even a video that needs no account can look
                         // gated, so say that first: it may only be a download that has not finished.
                         lp.analyzeError = manager.denoPath == nil && cookieBrowser == .none
-                            ? "YouTube needs a helper Drop hasn't finished downloading. Try again in a moment."
+                            ? "Drop is still downloading a helper YouTube needs. Try again soon."
                             : gate.summary(usingBrowser: cookieBrowser)
-                        lp.analyzeFix = cookieBrowser == .none ? .signIn : nil
-                    } else {
-                        lp.analyzeError = "Couldn't read \(cookieBrowser.label)'s sign-in. macOS blocked access to its cookies."
-                        lp.analyzeFix = .dropCookies
+                        lp.analyzeFixes = [.signIn]
                     }
                     preview = lp
-                    let summary = lastStderr.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-                        .last { !$0.isEmpty } ?? "no stderr output"
-                    manager.logFromBackground("Analyze failed for \(url): \(summary)")
+                    manager.logFromBackground("Analyze failed for \(url) (cookies: \(cookieBrowser.rawValue)): \(Self.allStderrLines(primaryStderr == lastStderr ? lastStderr : primaryStderr + "\n" + lastStderr))")
                 } else if analyzeTimedOut {
                     // The watchdog killed a hung yt-dlp process -- distinct from every other
                     // empty-output case below so the card (and the Log tab) say what actually
@@ -3341,11 +3359,7 @@ struct ContentView: View {
                     // like "random links fail to analyze" arrived with an exported log that
                     // just stopped after "Analyzing N URL(s)...", no clue why. The last
                     // non-empty stderr line is usually yt-dlp's own ERROR summary.
-                    let stderrSummary = lastStderr
-                        .split(separator: "\n")
-                        .map { $0.trimmingCharacters(in: .whitespaces) }
-                        .last { !$0.isEmpty } ?? "no stderr output"
-                    manager.logFromBackground("Analyze failed for \(url): \(stderrSummary)")
+                    manager.logFromBackground("Analyze failed for \(url): \(Self.allStderrLines(lastStderr))")
                 }
                 results.mutate { $0.append((i, preview)) }
                 // Push this URL's result to the UI the instant IT finishes,
@@ -3382,6 +3396,14 @@ struct ContentView: View {
                                 // background to build up from scratch
                                 // (the light-grey-then-dark flash).
                                 realCard.id = cardID
+                                // A failed analysis is built from just the link, which used to wipe the real
+                                // title and thumbnail the instant preview had already put on the card. The
+                                // video is still known (a sign-in gate says nothing about it), so keep them.
+                                if realCard.analyzeError != nil {
+                                    let known = self.linkPreviews[idx]
+                                    if !known.title.isEmpty, known.title != known.url { realCard.title = known.title }
+                                    if !known.thumbnailURL.isEmpty { realCard.thumbnailURL = known.thumbnailURL }
+                                }
                                 self.linkPreviews[idx] = realCard
                             }
                             // NOTE: deliberately no `else { append }` here anymore.

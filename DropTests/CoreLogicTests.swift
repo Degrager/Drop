@@ -560,8 +560,19 @@ final class SignInGateTests: XCTestCase {
     }
 
     func testTheSummaryAsksForCookiesOnlyWhenNoneAreInUse() {
-        XCTAssertFalse(SignInGate.ageRestricted.summary(usingBrowser: .none).contains("Sign in to YouTube in"))
+        XCTAssertFalse(SignInGate.ageRestricted.summary(usingBrowser: .none).contains("Chrome"))
         XCTAssertTrue(SignInGate.ageRestricted.summary(usingBrowser: .chrome).contains("Sign in to YouTube in Chrome"))
+        XCTAssertTrue(SignInGate.botCheck.summary(usingBrowser: .firefox).contains("Firefox"))
+    }
+
+    /// The card sizes its capsule to the message's single-line width, so a long one widened the whole
+    /// card. Every summary has to stay short enough for a narrow window.
+    func testEverySummaryStaysShort() {
+        for gate in [SignInGate.ageRestricted, .botCheck] {
+            for browser in BrowserSource.allCases {
+                XCTAssertLessThanOrEqual(gate.summary(usingBrowser: browser).count, 80, "\(gate) \(browser)")
+            }
+        }
     }
 
     func testBlockedCookiesAreToldApartFromAWrongSignIn() {

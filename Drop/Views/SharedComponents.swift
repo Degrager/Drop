@@ -1749,8 +1749,14 @@ struct NoteContent: View {
                 .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
+                // The capsule sizes itself to this view's natural single-line width, so without a
+                // limit a long message made it (and the whole card) wider than the window; past
+                // this width the text wraps onto a second line instead.
+                .frame(maxWidth: Self.maxTextWidth, alignment: .leading)
         }
     }
+
+    private static let maxTextWidth: CGFloat = 440
 }
 
 /// What a card's metadata capsule holds.

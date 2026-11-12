@@ -669,4 +669,15 @@ final class YouTubeSignInTests: XCTestCase {
         XCTAssertFalse(YouTubeSignIn.hasLoginCookies(in: ""))
         XCTAssertFalse(YouTubeSignIn.hasLoginCookies(in: header))
     }
+
+    func testTheSignInBrowserIsMatchedByBundleIdentifier() {
+        XCTAssertEqual(BrowserSource.matching(bundleIdentifier: "com.apple.Safari"), .safari)
+        XCTAssertEqual(BrowserSource.matching(bundleIdentifier: "com.google.Chrome"), .chrome)
+        XCTAssertEqual(BrowserSource.matching(bundleIdentifier: "org.mozilla.firefox"), .firefox)
+    }
+
+    func testABrowserDropCannotReadIsNotMatched() {
+        XCTAssertNil(BrowserSource.matching(bundleIdentifier: "company.thebrowser.Browser"))
+        XCTAssertNil(BrowserSource.matching(bundleIdentifier: ""))
+    }
 }

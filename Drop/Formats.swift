@@ -540,6 +540,21 @@ extension BrowserSource {
     /// YouTube's own sign-in page; Google sends a signed-in visitor straight on to YouTube.
     static let youTubeSignInURL = URL(string: "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F")!
 
+    /// The browser whose bundle identifier this is, if Drop can read its login (nil for anything else).
+    nonisolated static func matching(bundleIdentifier: String) -> BrowserSource? {
+        allCases.first { $0.bundleIdentifier == bundleIdentifier }
+    }
+
+    /// The browser the sign-in uses: the Mac's default one when Drop can read its login, otherwise Safari
+    /// (always installed). One decision for the user instead of a list to choose from.
+    static func forSignIn() -> BrowserSource {
+        if let app = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://www.youtube.com")!),
+           let id = Bundle(url: app)?.bundleIdentifier, let match = matching(bundleIdentifier: id) {
+            return match
+        }
+        return .safari
+    }
+
     /// Opens YouTube's sign-in page in THIS browser (not the default one), because that is the browser
     /// whose login Drop will read.
     func openYouTubeSignIn() {

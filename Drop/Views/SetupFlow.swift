@@ -166,39 +166,37 @@ final class SetupFlow: ObservableObject {
     func signInStepAppeared(config: Config, ytdlpPath: String?) {
         guard signInState == .idle, signInBrowser == .none, config.browser != .none else { return }
         signInBrowser = config.browser
-        checkSignIn(config: config, ytdlpPath: ytdlpPath, openIfNeeded: false)
+        checkSignIn(config: config, ytdlpPath: ytdlpPath)
     }
 
-    /// A browser was picked: look for its YouTube login, and if there isn't one, open the browser at
-    /// YouTube's sign-in page so there is something to do.
-    func chooseBrowser(_ browser: BrowserSource, config: Config, ytdlpPath: String?) {
+    /// "Open Browser": opens YouTube's sign-in page in the browser Drop will read the login from (the
+    /// Mac's default one when Drop can read it, otherwise Safari), then looks for the login. It always
+    /// opens, so there is always something to see; a login that is already there shows as done.
+    func openBrowser(config: Config, ytdlpPath: String?) {
+        let browser = BrowserSource.forSignIn()
         signInBrowser = browser
-        checkSignIn(config: config, ytdlpPath: ytdlpPath, openIfNeeded: true)
+        if !isPreview { browser.openYouTubeSignIn() }
+        checkSignIn(config: config, ytdlpPath: ytdlpPath)
     }
 
     /// "Check Again", and coming back to Drop from the browser.
     func recheckSignIn(config: Config, ytdlpPath: String?) {
         guard signInBrowser != .none, signInState != .checking, signInState != .signedIn else { return }
-        checkSignIn(config: config, ytdlpPath: ytdlpPath, openIfNeeded: false)
+        checkSignIn(config: config, ytdlpPath: ytdlpPath)
     }
 
-    func openSignInPage() {
-        guard !isPreview else { return }
-        signInBrowser.openYouTubeSignIn()
-    }
-
-    private func checkSignIn(config: Config, ytdlpPath: String?, openIfNeeded: Bool) {
+    private func checkSignIn(config: Config, ytdlpPath: String?) {
         signInTask?.cancel()
         let previous = signInState
         signInState = .checking
         let browser = signInBrowser
-        // The preview shows the sequence without touching a real browser: not signed in (and the page
-        // "opened") on the first look, signed in on the next.
+        // The preview shows the sequence without touching a real browser: not signed in on the first
+        // look, signed in on the next.
         if isPreview {
             signInTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 900_000_000)
                 guard !Task.isCancelled, let self, self.signInBrowser == browser else { return }
-                self.signInState = (!openIfNeeded && previous == .notSignedIn) ? .signedIn : .notSignedIn
+                self.signInState = previous == .notSignedIn ? .signedIn : .notSignedIn
             }
             return
         }
@@ -211,7 +209,6 @@ final class SetupFlow: ObservableObject {
                 config.browser = browser
             case .notSignedIn:
                 self.signInState = .notSignedIn
-                if openIfNeeded { browser.openYouTubeSignIn() }
             case .blocked:
                 self.signInState = .blocked
             case .failed(let reason):
@@ -343,7 +340,7 @@ struct SetupOverlayView: View {
                             ? "Some of Drop's tools are missing. It downloads them again."
                             : "Drop downloads the tools it works with. This happens once."
         case .diskAccess: return "Optional. It lets Drop read Safari's YouTube sign-in. Skip it if you don't use Safari."
-        case .signIn:     return "Optional. Age-restricted videos only play for a signed-in account. Pick the browser you use for YouTube."
+        case .signIn:     return "Optional. Age-restricted videos only play for a signed-in account."
         case .done:       return "Here's what's ready. Everything here can be changed later."
         }
     }
@@ -465,21 +462,10 @@ struct SetupOverlayView: View {
 
     // MARK: Step 3: sign-in
 
-    private var installedBrowsers: [BrowserSource] {
-        BrowserSource.allCases.filter { $0 != .none && $0.isInstalled }
-    }
-
     private var ytdlpPath: String? { manager.ytdlpPath }
 
     private var signInBody: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 8)], alignment: .leading, spacing: 8) {
-                ForEach(installedBrowsers) { browser in
-                    choiceChip(browser.label, selected: flow.signInBrowser == browser, confirmed: flow.signInBrowser == browser && flow.signInState == .signedIn) {
-                        flow.chooseBrowser(browser, config: config, ytdlpPath: ytdlpPath)
-                    }
-                }
-            }
+        VStack(alignment: .leading, spacing: 14) {
             signInStatus
             signInActions
         }
@@ -492,11 +478,11 @@ struct SetupOverlayView: View {
     }
 
     private var signInStatus: some View {
-        let name = flow.signInBrowser.label
+        let name = (flow.signInBrowser == .none ? BrowserSource.forSignIn() : flow.signInBrowser).label
         let line: (icon: String, text: String, color: Color)
         switch flow.signInState {
         case .idle:
-            line = ("", "Pick the browser you use for YouTube. If you aren't signed in there yet, Drop opens YouTube's sign-in page in it. Drop reads the login from that browser and never sees your password. macOS may ask to allow it.",
+            line = ("", "Opens YouTube's sign-in page in \(name). Sign in there and Drop picks the login up from \(name). Drop never sees your password. macOS may ask to allow it.",
                     .white.opacity(DesignTokens.Text.tertiary))
         case .checking:
             line = ("", "Looking for your YouTube sign-in in \(name)…", .white.opacity(DesignTokens.Text.secondary))
@@ -526,41 +512,23 @@ struct SetupOverlayView: View {
         }
     }
 
-    @ViewBuilder
     private var signInActions: some View {
-        if flow.signInBrowser != .none && flow.signInState != .checking {
-            HStack(spacing: 8) {
-                GlassButton(label: "Open YouTube Sign-in", icon: "arrow.up.forward.app", tint: DesignTokens.Accent.primary, fitContent: true) {
-                    flow.openSignInPage()
+        let checking = flow.signInState == .checking
+        return HStack(spacing: 8) {
+            GlassButton(label: "Open Browser", icon: "safari", tint: DesignTokens.Accent.primary, fitContent: true, disabled: checking) {
+                flow.openBrowser(config: config, ytdlpPath: ytdlpPath)
+            }
+            if flow.signInState == .blocked && flow.signInBrowser == .safari {
+                GlassButton(label: "Open Full Disk Access", icon: "lock.open", tint: .white, fitContent: true) {
+                    NSWorkspace.shared.open(BrowserSource.fullDiskAccessSettingsURL)
                 }
-                if flow.signInState == .blocked && flow.signInBrowser == .safari {
-                    GlassButton(label: "Open Full Disk Access", icon: "lock.open", tint: .white, fitContent: true) {
-                        NSWorkspace.shared.open(BrowserSource.fullDiskAccessSettingsURL)
-                    }
-                }
-                if flow.signInState != .signedIn {
-                    GlassButton(label: "Check Again", icon: "arrow.clockwise", tint: .white, fitContent: true) {
-                        flow.recheckSignIn(config: config, ytdlpPath: ytdlpPath)
-                    }
+            }
+            if flow.signInBrowser != .none && flow.signInState != .signedIn && !checking {
+                GlassButton(label: "Check Again", icon: "arrow.clockwise", tint: .white, fitContent: true) {
+                    flow.recheckSignIn(config: config, ytdlpPath: ytdlpPath)
                 }
             }
         }
-    }
-
-    /// `selected` is the browser picked; the checkmark (`confirmed`) is only for one whose login was found.
-    private func choiceChip(_ label: String, selected: Bool, confirmed: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                if confirmed { Image(systemName: "checkmark").font(.appMono(size: 9, weight: .bold)) }
-                Text(label).font(.appMono(size: 11.5, weight: .semibold))
-            }
-            .foregroundColor(selected ? DesignTokens.Accent.primaryLight : .white.opacity(DesignTokens.Text.primary))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background(Capsule().fill(selected ? DesignTokens.Accent.primary.opacity(0.16) : Color.white.opacity(0.05)))
-            .overlay(Capsule().stroke(selected ? DesignTokens.Accent.primary.opacity(0.6) : Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: Step 4: done

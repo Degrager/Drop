@@ -20,7 +20,7 @@ enum FullDiskAccess {
 final class SetupFlow: ObservableObject {
     static let shared = SetupFlow()
 
-    enum Step: Int, CaseIterable { case tools, diskAccess, signIn, done }
+    enum Step: Int, CaseIterable { case welcome, tools, diskAccess, signIn, done }
 
     @Published private(set) var isPresented = false
     @Published private(set) var step: Step = .tools
@@ -41,32 +41,30 @@ final class SetupFlow: ObservableObject {
     @Published private(set) var signInBrowser: BrowserSource = .none
     private var signInTask: Task<Void, Never>?
 
-    private static let startedKey = "setupStarted"
-    private static let completedKey = "setupCompleted"
+    /// Which version of setup the user last finished (absent = never). Everyone whose number is below
+    /// `currentVersion` goes through setup again on their next launch, so a user who updates always sees
+    /// it. Raise this when setup gains something every user should see.
+    nonisolated static let currentVersion = 1
+    private static let completedVersionKey = "setupCompletedVersion"
     private var previewTimer: Timer?
 
-    enum LaunchDecision: Equatable { case show, showToolsOnly, markCompleted, nothing }
+    enum LaunchDecision: Equatable { case show, showToolsOnly, nothing }
 
-    /// What launch does about setup. A finished setup is not shown again, unless the tools it
-    /// installed are gone (then just the tools step comes back). One that was shown but not finished
-    /// comes back whole. Otherwise it is a fresh install (the tools are not there yet) and it is shown;
-    /// an existing install that already has its tools is not a first run, so it is marked done without
-    /// a screen (the app menu still has it).
-    nonisolated static func launchDecision(started: Bool, completed: Bool, toolsInstalled: Bool) -> LaunchDecision {
-        if completed { return toolsInstalled ? .nothing : .showToolsOnly }
-        if started { return .show }
-        return toolsInstalled ? .markCompleted : .show
+    /// What launch does about setup. Anyone who has not finished THIS version of setup is shown all of
+    /// it, existing installs included (a Mac that already has the tools just sees them ready). Once
+    /// finished it stays out of the way, unless the tools it installed are gone: then just the tools
+    /// step comes back.
+    nonisolated static func launchDecision(completedVersion: Int, toolsInstalled: Bool) -> LaunchDecision {
+        if completedVersion < currentVersion { return .show }
+        return toolsInstalled ? .nothing : .showToolsOnly
     }
 
     /// Called at launch, and again if the tools turn out to be missing once the first check settles.
     func presentIfNeeded(toolsInstalled: Bool) {
         guard !isPresented else { return }
-        let defaults = UserDefaults.standard
-        switch Self.launchDecision(started: defaults.bool(forKey: Self.startedKey),
-                                   completed: defaults.bool(forKey: Self.completedKey),
-                                   toolsInstalled: toolsInstalled) {
+        let completedVersion = UserDefaults.standard.integer(forKey: Self.completedVersionKey)
+        switch Self.launchDecision(completedVersion: completedVersion, toolsInstalled: toolsInstalled) {
         case .nothing: break
-        case .markCompleted: defaults.set(true, forKey: Self.completedKey)
         case .show: present()
         case .showToolsOnly: present(toolsOnly: true)
         }
@@ -76,10 +74,9 @@ final class SetupFlow: ObservableObject {
         stopPreview()
         isPreview = false
         self.toolsOnly = toolsOnly
-        step = .tools
+        step = toolsOnly ? .tools : .welcome
         resetSignIn()
         refreshDiskAccess()
-        UserDefaults.standard.set(true, forKey: Self.startedKey)
         withAnimation(.spring(response: 0.4)) { isPresented = true }
     }
 
@@ -90,8 +87,7 @@ final class SetupFlow: ObservableObject {
     /// sign-in is cleared. Every step then reports its true state.
     func startFresh(config: Config, manager: DownloadManager) {
         let defaults = UserDefaults.standard
-        defaults.removeObject(forKey: Self.startedKey)
-        defaults.removeObject(forKey: Self.completedKey)
+        defaults.removeObject(forKey: Self.completedVersionKey)
         config.browser = .none
         revokeFullDiskAccess(logTo: manager)
         manager.resetToolsForFreshInstall()
@@ -122,7 +118,7 @@ final class SetupFlow: ObservableObject {
         stopPreview()
         isPreview = true
         toolsOnly = false
-        step = .tools
+        step = .welcome
         resetSignIn()
         previewProgress = 0
         refreshDiskAccess()
@@ -146,7 +142,7 @@ final class SetupFlow: ObservableObject {
 
     func finish() {
         stopPreview()
-        if !isPreview { UserDefaults.standard.set(true, forKey: Self.completedKey) }
+        if !isPreview { UserDefaults.standard.set(Self.currentVersion, forKey: Self.completedVersionKey) }
         withAnimation(.spring(response: 0.4)) { isPresented = false }
     }
 
@@ -255,6 +251,7 @@ struct SetupOverlayView: View {
             titleBlock
             Group {
                 switch flow.step {
+                case .welcome:    welcomeBody
                 case .tools:      toolsBody
                 case .diskAccess: diskAccessBody
                 case .signIn:     signInBody
@@ -318,6 +315,7 @@ struct SetupOverlayView: View {
 
     private var icon: String {
         switch flow.step {
+        case .welcome:    return "drop.fill"
         case .tools:      return "arrow.down.circle"
         case .diskAccess: return "lock.shield"
         case .signIn:     return "person.crop.circle"
@@ -327,6 +325,7 @@ struct SetupOverlayView: View {
 
     private var title: String {
         switch flow.step {
+        case .welcome:    return "Welcome to Drop"
         case .tools:      return "Get Drop ready"
         case .diskAccess: return "Full Disk Access"
         case .signIn:     return "Sign in to YouTube"
@@ -336,12 +335,42 @@ struct SetupOverlayView: View {
 
     private var subtitle: String {
         switch flow.step {
+        case .welcome:    return "Download and convert video and audio from YouTube, SoundCloud, TikTok and more. A quick setup comes first."
         case .tools:      return flow.toolsOnly
                             ? "Some of Drop's tools are missing. It downloads them again."
                             : "Drop downloads the tools it works with. This happens once."
         case .diskAccess: return "Optional. It lets Drop read Safari's YouTube sign-in. Skip it if you don't use Safari."
         case .signIn:     return "Optional. Age-restricted videos only play for a signed-in account."
         case .done:       return "Here's what's ready. Everything here can be changed later."
+        }
+    }
+
+    // MARK: Step 0: welcome
+
+    private var welcomeBody: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            welcomeRow(icon: "arrow.down.circle", title: "Get the tools", detail: "yt-dlp, ffmpeg and deno, downloaded for you")
+            welcomeRow(icon: "lock.shield", title: "Full Disk Access", detail: "Optional. Lets Drop read Safari's YouTube sign-in")
+            welcomeRow(icon: "person.crop.circle", title: "YouTube sign-in", detail: "Optional. Opens age-restricted videos")
+        }
+    }
+
+    private func welcomeRow(icon: String, title: String, detail: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.appMono(size: 13, weight: .semibold))
+                .foregroundColor(DesignTokens.Accent.primaryLight)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(Color.white.opacity(0.06)))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.appMono(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                Text(detail)
+                    .font(.appMono(size: 10.5))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+            }
         }
     }
 
@@ -562,6 +591,10 @@ struct SetupOverlayView: View {
         HStack {
             Spacer()
             switch flow.step {
+            case .welcome:
+                GlassButton(label: "Get Started", icon: "arrow.right", tint: DesignTokens.Accent.primary, fitContent: true) {
+                    flow.advance()
+                }
             case .tools:
                 if anyToolFailed && !flow.isPreview {
                     GlassButton(label: "Try Again", icon: "arrow.clockwise", tint: DesignTokens.Accent.primary, fitContent: true) {

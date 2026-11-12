@@ -614,25 +614,32 @@ final class BrowserCookieAccessTests: XCTestCase {
 /// When the setup screen shows by itself: on a fresh install, and again if it was left unfinished; never
 /// for a finished setup, and not for an existing install that already has its tools.
 final class SetupFlowDecisionTests: XCTestCase {
+    private let current = SetupFlow.currentVersion
+
     func testAFreshInstallShowsSetup() {
-        XCTAssertEqual(SetupFlow.launchDecision(started: false, completed: false, toolsInstalled: false), .show)
+        XCTAssertEqual(SetupFlow.launchDecision(completedVersion: 0, toolsInstalled: false), .show)
     }
 
-    func testAnExistingInstallIsMarkedDoneWithoutAScreen() {
-        XCTAssertEqual(SetupFlow.launchDecision(started: false, completed: false, toolsInstalled: true), .markCompleted)
+    func testAnExistingInstallThatNeverSawSetupShowsItAfterUpdating() {
+        // Every Mac that updates already has its tools and has no record of setup: it still goes through it.
+        XCTAssertEqual(SetupFlow.launchDecision(completedVersion: 0, toolsInstalled: true), .show)
     }
 
-    func testAnUnfinishedSetupComesBackEvenOnceTheToolsArrived() {
-        XCTAssertEqual(SetupFlow.launchDecision(started: true, completed: false, toolsInstalled: true), .show)
+    func testAnOlderSetupVersionShowsAgain() {
+        XCTAssertEqual(SetupFlow.launchDecision(completedVersion: current - 1, toolsInstalled: true), .show)
     }
 
     func testAFinishedSetupDoesNotReturnWhileTheToolsAreThere() {
-        XCTAssertEqual(SetupFlow.launchDecision(started: true, completed: true, toolsInstalled: true), .nothing)
-        XCTAssertEqual(SetupFlow.launchDecision(started: false, completed: true, toolsInstalled: true), .nothing)
+        XCTAssertEqual(SetupFlow.launchDecision(completedVersion: current, toolsInstalled: true), .nothing)
+        XCTAssertEqual(SetupFlow.launchDecision(completedVersion: current + 1, toolsInstalled: true), .nothing)
     }
 
     func testAFinishedSetupWhoseToolsWentMissingAsksOnlyForTheTools() {
-        XCTAssertEqual(SetupFlow.launchDecision(started: true, completed: true, toolsInstalled: false), .showToolsOnly)
+        XCTAssertEqual(SetupFlow.launchDecision(completedVersion: current, toolsInstalled: false), .showToolsOnly)
+    }
+
+    func testTheWelcomeIsTheFirstStep() {
+        XCTAssertEqual(SetupFlow.Step.allCases.first, .welcome)
     }
 }
 

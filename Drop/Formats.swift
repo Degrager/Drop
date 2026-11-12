@@ -490,20 +490,6 @@ extension BrowserSource {
         }
         return false
     }
-
-    /// The browser Drop offers to read a YouTube sign-in from: the Mac's default browser when it is
-    /// one yt-dlp can read cookies from, otherwise the first supported browser that is installed,
-    /// otherwise Safari (always there).
-    static func preferred() -> BrowserSource {
-        if let https = URL(string: "https://example.com"),
-           let app = NSWorkspace.shared.urlForApplication(toOpen: https),
-           let id = Bundle(url: app)?.bundleIdentifier,
-           let match = allCases.first(where: { $0.bundleIdentifier == id }) {
-            return match
-        }
-        let detected = autoDetected()
-        return detected == .none ? .safari : detected
-    }
 }
 
 // MARK: - Sign-in gates

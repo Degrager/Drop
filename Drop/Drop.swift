@@ -779,6 +779,8 @@ struct ContentView: View {
         .overlay(SetupOverlayView(flow: setupFlow, manager: manager, config: config))
         .onAppear {
             setupFlow.presentIfNeeded(toolsInstalled: manager.ytdlpPath != nil && manager.ffmpegPath != nil)
+            // Signing in through setup opens again whatever YouTube's sign-in gate had stopped.
+            setupFlow.onSignedIn = { retryStoppedBySignIn() }
         }
         // The tools are checked again once launch's downloads land; if they are still missing then
         // (a dropped connection, a deleted file), the setup screen comes back for them.
@@ -2304,22 +2306,23 @@ struct ContentView: View {
         analyzeURL(urls: [p.url], ids: [p.id])
     }
 
-    /// The Sign in chip. macOS has no prompt for Full Disk Access, so when the browser's cookies are
-    /// behind it the setting opens right away (and the card says what to do) instead of first running
-    /// an attempt that is certain to fail.
-    private func signIn(with browser: BrowserSource, for p: LinkPreview) {
-        if browser.cookiesBlockedByMacOS {
-            NSWorkspace.shared.open(BrowserSource.fullDiskAccessSettingsURL)
-            if let idx = linkPreviews.firstIndex(where: { $0.id == p.id }) {
-                withAnimation(.spring(response: 0.35)) {
-                    linkPreviews[idx].analyzeError = BrowserSource.fullDiskAccessNote
-                    linkPreviews[idx].analyzeFixes = [.openFullDiskAccess]
+    /// Signed in through setup: opens again every link and download that YouTube's sign-in gate had
+    /// stopped (a card with a fix on it is one the gate or an unreadable login stopped).
+    private func retryStoppedBySignIn() {
+        let stopped = linkPreviews.filter { !$0.analyzeFixes.isEmpty }
+        if !stopped.isEmpty {
+            withAnimation(.spring(response: 0.35)) {
+                for p in stopped {
+                    guard let idx = linkPreviews.firstIndex(where: { $0.id == p.id }) else { continue }
+                    linkPreviews[idx].analyzeError = nil
+                    linkPreviews[idx].analyzeErrorIsForbidden = false
+                    linkPreviews[idx].analyzeFixes = []
+                    linkPreviews[idx].isPending = true
                 }
             }
-            return
+            analyzeURL(urls: stopped.map(\.url), ids: stopped.map(\.id))
         }
-        config.browser = browser
-        retryAnalysis(of: p)
+        manager.retryDownloadsStoppedBySignIn(config: config)
     }
 
     /// A failed analysis's way to the real reason: the capsule only has the short summary, the
@@ -2341,18 +2344,12 @@ struct ContentView: View {
         }
         return AnyView(
             HStack(spacing: 8) {
-                ForEach(p.analyzeFixes, id: \.self) { fix in
-                    switch fix {
-                    case .signIn:
-                        let browser = BrowserSource.preferred()
-                        chip("person.crop.circle", "Sign in with \(browser.label)",
-                             help: "Reads your YouTube sign-in from \(browser.label) so Drop can open this video. macOS may ask for permission.") {
-                            signIn(with: browser, for: p)
-                        }
-                    case .openFullDiskAccess:
-                        chip("lock.open", "Open Full Disk Access", help: "Opens System Settings. Turn on Drop there, then reopen Drop.") {
-                            NSWorkspace.shared.open(BrowserSource.fullDiskAccessSettingsURL)
-                        }
+                // One way forward whatever stopped it (the gate, or a login macOS would not let Drop
+                // read): the setup screen's sign-in step. It also covers Full Disk Access.
+                if !p.analyzeFixes.isEmpty {
+                    chip("person.crop.circle", "Open Setup",
+                         help: "Opens setup so you can sign in to YouTube. Drop then opens this link again.") {
+                        setupFlow.presentSignIn()
                     }
                 }
                 chip("terminal", "Show in Log", help: "Show in Log") {
@@ -2410,7 +2407,7 @@ struct ContentView: View {
     func fixActionLabel(_ action: FixAction) -> String {
         switch action {
         case .setCookieNone:       return "Set Cookie Source to None"
-        case .useBrowserCookies:   return "Sign in with \(BrowserSource.preferred().label)"
+        case .useBrowserCookies:   return "Open Setup"
         case .openFolderPicker:    return "Choose Folder"
         case .openPrivacySecurity: return "Open Privacy & Security"
         case .openURL:             return "Search on YouTube"
@@ -2503,8 +2500,8 @@ struct ContentView: View {
         /// One-click ways out of the failure, shown beside Show in Log.
         var analyzeFixes: [AnalyzeFix] = []
         enum AnalyzeFix: Equatable {
-            case signIn             // age gate / "not a bot": read the YouTube sign-in from the preferred browser
-            case openFullDiskAccess // Safari's cookies are protected: Drop needs Full Disk Access to read them
+            case signIn             // age gate / "not a bot": needs a YouTube sign-in; the card offers Open Setup
+            case openFullDiskAccess // Safari's cookies are protected (Full Disk Access); the card offers Open Setup too
         }
         var isPlaylist: Bool = false      // true if URL is a playlist
         var playlistCount: Int = 0        // number of items in playlist

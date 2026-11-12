@@ -581,10 +581,6 @@ final class SignInGateTests: XCTestCase {
         XCTAssertFalse(ytdlpCookiesBlocked(ageRestricted), "mentions cookies only as advice")
         XCTAssertFalse(ytdlpCookiesBlocked("ERROR: Video unavailable"))
     }
-
-    func testThereIsAlwaysABrowserToOffer() {
-        XCTAssertNotEqual(BrowserSource.preferred(), .none)
-    }
 }
 
 final class JSRuntimeArgsTests: XCTestCase {

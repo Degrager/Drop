@@ -364,6 +364,14 @@ class DownloadManager: ObservableObject {
         }
     }
 
+    /// Starts again every download that stopped at YouTube's sign-in gate.
+    func retryDownloadsStoppedBySignIn(config: Config) {
+        for download in downloads where download.status == .error && download.fixAction == .useBrowserCookies {
+            appendLog("Signed in: retrying \(download.url)")
+            retry(download: download, config: config)
+        }
+    }
+
     func performFix(for download: Download, config: Config, showFolderPicker: @escaping () -> Void) {
         switch download.fixAction {
         case .setCookieNone:
@@ -374,20 +382,11 @@ class DownloadManager: ObservableObject {
 
         case .useBrowserCookies:
             // Deliberate opt-in, clicked by the user at the moment it is needed (cookies are never
-            // switched on by default: reading Chrome's cookies prompts for its Keychain key).
-            let browser = BrowserSource.preferred()
-            if browser.cookiesBlockedByMacOS {
-                // No system prompt exists for Full Disk Access: open the setting instead of retrying.
-                NSWorkspace.shared.open(BrowserSource.fullDiskAccessSettingsURL)
-                if let idx = downloads.firstIndex(where: { $0.id == download.id }) {
-                    downloads[idx].fixHint = BrowserSource.fullDiskAccessNote
-                    downloads[idx].fixAction = .none
-                }
-                return
-            }
-            config.browser = browser
-            appendLog("Sign-in: reading YouTube cookies from \(config.browser.label) and retrying...")
-            retry(download: download, config: config)
+            // switched on by default: reading Chrome's cookies prompts for its Keychain key). It opens
+            // the setup screen's sign-in step; once the user is signed in, every download this stopped
+            // is started again (see retryDownloadsStoppedBySignIn).
+            appendLog("Sign-in: opening setup so YouTube can be signed in to...")
+            SetupFlow.shared.presentSignIn()
 
         case .openFolderPicker:
             showFolderPicker()
@@ -2011,8 +2010,8 @@ class DownloadManager: ObservableObject {
                             let browser = config.browser
                             self.withDownload(downloadID) {
                                 $0.errorMessage = gate.summary(usingBrowser: browser)
-                                $0.fixHint = browser == .none ? "Drop can read your YouTube sign-in from \(BrowserSource.preferred().label)." : nil
-                                $0.fixAction = browser == .none ? .useBrowserCookies : .none
+                                $0.fixHint = browser == .none ? "Sign in to YouTube once and Drop can open this video." : nil
+                                $0.fixAction = .useBrowserCookies
                             }
                         } else if isPrivate {
                             self.withDownload(downloadID) {

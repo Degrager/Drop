@@ -30,6 +30,12 @@ final class SetupFlow: ObservableObject {
     /// Only the tools step, for an install that finished setup before but has lost its tools (the
     /// network dropped mid-download, or they were deleted). Nothing else needs asking again.
     @Published private(set) var toolsOnly = false
+    /// Only the YouTube sign-in step, opened from a link or download that YouTube stopped for want of a
+    /// sign-in. Signing in there sends those links back through, see `onSignedIn`.
+    @Published private(set) var signInOnly = false
+    /// Called when setup closes with a YouTube login found: the app opens again whatever the missing
+    /// sign-in had stopped.
+    var onSignedIn: (() -> Void)?
     @Published private(set) var diskAccessGranted = false
     /// 0...1, only advanced while previewing.
     @Published private(set) var previewProgress: Double = 0
@@ -74,6 +80,7 @@ final class SetupFlow: ObservableObject {
         stopPreview()
         isPreview = false
         self.toolsOnly = toolsOnly
+        signInOnly = false
         step = toolsOnly ? .tools : .welcome
         resetSignIn()
         refreshDiskAccess()
@@ -118,6 +125,7 @@ final class SetupFlow: ObservableObject {
         stopPreview()
         isPreview = true
         toolsOnly = false
+        signInOnly = false
         step = .welcome
         resetSignIn()
         previewProgress = 0
@@ -133,8 +141,21 @@ final class SetupFlow: ObservableObject {
         }
     }
 
+    /// The "Open Setup" button on a card YouTube stopped: the setup screen, but only its sign-in step.
+    func presentSignIn() {
+        guard !isPresented else { return }
+        stopPreview()
+        isPreview = false
+        toolsOnly = false
+        signInOnly = true
+        step = .signIn
+        resetSignIn()
+        refreshDiskAccess()
+        withAnimation(.spring(response: 0.4)) { isPresented = true }
+    }
+
     func advance() {
-        if toolsOnly { return finish() }
+        if toolsOnly || signInOnly { return finish() }
         guard let next = Step(rawValue: step.rawValue + 1) else { return finish() }
         withAnimation(.easeInOut(duration: 0.25)) { step = next }
         if next == .diskAccess { refreshDiskAccess() }
@@ -142,8 +163,10 @@ final class SetupFlow: ObservableObject {
 
     func finish() {
         stopPreview()
-        if !isPreview { UserDefaults.standard.set(Self.currentVersion, forKey: Self.completedVersionKey) }
+        // Closing the sign-in-only screen is not finishing setup.
+        if !isPreview && !signInOnly { UserDefaults.standard.set(Self.currentVersion, forKey: Self.completedVersionKey) }
         withAnimation(.spring(response: 0.4)) { isPresented = false }
+        if !isPreview && signInState == .signedIn { onSignedIn?() }
     }
 
     func refreshDiskAccess() { diskAccessGranted = FullDiskAccess.isGranted }
@@ -268,7 +291,7 @@ struct SetupOverlayView: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            if !flow.toolsOnly {
+            if !flow.toolsOnly && !flow.signInOnly {
                 ForEach(SetupFlow.Step.allCases, id: \.rawValue) { step in
                     Capsule()
                         .fill(step.rawValue <= flow.step.rawValue ? DesignTokens.Accent.primary : Color.white.opacity(0.14))
@@ -279,7 +302,7 @@ struct SetupOverlayView: View {
                 Text("PREVIEW")
                     .font(.appMono(size: 8.5, weight: .bold))
                     .foregroundColor(DesignTokens.Accent.warning)
-                    .padding(.leading, flow.toolsOnly ? 0 : 8)
+                    .padding(.leading, flow.toolsOnly || flow.signInOnly ? 0 : 8)
             }
             Spacer()
             // Setup itself cannot be skipped. Only the preview can be closed early, since it is not
@@ -340,7 +363,9 @@ struct SetupOverlayView: View {
                             ? "Some of Drop's tools are missing. It downloads them again."
                             : "Drop downloads the tools it works with. This happens once."
         case .diskAccess: return "Optional. It lets Drop read Safari's YouTube sign-in. Skip it if you don't use Safari."
-        case .signIn:     return "Optional. Age-restricted videos only play for a signed-in account."
+        case .signIn:     return flow.signInOnly
+                            ? "YouTube only plays this for a signed-in account. Once you're signed in, Drop opens the links it stopped on again."
+                            : "Optional. Age-restricted videos only play for a signed-in account."
         case .done:       return "Here's what's ready. Everything here can be changed later."
         }
     }

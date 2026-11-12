@@ -610,3 +610,28 @@ final class BrowserCookieAccessTests: XCTestCase {
         XCTAssertLessThanOrEqual(BrowserSource.fullDiskAccessNote.count, 80)
     }
 }
+
+/// When the setup screen shows by itself: on a fresh install, and again if it was left unfinished; never
+/// for a finished setup, and not for an existing install that already has its tools.
+final class SetupFlowDecisionTests: XCTestCase {
+    func testAFreshInstallShowsSetup() {
+        XCTAssertEqual(SetupFlow.launchDecision(started: false, completed: false, toolsInstalled: false), .show)
+    }
+
+    func testAnExistingInstallIsMarkedDoneWithoutAScreen() {
+        XCTAssertEqual(SetupFlow.launchDecision(started: false, completed: false, toolsInstalled: true), .markCompleted)
+    }
+
+    func testAnUnfinishedSetupComesBackEvenOnceTheToolsArrived() {
+        XCTAssertEqual(SetupFlow.launchDecision(started: true, completed: false, toolsInstalled: true), .show)
+    }
+
+    func testAFinishedSetupDoesNotReturnWhileTheToolsAreThere() {
+        XCTAssertEqual(SetupFlow.launchDecision(started: true, completed: true, toolsInstalled: true), .nothing)
+        XCTAssertEqual(SetupFlow.launchDecision(started: false, completed: true, toolsInstalled: true), .nothing)
+    }
+
+    func testAFinishedSetupWhoseToolsWentMissingAsksOnlyForTheTools() {
+        XCTAssertEqual(SetupFlow.launchDecision(started: true, completed: true, toolsInstalled: false), .showToolsOnly)
+    }
+}

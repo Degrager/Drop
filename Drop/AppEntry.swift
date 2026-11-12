@@ -346,6 +346,9 @@ struct DropApp: App {
             ContentView()
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Set Up Drop…") { SetupFlow.shared.present() }
+            }
             CommandGroup(after: .sidebar) {
                 Button("Toggle Sidebar") { sidebarCollapsedByUser.toggle() }
                 Divider()

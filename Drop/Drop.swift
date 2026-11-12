@@ -29,6 +29,8 @@ struct ContentView: View {
     // whenever something else happened to redraw ContentView.
     @ObservedObject private var dropDriver: DropCustomUserDriver
     @StateObject private var config   = Config()
+    /// The first-run setup screen (see SetupFlow); also opened from the app menu and the Dev tab.
+    @ObservedObject private var setupFlow = SetupFlow.shared
     @State private var urlText        = ""
     @State private var isDragging     = false
 
@@ -440,7 +442,7 @@ struct ContentView: View {
                     // for nothing. The transaction override stops the layout
                     // change at activation from animating the page's size.
                     ActiveOnlyLayout(isActive: activeTab == .devRelease) {
-                        DevReleaseView(dropDriver: dropDriver, manager: manager, isActive: activeTab == .devRelease)
+                        DevReleaseView(dropDriver: dropDriver, manager: manager, config: config, isActive: activeTab == .devRelease)
                             .contentColumn()
                             .pinnedToSidebar()
                             .transaction(value: activeTab) { $0.animation = nil }
@@ -772,6 +774,17 @@ struct ContentView: View {
                     .keyboardShortcut(.escape, modifiers: [])
                     .hidden()
             }
+        }
+        // The setup screen sits under the update UI, so an update found while it is open still shows.
+        .overlay(SetupOverlayView(flow: setupFlow, manager: manager, config: config))
+        .onAppear {
+            setupFlow.presentIfNeeded(toolsInstalled: manager.ytdlpPath != nil && manager.ffmpegPath != nil)
+        }
+        // The tools are checked again once launch's downloads land; if they are still missing then
+        // (a dropped connection, a deleted file), the setup screen comes back for them.
+        .onChange(of: manager.checkingDeps) { _, checking in
+            guard !checking, !manager.toolsReady else { return }
+            setupFlow.presentIfNeeded(toolsInstalled: false)
         }
         // Drop's own update UI -- attached at the root so it can appear
         // over any tab, not just while Dev happens to be open, since an
@@ -1177,24 +1190,6 @@ struct ContentView: View {
     @ViewBuilder
     private var mainPanelCardsContent: some View {
                     LazyVStack(spacing: 10) {
-                        // yt-dlp/ffmpeg are downloaded on launch (see ytdlpPath/
-                        // ffmpegPath) -- never actually bundled inside the app
-                        // despite what some older comments elsewhere claim -- so a
-                        // brand new install always hits this for however long that
-                        // one-time download takes. Used to show an alarming
-                        // "Bundled tools missing, please reinstall" error here
-                        // unconditionally instead, which was simply wrong for this
-                        // completely normal state and gave no progress feedback at
-                        // all (a new user's first impression was a false
-                        // "something's broken" message, not real setup progress).
-                        if !manager.checkingDeps && !manager.toolsReady {
-                            if manager.updatingYtdlp || manager.updatingFFmpeg {
-                                toolsSetupCard
-                            } else {
-                                toolsSetupFailedCard
-                            }
-                        }
-
                         previewCard
 
                         Color.clear.frame(height: 4).id("scrollBottom")
@@ -1225,79 +1220,6 @@ struct ContentView: View {
                     // the time its own modifier chain reaches this point, so one
                     // overlay here paints once, above every row, unconditionally.
                     .dropdownPopoverOverlay(openID: $openDropdownID)
-    }
-
-    /// Shown while yt-dlp/ffmpeg's one-time setup download is actually in
-    /// flight -- real per-tool progress (see ytdlpDownloadProgress/
-    /// ffmpegDownloadProgress), not a generic spinner, so a first launch
-    /// doesn't read as broken for however long the download takes. Each row
-    /// flips to "Done" independently the moment ITS OWN tool finishes --
-    /// the two run in parallel with no ordering guarantee.
-    private var toolsSetupCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                    .font(.appMono(size: 16))
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Setting up yt-dlp and ffmpeg…")
-                        .font(.appMono(size: 13, weight: .semibold))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                    Text("One-time download — this only happens once.")
-                        .font(.appMono(size: 11))
-                        .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                }
-                Spacer()
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                toolSetupProgressRow(name: "yt-dlp", fraction: manager.ytdlpDownloadProgress, done: !manager.updatingYtdlp)
-                toolSetupProgressRow(name: "ffmpeg", fraction: manager.ffmpegDownloadProgress, done: !manager.updatingFFmpeg)
-            }
-        }
-        .padding(14)
-        .glassCard(cornerRadius: DesignTokens.Radius.medium)
-    }
-
-    private func toolSetupProgressRow(name: String, fraction: Double, done: Bool) -> some View {
-        HStack(spacing: 8) {
-            Text(name)
-                .font(.appMono(size: 10, weight: .semibold))
-                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                .frame(width: 48, alignment: .leading)
-            fractionProgressBar(done ? 1 : fraction)
-            Text(done ? "Done" : (fraction > 0 ? "\(Int((fraction * 100).rounded()))%" : ""))
-                .font(.appMono(size: 10, weight: .semibold))
-                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-                .frame(width: 32, alignment: .trailing)
-        }
-    }
-
-    /// The setup download genuinely finished (or was already current) and
-    /// the tools are STILL not resolvable -- a real failure, not just
-    /// "still downloading." Can recur on any later launch too, not only
-    /// the first one, if e.g. the network drops mid-download.
-    private var toolsSetupFailedCard: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.orange)
-                .font(.appMono(size: 16))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Couldn't set up yt-dlp/ffmpeg")
-                    .font(.appMono(size: 13, weight: .semibold))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
-                Text("Check your internet connection, then try again.")
-                    .font(.appMono(size: 11))
-                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
-            }
-            Spacer()
-            GlassButton(label: "Retry", icon: "arrow.clockwise", tint: DesignTokens.Accent.primary, fitContent: true) {
-                manager.ensureLatestTools()
-            }
-        }
-        .padding(14)
-        .glassCard(cornerRadius: DesignTokens.Radius.medium)
     }
 
     @ViewBuilder

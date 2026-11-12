@@ -1,0 +1,470 @@
+import SwiftUI
+
+/// Whether Drop has Full Disk Access. macOS has no prompt for it -- an app can only be listed (switched
+/// off) and send the user to Settings -- so the usual test is whether the system's own permission
+/// database, which sits behind it, can be opened.
+enum FullDiskAccess {
+    static var isGranted: Bool {
+        let descriptor = Darwin.open("/Library/Application Support/com.apple.TCC/TCC.db", O_RDONLY)
+        guard descriptor >= 0 else { return false }
+        Darwin.close(descriptor)
+        return true
+    }
+}
+
+/// Drop's setup: get the tools, allow Full Disk Access, optionally sign in to YouTube. It is the only
+/// setup there is. It cannot be skipped as a whole: the tools are required, and only the Full Disk
+/// Access and sign-in steps (which are optional) have a skip. Shown over whatever tab is up, on a
+/// fresh install, whenever the tools turn out to be missing, and from the app menu's "Set Up Drop...".
+@MainActor
+final class SetupFlow: ObservableObject {
+    static let shared = SetupFlow()
+
+    enum Step: Int, CaseIterable { case tools, diskAccess, signIn, done }
+
+    @Published private(set) var isPresented = false
+    @Published private(set) var step: Step = .tools
+    /// True while showing the Dev tab's preview: the tools step runs on simulated progress and
+    /// finishing does not count as having completed the real setup.
+    @Published private(set) var isPreview = false
+    /// Only the tools step, for an install that finished setup before but has lost its tools (the
+    /// network dropped mid-download, or they were deleted). Nothing else needs asking again.
+    @Published private(set) var toolsOnly = false
+    @Published private(set) var diskAccessGranted = false
+    /// 0...1, only advanced while previewing.
+    @Published private(set) var previewProgress: Double = 0
+    /// Why a sign-in choice was not applied (Safari before Full Disk Access).
+    @Published var signInNote: String? = nil
+
+    private static let startedKey = "setupStarted"
+    private static let completedKey = "setupCompleted"
+    private var previewTimer: Timer?
+
+    enum LaunchDecision: Equatable { case show, showToolsOnly, markCompleted, nothing }
+
+    /// What launch does about setup. A finished setup is not shown again, unless the tools it
+    /// installed are gone (then just the tools step comes back). One that was shown but not finished
+    /// comes back whole. Otherwise it is a fresh install (the tools are not there yet) and it is shown;
+    /// an existing install that already has its tools is not a first run, so it is marked done without
+    /// a screen (the app menu still has it).
+    nonisolated static func launchDecision(started: Bool, completed: Bool, toolsInstalled: Bool) -> LaunchDecision {
+        if completed { return toolsInstalled ? .nothing : .showToolsOnly }
+        if started { return .show }
+        return toolsInstalled ? .markCompleted : .show
+    }
+
+    /// Called at launch, and again if the tools turn out to be missing once the first check settles.
+    func presentIfNeeded(toolsInstalled: Bool) {
+        guard !isPresented else { return }
+        let defaults = UserDefaults.standard
+        switch Self.launchDecision(started: defaults.bool(forKey: Self.startedKey),
+                                   completed: defaults.bool(forKey: Self.completedKey),
+                                   toolsInstalled: toolsInstalled) {
+        case .nothing: break
+        case .markCompleted: defaults.set(true, forKey: Self.completedKey)
+        case .show: present()
+        case .showToolsOnly: present(toolsOnly: true)
+        }
+    }
+
+    func present(toolsOnly: Bool = false) {
+        stopPreview()
+        isPreview = false
+        self.toolsOnly = toolsOnly
+        step = .tools
+        signInNote = nil
+        refreshDiskAccess()
+        UserDefaults.standard.set(true, forKey: Self.startedKey)
+        withAnimation(.spring(response: 0.4)) { isPresented = true }
+    }
+
+    /// The Dev tab's "run it for real": forgets that setup ever ran and clears what it asks about (the
+    /// YouTube sign-in choice), then shows the real screen the way a fresh install would see it. The
+    /// tools and Full Disk Access steps show their true state, since neither can be reset from here.
+    func startFresh(config: Config) {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: Self.startedKey)
+        defaults.removeObject(forKey: Self.completedKey)
+        config.browser = .none
+        present()
+    }
+
+    /// The Dev tab's preview button: the real screen, with the tools step on simulated progress.
+    func preview() {
+        stopPreview()
+        isPreview = true
+        toolsOnly = false
+        step = .tools
+        signInNote = nil
+        previewProgress = 0
+        refreshDiskAccess()
+        withAnimation(.spring(response: 0.4)) { isPresented = true }
+        // Bounded: stops itself once the simulated downloads reach 100%.
+        previewTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.previewProgress = min(1, self.previewProgress + 0.011)
+                if self.previewProgress >= 1 { self.stopPreview() }
+            }
+        }
+    }
+
+    func advance() {
+        if toolsOnly { return finish() }
+        guard let next = Step(rawValue: step.rawValue + 1) else { return finish() }
+        signInNote = nil
+        withAnimation(.easeInOut(duration: 0.25)) { step = next }
+        if next == .diskAccess { refreshDiskAccess() }
+    }
+
+    func finish() {
+        stopPreview()
+        if !isPreview { UserDefaults.standard.set(true, forKey: Self.completedKey) }
+        withAnimation(.spring(response: 0.4)) { isPresented = false }
+    }
+
+    func refreshDiskAccess() { diskAccessGranted = FullDiskAccess.isGranted }
+
+    private func stopPreview() {
+        previewTimer?.invalidate()
+        previewTimer = nil
+    }
+}
+
+// MARK: - View
+
+struct SetupOverlayView: View {
+    @ObservedObject var flow: SetupFlow
+    @ObservedObject var manager: DownloadManager
+    @ObservedObject var config: Config
+
+    var body: some View {
+        ZStack {
+            if flow.isPresented {
+                // The dim is a flat wash, so a plain opacity fade is right for it; the card itself
+                // uses the pop transition (never opacity on a glass card).
+                Color.black.opacity(0.45).ignoresSafeArea().transition(.opacity)
+                card.transition(.overlayPop)
+            }
+        }
+    }
+
+    // MARK: Card
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            header
+            titleBlock
+            Group {
+                switch flow.step {
+                case .tools:      toolsBody
+                case .diskAccess: diskAccessBody
+                case .signIn:     signInBody
+                case .done:       doneBody
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 170, alignment: .topLeading)
+            footer
+        }
+        .padding(26)
+        .frame(width: 520)
+        .glassCard(cornerRadius: DesignTokens.Radius.large)
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            if !flow.toolsOnly {
+                ForEach(SetupFlow.Step.allCases, id: \.rawValue) { step in
+                    Capsule()
+                        .fill(step.rawValue <= flow.step.rawValue ? DesignTokens.Accent.primary : Color.white.opacity(0.14))
+                        .frame(width: step == flow.step ? 22 : 12, height: 4)
+                }
+            }
+            if flow.isPreview {
+                Text("PREVIEW")
+                    .font(.appMono(size: 8.5, weight: .bold))
+                    .foregroundColor(DesignTokens.Accent.warning)
+                    .padding(.leading, flow.toolsOnly ? 0 : 8)
+            }
+            Spacer()
+            // Setup itself cannot be skipped. Only the preview can be closed early, since it is not
+            // the real thing; the optional steps have their own "Skip for Now".
+            if flow.isPreview && flow.step != .done {
+                Button("Close Preview") { flow.finish() }
+                    .buttonStyle(.plain)
+                    .font(.appMono(size: 10.5, weight: .medium))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+            }
+        }
+    }
+
+    private var titleBlock: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.appMono(size: 18, weight: .semibold))
+                .foregroundColor(flow.step == .done ? DesignTokens.Accent.success : DesignTokens.Accent.primaryLight)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(Color.white.opacity(0.06)))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.appMono(size: 16, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                Text(subtitle)
+                    .font(.appMono(size: 11.5))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var icon: String {
+        switch flow.step {
+        case .tools:      return "arrow.down.circle"
+        case .diskAccess: return "lock.shield"
+        case .signIn:     return "person.crop.circle"
+        case .done:       return "checkmark.circle.fill"
+        }
+    }
+
+    private var title: String {
+        switch flow.step {
+        case .tools:      return "Get Drop ready"
+        case .diskAccess: return "Full Disk Access"
+        case .signIn:     return "Sign in to YouTube"
+        case .done:       return "You're all set"
+        }
+    }
+
+    private var subtitle: String {
+        switch flow.step {
+        case .tools:      return flow.toolsOnly
+                            ? "Some of Drop's tools are missing. It downloads them again."
+                            : "Drop downloads the tools it works with. This happens once."
+        case .diskAccess: return "Optional. It lets Drop read Safari's YouTube sign-in. Skip it if you don't use Safari."
+        case .signIn:     return "Optional. Age-restricted videos only play for a signed-in account. Pick the browser you're signed in to."
+        case .done:       return "Here's what's ready. Everything here can be changed later."
+        }
+    }
+
+    // MARK: Step 1: tools
+
+    private enum ToolStatus { case done, downloading(Double), failed }
+
+    private func status(installed: Bool, updating: Bool, fraction: Double, previewIndex: Int) -> ToolStatus {
+        if flow.isPreview {
+            let simulated = min(1, max(0, flow.previewProgress * 1.3 - Double(previewIndex) * 0.15))
+            return simulated >= 1 ? .done : .downloading(simulated)
+        }
+        if installed { return .done }
+        return updating ? .downloading(fraction) : .failed
+    }
+
+    private var tools: [(name: String, detail: String, status: ToolStatus)] {
+        [("yt-dlp", "Downloads videos",
+          status(installed: manager.ytdlpPath != nil, updating: manager.updatingYtdlp, fraction: manager.ytdlpDownloadProgress, previewIndex: 0)),
+         ("ffmpeg", "Converts and merges",
+          status(installed: manager.ffmpegPath != nil, updating: manager.updatingFFmpeg, fraction: manager.ffmpegDownloadProgress, previewIndex: 1)),
+         ("deno", "Opens more YouTube videos",
+          status(installed: manager.denoPath != nil, updating: manager.updatingDeno, fraction: manager.denoDownloadProgress, previewIndex: 2))]
+    }
+
+    /// yt-dlp and ffmpeg are what Drop cannot work without; deno only adds YouTube coverage, so it may
+    /// still be arriving when the user moves on.
+    private var essentialsReady: Bool {
+        guard case .done = tools[0].status, case .done = tools[1].status else { return false }
+        return true
+    }
+
+    private var anyToolFailed: Bool {
+        tools.contains { if case .failed = $0.status { return true } else { return false } }
+    }
+
+    private var toolsBody: some View {
+        VStack(spacing: 12) {
+            ForEach(tools, id: \.name) { tool in
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(tool.name)
+                            .font(.appMono(size: 12, weight: .semibold))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+                        Text(tool.detail)
+                            .font(.appMono(size: 10))
+                            .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                    }
+                    .frame(width: 170, alignment: .leading)
+                    switch tool.status {
+                    case .done:
+                        progressBar(1)
+                        statusLabel("Ready", color: DesignTokens.Accent.success)
+                    case .downloading(let fraction):
+                        progressBar(fraction)
+                        statusLabel(fraction > 0 ? "\(Int((fraction * 100).rounded()))%" : "Waiting",
+                                    color: .white.opacity(DesignTokens.Text.secondary))
+                    case .failed:
+                        progressBar(0)
+                        statusLabel("Failed", color: DesignTokens.Accent.danger)
+                    }
+                }
+            }
+            if anyToolFailed {
+                Text("Check your internet connection, then try again.")
+                    .font(.appMono(size: 10.5))
+                    .foregroundColor(DesignTokens.Accent.warning)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func progressBar(_ fraction: Double) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.10))
+                Capsule()
+                    .fill(fraction >= 1 ? DesignTokens.Accent.success : DesignTokens.Accent.primary)
+                    .frame(width: geo.size.width * CGFloat(min(max(fraction, 0), 1)))
+            }
+        }
+        .frame(height: 5)
+    }
+
+    private func statusLabel(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.appMono(size: 10, weight: .semibold))
+            .foregroundColor(color)
+            .frame(width: 48, alignment: .trailing)
+    }
+
+    // MARK: Step 2: Full Disk Access
+
+    private var diskAccessBody: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: flow.diskAccessGranted ? "checkmark.circle.fill" : "circle.dashed")
+                    .foregroundColor(flow.diskAccessGranted ? DesignTokens.Accent.success : .white.opacity(DesignTokens.Text.tertiary))
+                    .accessibilityHidden(true)
+                Text(flow.diskAccessGranted ? "Allowed" : "Not allowed yet")
+                    .font(.appMono(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+            }
+            if !flow.diskAccessGranted {
+                GlassButton(label: "Open Full Disk Access", icon: "lock.open", tint: DesignTokens.Accent.primary, fitContent: true) {
+                    NSWorkspace.shared.open(BrowserSource.fullDiskAccessSettingsURL)
+                }
+                Text("Switch on Drop in the list, then come back here. If it stays off after you switch it on, reopen Drop.")
+                    .font(.appMono(size: 10.5))
+                    .foregroundColor(.white.opacity(DesignTokens.Text.tertiary))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        // Checked again when you come back from Settings, and once a second while this step is up.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in flow.refreshDiskAccess() }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in flow.refreshDiskAccess() }
+    }
+
+    // MARK: Step 3: sign-in
+
+    private var installedBrowsers: [BrowserSource] {
+        BrowserSource.allCases.filter { $0 != .none && $0.isInstalled }
+    }
+
+    private var signInBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 8)], alignment: .leading, spacing: 8) {
+                ForEach(installedBrowsers) { browser in
+                    choiceChip(browser.label, selected: config.browser == browser) { choose(browser) }
+                }
+                choiceChip("Not now", selected: config.browser == .none) { choose(.none) }
+            }
+            Text(flow.signInNote ?? "Drop reads the YouTube login from that browser. It never sees your password. macOS may ask to allow it.")
+                .font(.appMono(size: 10.5))
+                .foregroundColor(flow.signInNote == nil ? .white.opacity(DesignTokens.Text.tertiary) : DesignTokens.Accent.warning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func choose(_ browser: BrowserSource) {
+        // Safari's login sits behind Full Disk Access; picking it without that would only fail later.
+        if browser == .safari && !flow.diskAccessGranted {
+            flow.signInNote = "Safari needs Full Disk Access first. Go back a step, or pick another browser."
+            return
+        }
+        flow.signInNote = nil
+        config.browser = browser
+    }
+
+    private func choiceChip(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if selected { Image(systemName: "checkmark").font(.appMono(size: 9, weight: .bold)) }
+                Text(label).font(.appMono(size: 11.5, weight: .semibold))
+            }
+            .foregroundColor(selected ? DesignTokens.Accent.primaryLight : .white.opacity(DesignTokens.Text.primary))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(selected ? DesignTokens.Accent.primary.opacity(0.16) : Color.white.opacity(0.05)))
+            .overlay(Capsule().stroke(selected ? DesignTokens.Accent.primary.opacity(0.6) : Color.white.opacity(DesignTokens.Field.borderRest), lineWidth: 0.75))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Step 4: done
+
+    private var doneBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            summaryRow("Tools", value: essentialsReady ? "Ready" : "Still downloading", good: essentialsReady)
+            summaryRow("Full Disk Access", value: flow.diskAccessGranted ? "Allowed" : "Not allowed", good: flow.diskAccessGranted)
+            summaryRow("YouTube sign-in", value: config.browser == .none ? "Not set up" : config.browser.label, good: config.browser != .none)
+        }
+    }
+
+    private func summaryRow(_ name: String, value: String, good: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: good ? "checkmark.circle.fill" : "minus.circle")
+                .foregroundColor(good ? DesignTokens.Accent.success : .white.opacity(DesignTokens.Text.tertiary))
+                .accessibilityHidden(true)
+            Text(name)
+                .font(.appMono(size: 12, weight: .semibold))
+                .foregroundColor(.white.opacity(DesignTokens.Text.primary))
+            Spacer()
+            Text(value)
+                .font(.appMono(size: 11.5))
+                .foregroundColor(.white.opacity(DesignTokens.Text.secondary))
+        }
+    }
+
+    // MARK: Footer
+
+    private var footer: some View {
+        HStack {
+            Spacer()
+            switch flow.step {
+            case .tools:
+                if anyToolFailed && !flow.isPreview {
+                    GlassButton(label: "Try Again", icon: "arrow.clockwise", tint: DesignTokens.Accent.primary, fitContent: true) {
+                        manager.ensureLatestTools()
+                    }
+                }
+                GlassButton(label: essentialsReady ? "Continue" : "Setting up…", icon: "arrow.right",
+                            tint: DesignTokens.Accent.primary, fitContent: true, disabled: !essentialsReady) {
+                    flow.advance()
+                }
+            case .diskAccess:
+                GlassButton(label: flow.diskAccessGranted ? "Continue" : "Skip for Now", icon: "arrow.right",
+                            tint: flow.diskAccessGranted ? DesignTokens.Accent.primary : .white, fitContent: true) {
+                    flow.advance()
+                }
+            case .signIn:
+                GlassButton(label: config.browser == .none ? "Skip for Now" : "Continue", icon: "arrow.right",
+                            tint: config.browser == .none ? .white : DesignTokens.Accent.primary, fitContent: true) {
+                    flow.advance()
+                }
+            case .done:
+                GlassButton(label: flow.isPreview ? "Close Preview" : "Start Using Drop", icon: "checkmark",
+                            tint: DesignTokens.Accent.success, fitContent: true) {
+                    flow.finish()
+                }
+            }
+        }
+    }
+}

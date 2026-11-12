@@ -53,8 +53,8 @@ class DownloadManager: ObservableObject {
     @Published var updatingYtdlp: Bool = false
     @Published var updatingFFmpeg: Bool = false
     /// Real download fractionCompleted (0...1), fed from the download
-    /// task's own `.progress` via KVO below -- lets the first-launch setup
-    /// card show actual progress instead of a generic spinner.
+    /// task's own `.progress` via KVO below -- lets the setup screen
+    /// show actual progress instead of a generic spinner.
     @Published var ytdlpDownloadProgress: Double = 0
     @Published var ffmpegDownloadProgress: Double = 0
     private var ytdlpProgressObservation: NSKeyValueObservation?
@@ -72,7 +72,6 @@ class DownloadManager: ObservableObject {
     // button's "Up to Date" state alongside dropUpdater's own equivalent
     // flag for the Sparkle-based check.
     @Published var justCheckedUpToDate = false
-    private let gatekeeperAlertKey = "gatekeeperAlertShown"
 
     /// Writable location for self-updated binaries. The app bundle itself is
     /// read-only once code-signed, so "updating" yt-dlp/ffmpeg means
@@ -263,7 +262,6 @@ class DownloadManager: ObservableObject {
         // download only when a newer build exists) before the tools are
         // considered ready to use.
         ensureLatestTools()
-        showGatekeeperAlertIfNeeded()
         // Reclaim disk space from any analyze-cache info-json files left
         // over from previous sessions -- the 30-minute TTL already stops
         // them from being used once stale, this just deletes them.
@@ -303,40 +301,6 @@ class DownloadManager: ObservableObject {
             // and relaunched. This makes the app un-stick itself instead.
             self.checkDeps()
             self.silentUpdateCheck { self.justCheckedUpToDate = true }
-        }
-    }
-
-    /// Dev-tab only: forces the first-launch "setting up tools" card into view
-    /// with simulated (not real) progress, so it can be eyeballed without
-    /// wiping Application Support and actually re-downloading both tools.
-    /// Auto-resolves back to the real ready state after a few seconds --
-    /// mirrors DropCustomUserDriver's own previewX() pattern for the update
-    /// overlay (see DevReleaseView's testingCard).
-    func previewToolsSetup() {
-        checkingDeps = false
-        toolsReady = false
-        updatingYtdlp = true
-        updatingFFmpeg = true
-        ytdlpDownloadProgress = 0
-        ffmpegDownloadProgress = 0
-        // A task on the main actor ticking every 0.1s (it used to be a Timer, whose closure the
-        // compiler can't see runs on the main thread).
-        Task { @MainActor in
-            var tick = 0
-            while true {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                tick += 1
-                // Different rates so the two bars visibly diverge, like two
-                // independent real downloads would.
-                ytdlpDownloadProgress = min(1, Double(tick) * 0.045)
-                ffmpegDownloadProgress = min(1, Double(tick) * 0.03)
-                if ffmpegDownloadProgress >= 1 {
-                    updatingYtdlp = false
-                    updatingFFmpeg = false
-                    toolsReady = true
-                    break
-                }
-            }
         }
     }
 
@@ -411,17 +375,6 @@ class DownloadManager: ObservableObject {
 
         case .none:
             break
-        }
-    }
-
-    func showGatekeeperAlertIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: gatekeeperAlertKey) else { return }
-        UserDefaults.standard.set(true, forKey: gatekeeperAlertKey)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.showAlert(
-                title: "First Launch Note",
-                message: "Drop is not notarized by Apple, so macOS may have warned you before opening it. If you see \"cannot be opened\" errors, go to System Settings → Privacy & Security and click \"Open Anyway\". All downloads happen locally on your Mac."
-            )
         }
     }
 
@@ -518,7 +471,9 @@ class DownloadManager: ObservableObject {
     private static let ytdlpAssetKey = "installedYtdlpAssetURL"
     private static let ffmpegAssetKey = "installedFfmpegAssetURL"
     private static let denoAssetKey = "installedDenoAssetURL"
-    private var updatingDeno = false
+    @Published var updatingDeno = false
+    @Published var denoDownloadProgress: Double = 0
+    private var denoProgressObservation: NSKeyValueObservation?
 
     /// Both nightly endpoints are "latest" redirects whose FIRST hop points at
     /// a versioned URL (a tag for yt-dlp, a build number for ffmpeg). A GET
@@ -802,6 +757,7 @@ class DownloadManager: ObservableObject {
 
     private func downloadDeno(from releaseURL: URL, completion: (@MainActor @Sendable () -> Void)?) {
         appendLog("Fetching the JavaScript runtime YouTube needs (deno)…")
+        denoDownloadProgress = 0
         let destURL = supportDir.appendingPathComponent("deno")
         let tempZip = supportDir.appendingPathComponent("deno.zip")
         let unzipDir = supportDir.appendingPathComponent("deno_unzip")
@@ -847,6 +803,10 @@ class DownloadManager: ObservableObject {
                     completion?()
                 }
             }
+        }
+        denoProgressObservation = task.progress.observe(\.fractionCompleted, options: [.new]) { [weak self] progress, _ in
+            let fraction = progress.fractionCompleted
+            DispatchQueue.main.async { [weak self] in self?.denoDownloadProgress = fraction }
         }
         task.resume()
     }

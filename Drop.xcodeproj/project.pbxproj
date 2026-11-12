@@ -26,6 +26,7 @@
 		DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A3 /* DevReleaseView.swift */; };
 		DEV1000000000000000000A4 /* GitHubMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEV2000000000000000000A4 /* GitHubMarkdown.swift */; };
 		OVL1000000000000000000A1 /* DropUpdateOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = OVL2000000000000000000A1 /* DropUpdateOverlay.swift */; };
+		STP1000000000000000000A1 /* SetupFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = STP2000000000000000000A1 /* SetupFlow.swift */; };
 		MBP1000000000000000000A1 /* MenuBarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = MBP2000000000000000000A1 /* MenuBarPanel.swift */; };
 		SPL100000000000000000000 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL200000000000000000000 /* Config.swift */; };
 		SPL101000000000000000000 /* Formats.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL201000000000000000000 /* Formats.swift */; };
@@ -69,6 +70,7 @@
 		CFG1000000000000000000A1 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		CFG1000000000000000000A2 /* Local.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig; sourceTree = "<group>"; };
 		OVL2000000000000000000A1 /* DropUpdateOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropUpdateOverlay.swift; sourceTree = "<group>"; };
+		STP2000000000000000000A1 /* SetupFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupFlow.swift; sourceTree = "<group>"; };
 		MBP2000000000000000000A1 /* MenuBarPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPanel.swift; sourceTree = "<group>"; };
 		SPL200000000000000000000 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
 		SPL201000000000000000000 /* Formats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formats.swift; sourceTree = "<group>"; };
@@ -170,6 +172,7 @@
 				DD223344556677889900BBCC /* PreviewCard.swift */,
 				EE445566778899001122DDEE /* TabBottomBar.swift */,
 				OVL2000000000000000000A1 /* DropUpdateOverlay.swift */,
+				STP2000000000000000000A1 /* SetupFlow.swift */,
 				MBP2000000000000000000A1 /* MenuBarPanel.swift */,
 			);
 			path = Views;
@@ -332,6 +335,7 @@
 				DEV1000000000000000000A3 /* DevReleaseView.swift in Sources */,
 				DEV1000000000000000000A4 /* GitHubMarkdown.swift in Sources */,
 				OVL1000000000000000000A1 /* DropUpdateOverlay.swift in Sources */,
+				STP1000000000000000000A1 /* SetupFlow.swift in Sources */,
 				MBP1000000000000000000A1 /* MenuBarPanel.swift in Sources */,
 				SPL100000000000000000000 /* Config.swift in Sources */,
 				SPL101000000000000000000 /* Formats.swift in Sources */,

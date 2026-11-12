@@ -3,6 +3,25 @@
     <channel>
         <title>Drop</title>
         <item>
+            <title>1.8</title>
+            <pubDate>Thu, 12 Nov 2026 13:38:12 -0800</pubDate>
+            <sparkle:version>1.8</sparkle:version>
+            <sparkle:shortVersionString>1.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[## What's New
+- Added a Sign in option for age-restricted and sign-in-only YouTube videos
+- Added a built-in YouTube helper so more age-restricted videos open without signing in
+- Added a welcome and setup screen that installs the tools, asks for Full Disk Access and offers a YouTube sign-in
+- Added an Open Setup button on links YouTube stops for a missing sign-in that signs in and opens them again
+
+## Fixes
+- Fixed downloads failing with an ffmpeg not found error on Macs without Homebrew]]></description>
+            <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.8/Drop-1.8.dmg" length="7011464" type="application/octet-stream" sparkle:edSignature="0okcpTPu5+VJS+m5pq9AXzDaInBUJPM3+IzQnsFajqV/hz+iGqjyJqJCiYjbjNGrUni199atKlWC7x7zhInbCw=="/>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/Degrager/Drop/releases/download/v1.8/Drop1.8-1.7.delta" sparkle:deltaFrom="1.7" length="806090" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977712" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="rO4xlWG3uEDhmPihTb8NCTo9WJXEIuknJEXc6ovmadtoUO9IzQutRarXrwGE0+9HjVkgbOmt6D1hg1KjOceKDw=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.7</title>
             <pubDate>Tue, 10 Nov 2026 21:25:21 -0800</pubDate>
             <sparkle:version>1.7</sparkle:version>

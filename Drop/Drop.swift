@@ -1864,7 +1864,7 @@ struct ContentView: View {
             title: p.title,
             // The link and the path are only shown while the settings are (expanded).
             secondaryTitle: dl == nil ? p.url : "",
-            belowHeader: dl.flatMap { downloadErrorDetails($0) } ?? (failedAnalyze ? analyzeErrorDetails() : nil),
+            belowHeader: dl.flatMap { downloadErrorDetails($0) } ?? (failedAnalyze ? analyzeErrorDetails(for: p) : nil),
             isExpanded: cardLocked ? .constant(false) : Binding(
                 get: { preview.wrappedValue.isExpanded },
                 set: { preview.isExpanded.wrappedValue = $0 }
@@ -2375,6 +2375,7 @@ struct ContentView: View {
         withAnimation(.spring(response: 0.35)) {
             linkPreviews[idx].analyzeError = nil
             linkPreviews[idx].analyzeErrorIsForbidden = false
+            linkPreviews[idx].analyzeFix = nil
             linkPreviews[idx].title = p.url
             linkPreviews[idx].isPending = true
         }
@@ -2383,14 +2384,12 @@ struct ContentView: View {
 
     /// A failed analysis's way to the real reason: the capsule only has the short summary, the
     /// log has yt-dlp's own error line.
-    private func analyzeErrorDetails() -> AnyView {
-        AnyView(
-            Button(action: {
-                withAnimation(.spring(response: 0.25)) { activeTab = .log }
-            }) {
+    private func analyzeErrorDetails(for p: LinkPreview) -> AnyView {
+        func chip(_ icon: String, _ text: String, help: String, action: @escaping () -> Void) -> some View {
+            Button(action: action) {
                 HStack(spacing: 5) {
-                    Image(systemName: "terminal").font(.appMono(size: 10, weight: .semibold))
-                    Text("Show in Log").font(.appMono(size: 11, weight: .semibold))
+                    Image(systemName: icon).font(.appMono(size: 10, weight: .semibold))
+                    Text(text).font(.appMono(size: 11, weight: .semibold))
                 }
                 .padding(.horizontal, 10).padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 7).fill(Color.orange.opacity(0.18))
@@ -2398,7 +2397,31 @@ struct ContentView: View {
                 .foregroundColor(.orange)
             }
             .buttonStyle(.plain)
-            .help("Show in Log")
+            .help(help)
+        }
+        return AnyView(
+            HStack(spacing: 8) {
+                switch p.analyzeFix {
+                case .signIn:
+                    let browser = BrowserSource.preferred()
+                    chip("person.crop.circle", "Sign in with \(browser.label)",
+                         help: "Reads your YouTube sign-in from \(browser.label) so Drop can open this video. macOS may ask for permission.") {
+                        config.browser = browser
+                        retryAnalysis(of: p)
+                    }
+                case .dropCookies:
+                    chip("cookie", "Stop Using Cookies", help: "Go back to anonymous requests and try again.") {
+                        config.browser = .none
+                        retryAnalysis(of: p)
+                    }
+                case nil:
+                    EmptyView()
+                }
+                chip("terminal", "Show in Log", help: "Show in Log") {
+                    withAnimation(.spring(response: 0.25)) { activeTab = .log }
+                }
+                Spacer(minLength: 0)
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
         )
     }
@@ -2449,6 +2472,7 @@ struct ContentView: View {
     func fixActionLabel(_ action: FixAction) -> String {
         switch action {
         case .setCookieNone:       return "Set Cookie Source to None"
+        case .useBrowserCookies:   return "Sign in with \(BrowserSource.preferred().label)"
         case .openFolderPicker:    return "Choose Folder"
         case .openPrivacySecurity: return "Open Privacy & Security"
         case .openURL:             return "Search on YouTube"
@@ -2458,6 +2482,7 @@ struct ContentView: View {
     func fixActionIcon(_ action: FixAction) -> String {
         switch action {
         case .setCookieNone:       return "cookie"
+        case .useBrowserCookies:   return "person.crop.circle"
         case .openFolderPicker:    return "folder.badge.plus"
         case .openPrivacySecurity: return "shield.fill"
         case .openURL:             return "magnifyingglass"
@@ -2537,6 +2562,12 @@ struct ContentView: View {
         // instead of silently dropping the card.
         var analyzeError: String? = nil
         var analyzeErrorIsForbidden: Bool = false  // true specifically for HTTP 403 at analyze time
+        /// A one-click way out of the failure, shown beside Show in Log.
+        var analyzeFix: AnalyzeFix? = nil
+        enum AnalyzeFix: Equatable {
+            case signIn       // age gate / "not a bot": read the YouTube sign-in from the preferred browser
+            case dropCookies  // the browser's cookies could not be read: stop using them
+        }
         var isPlaylist: Bool = false      // true if URL is a playlist
         var playlistCount: Int = 0        // number of items in playlist
         // Exact combined (video+audio) byte sizes per resolution cap — populated during analyze
@@ -2915,7 +2946,8 @@ struct ContentView: View {
                 // could see higher. The download call already applied this same
                 // cookie source (see ytArgs below); analyze never did, so the two
                 // steps were silently looking at two different format lists.
-                analyzeArgs += DispatchQueue.main.sync { self.config.browser.cookieArgs }
+                let cookieBrowser = DispatchQueue.main.sync { self.config.browser }
+                analyzeArgs += cookieBrowser.cookieArgs
                 // Reuse a fresh cached info-json (written by a prior analyze of
                 // this exact URL within the TTL window) instead of re-resolving
                 // from the network -- this is what makes re-pasting an already-
@@ -3035,6 +3067,12 @@ struct ContentView: View {
                 let stderrLower = lastStderr.lowercased()
                 let analyzeIsForbidden = output.isEmpty && stderrLower.contains("403") &&
                     (stderrLower.contains("forbidden") || stderrLower.contains("http error 403"))
+
+                // Age gate / "not a bot" (needs a signed-in account) and unreadable browser cookies:
+                // both used to fall into the generic "source may not be supported" below, which
+                // sent a signed-out user round in circles. Each gets its own message and fix.
+                let signInGate = output.isEmpty ? SignInGate.detect(in: lastStderr) : nil
+                let cookiesBlocked = output.isEmpty && cookieBrowser != .none && ytdlpCookiesBlocked(lastStderr)
 
                 var preview: LinkPreview? = nil
                 if !output.isEmpty {
@@ -3242,6 +3280,23 @@ struct ContentView: View {
                     lp.analyzeErrorIsForbidden = true
                     preview = lp
                     manager.logFromBackground("Analyze failed (blocked, HTTP 403): \(url)")
+                } else if signInGate != nil || cookiesBlocked {
+                    var lp = LinkPreview(
+                        url: url, title: url, thumbnailURL: "",
+                        hasVideo: false, duration: "",
+                        mediaMode: .audioOnly
+                    )
+                    if let gate = signInGate {
+                        lp.analyzeError = gate.summary(usingBrowser: cookieBrowser)
+                        lp.analyzeFix = cookieBrowser == .none ? .signIn : nil
+                    } else {
+                        lp.analyzeError = "Couldn't read \(cookieBrowser.label)'s sign-in. macOS blocked access to its cookies."
+                        lp.analyzeFix = .dropCookies
+                    }
+                    preview = lp
+                    let summary = lastStderr.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                        .last { !$0.isEmpty } ?? "no stderr output"
+                    manager.logFromBackground("Analyze failed for \(url): \(summary)")
                 } else if analyzeTimedOut {
                     // The watchdog killed a hung yt-dlp process -- distinct from every other
                     // empty-output case below so the card (and the Log tab) say what actually

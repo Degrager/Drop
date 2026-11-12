@@ -536,3 +536,42 @@ final class TemporaryFilesTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: original), "original", "the original must survive a failed re-encode swap")
     }
 }
+
+/// yt-dlp's refusals that mean "sign in", told apart from each other and from ordinary failures:
+/// the age gate used to be reported as a private video (download) or an unsupported source (analyze).
+final class SignInGateTests: XCTestCase {
+    /// The exact error a user's Log showed for an age-restricted video.
+    private let ageRestricted = "ERROR: [youtube] 1fDbrbVt2fA: Sign in to confirm your age. This video may be inappropriate for some users. Use --cookies-from-browser or --cookies for the authentication."
+
+    func testTheAgeGateIsRecognised() {
+        XCTAssertEqual(SignInGate.detect(in: ageRestricted), .ageRestricted)
+        XCTAssertEqual(SignInGate.detect(in: "ERROR: [youtube] abc: This video is age-restricted"), .ageRestricted)
+    }
+
+    func testTheBotCheckIsRecognised() {
+        XCTAssertEqual(SignInGate.detect(in: "ERROR: [youtube] abc: Sign in to confirm you’re not a bot."), .botCheck)
+    }
+
+    func testOtherFailuresAreNotSignInGates() {
+        XCTAssertNil(SignInGate.detect(in: "ERROR: [youtube] abc: Private video. Sign in if you've been granted access to this video"))
+        XCTAssertNil(SignInGate.detect(in: "ERROR: [youtube] abc: Video unavailable"))
+        XCTAssertNil(SignInGate.detect(in: "ERROR: Unsupported URL: https://example.com"))
+        XCTAssertNil(SignInGate.detect(in: ""))
+    }
+
+    func testTheSummaryAsksForCookiesOnlyWhenNoneAreInUse() {
+        XCTAssertFalse(SignInGate.ageRestricted.summary(usingBrowser: .none).contains("Sign in to YouTube in"))
+        XCTAssertTrue(SignInGate.ageRestricted.summary(usingBrowser: .chrome).contains("Sign in to YouTube in Chrome"))
+    }
+
+    func testBlockedCookiesAreToldApartFromAWrongSignIn() {
+        XCTAssertTrue(ytdlpCookiesBlocked("ERROR: Operation not permitted: '/Users/x/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies' cookies"))
+        XCTAssertTrue(ytdlpCookiesBlocked("ERROR: could not find chrome cookies database in /Users/x/Library/Application Support/Google/Chrome"))
+        XCTAssertFalse(ytdlpCookiesBlocked(ageRestricted), "mentions cookies only as advice")
+        XCTAssertFalse(ytdlpCookiesBlocked("ERROR: Video unavailable"))
+    }
+
+    func testThereIsAlwaysABrowserToOffer() {
+        XCTAssertNotEqual(BrowserSource.preferred(), .none)
+    }
+}

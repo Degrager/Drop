@@ -366,6 +366,12 @@ class DownloadManager: ObservableObject {
             config.browser = .none
             retry(download: download, config: config)
 
+        case .useBrowserCookies:
+            // Deliberate opt-in, clicked by the user at the moment it is needed (cookies are never
+            // switched on by default: reading Chrome's cookies prompts for its Keychain key).
+            config.browser = BrowserSource.preferred()
+            appendLog("Sign-in: reading YouTube cookies from \(config.browser.label) and retrying...")
+            retry(download: download, config: config)
 
         case .openFolderPicker:
             showFolderPicker()
@@ -1429,6 +1435,10 @@ class DownloadManager: ObservableObject {
             }
 
             ytArgs += config.browser.cookieArgs
+            // Drop's own ffmpeg lives in Application Support, not beside yt-dlp and not on PATH.
+            // Without this yt-dlp only found one on a Mac that happened to have Homebrew's, and
+            // everyone else got "Postprocessing: ffmpeg not found" (or unmerged video and audio).
+            if let ffmpeg = self.ffmpegPath { ytArgs += ["--ffmpeg-location", ffmpeg] }
 
             switch mediaMode {
             case .audioOnly:
@@ -1878,7 +1888,8 @@ class DownloadManager: ObservableObject {
                         }
                         let isDRM       = stderr.contains("drm")
                         let isCookie    = stderr.contains("operation not permitted") && stderr.contains("cookies")
-                        let isPrivate   = stderr.contains("private video") || stderr.contains("sign in")
+                        let signInGate  = SignInGate.detect(in: stderr)
+                        let isPrivate   = stderr.contains("private video") || (stderr.contains("sign in") && signInGate == nil)
                         let isUnavail   = stderr.contains("video unavailable") || stderr.contains("no video formats")
                         let fileMissing = proc.terminationStatus == 0 && confirmedPath == nil
                         let errLine: String
@@ -1908,6 +1919,13 @@ class DownloadManager: ObservableObject {
                                     $0.fixHint = "Track is DRM protected. Try finding it on YouTube instead."
                                     $0.fixAction = .openURL("https://www.youtube.com/results?search_query=\(query)")
                                 }
+                            }
+                        } else if let gate = signInGate {
+                            let browser = config.browser
+                            self.withDownload(downloadID) {
+                                $0.errorMessage = gate.summary(usingBrowser: browser)
+                                $0.fixHint = browser == .none ? "Drop can read your YouTube sign-in from \(BrowserSource.preferred().label)." : nil
+                                $0.fixAction = browser == .none ? .useBrowserCookies : .none
                             }
                         } else if isPrivate {
                             self.withDownload(downloadID) {

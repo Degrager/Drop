@@ -471,6 +471,61 @@ enum BrowserSource: String, CaseIterable, Identifiable {
     }
 }
 
+extension BrowserSource {
+    /// The browser Drop offers to read a YouTube sign-in from: the Mac's default browser when it is
+    /// one yt-dlp can read cookies from, otherwise the first supported browser that is installed,
+    /// otherwise Safari (always there).
+    static func preferred() -> BrowserSource {
+        if let https = URL(string: "https://example.com"),
+           let app = NSWorkspace.shared.urlForApplication(toOpen: https),
+           let id = Bundle(url: app)?.bundleIdentifier,
+           let match = allCases.first(where: { $0.bundleIdentifier == id }) {
+            return match
+        }
+        let detected = autoDetected()
+        return detected == .none ? .safari : detected
+    }
+}
+
+// MARK: - Sign-in gates
+
+/// Why YouTube refused an anonymous request, read from yt-dlp's error text. Both mean "this needs
+/// a signed-in account", which Drop can only supply by reading a browser's cookies (opt-in: see
+/// Config.browser and the Keychain-prompt history behind it).
+enum SignInGate: Equatable {
+    case ageRestricted
+    case botCheck
+
+    static func detect(in stderr: String) -> SignInGate? {
+        let text = stderr.lowercased()
+        if text.contains("confirm your age") || text.contains("age-restricted") || text.contains("inappropriate for some users") {
+            return .ageRestricted
+        }
+        if text.contains("not a bot") { return .botCheck }
+        return nil
+    }
+
+    /// What the card says. `browser` is the cookie source already in use, if any: then the sign-in is
+    /// there but YouTube still refused it, so the advice is to check the account, not to add cookies.
+    func summary(usingBrowser browser: BrowserSource) -> String {
+        let what: String
+        switch self {
+        case .ageRestricted: what = "This video is age-restricted. YouTube only plays it for a signed-in account."
+        case .botCheck:      what = "YouTube is asking for a signed-in session before it will open this video."
+        }
+        return browser == .none ? what : what + " Sign in to YouTube in \(browser.label) and try again."
+    }
+}
+
+/// True when yt-dlp could not read a browser's cookies -- macOS blocked the file or the Keychain
+/// key was refused -- rather than the cookies being wrong.
+func ytdlpCookiesBlocked(_ stderr: String) -> Bool {
+    let text = stderr.lowercased()
+    guard text.contains("cookie") else { return false }
+    return ["operation not permitted", "permission denied", "keychain", "keyring", "could not find", "failed to decrypt", "unable to decrypt"]
+        .contains { text.contains($0) }
+}
+
 // MARK: - Filename Sanitizer
 
 /// Faithful Swift port of yt-dlp's own `sanitize_filename(s, restricted=False,

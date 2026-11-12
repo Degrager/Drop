@@ -265,6 +265,7 @@ enum DownloadStatus {
 
 enum FixAction: Equatable {
     case setCookieNone          // Safari cookie locked — set browser to None
+    case useBrowserCookies      // Age gate / "not a bot": read the YouTube sign-in from a browser
     case openFolderPicker       // Wrong/missing output folder
     case openPrivacySecurity    // macOS permission issue
     case openURL(String)        // Open a URL (e.g. YouTube search)

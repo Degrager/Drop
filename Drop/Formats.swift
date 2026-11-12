@@ -536,6 +536,79 @@ enum SignInGate: Equatable {
     }
 }
 
+extension BrowserSource {
+    /// YouTube's own sign-in page; Google sends a signed-in visitor straight on to YouTube.
+    static let youTubeSignInURL = URL(string: "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F")!
+
+    /// Opens YouTube's sign-in page in THIS browser (not the default one), because that is the browser
+    /// whose login Drop will read.
+    func openYouTubeSignIn() {
+        guard let id = bundleIdentifier, let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return }
+        NSWorkspace.shared.open([Self.youTubeSignInURL], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+    }
+}
+
+/// Whether a browser really holds a YouTube login. Asking yt-dlp to write out the cookies it reads from
+/// the browser and looking for the login cookies by NAME is the only honest test: the browser being
+/// installed, or a setting having been saved, says nothing about being signed in. The cookie file holds
+/// a live session, so it lives in the temporary folder only for as long as it takes to read it, and
+/// its contents are never logged.
+enum YouTubeSignIn {
+    enum Result: Equatable { case signedIn, notSignedIn, blocked, failed(String) }
+
+    private nonisolated static let loginCookieNames: Set<String> = ["SAPISID", "__Secure-3PAPISID", "__Secure-3PSID", "LOGIN_INFO"]
+
+    /// Reads a Netscape cookie file: true when a YouTube or Google login cookie is present with a value.
+    /// (yt-dlp writes HttpOnly cookies behind a "#HttpOnly_" prefix, which would otherwise look like a comment.)
+    nonisolated static func hasLoginCookies(in netscapeText: String) -> Bool {
+        for rawLine in netscapeText.split(whereSeparator: \.isNewline) {
+            var line = Substring(rawLine)
+            if line.hasPrefix("#HttpOnly_") { line = line.dropFirst("#HttpOnly_".count) }
+            else if line.hasPrefix("#") { continue }
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count >= 7 else { continue }
+            let domain = fields[0].lowercased()
+            guard domain.contains("youtube.com") || domain.contains("google.com") else { continue }
+            if loginCookieNames.contains(String(fields[5])) && !fields[6].trimmingCharacters(in: .whitespaces).isEmpty { return true }
+        }
+        return false
+    }
+
+    nonisolated static func check(browser: BrowserSource, ytdlpPath: String?) async -> Result {
+        guard browser != .none else { return .notSignedIn }
+        guard let ytdlpPath else { return .failed("yt-dlp isn't installed yet.") }
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: runBlocking(browser: browser, ytdlpPath: ytdlpPath))
+            }
+        }
+    }
+
+    private nonisolated static func runBlocking(browser: BrowserSource, ytdlpPath: String) -> Result {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("drop-signin-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ytdlpPath)
+        // A one-result search: the cheapest run that still loads the browser's cookies and saves them on exit.
+        process.arguments = browser.cookieArgs + ["--cookies", file.path, "--skip-download", "--flat-playlist",
+                                                  "--playlist-items", "1", "--socket-timeout", "15", "--no-warnings", "-q", "ytsearch1:test"]
+        let errors = Pipe()
+        process.standardError = errors
+        process.standardOutput = FileHandle.nullDevice
+        do { try process.run() } catch { return .failed("Couldn't start yt-dlp.") }
+        let stderr = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+
+        if let text = try? String(contentsOf: file, encoding: .utf8) {
+            return hasLoginCookies(in: text) ? .signedIn : .notSignedIn
+        }
+        // No cookie file at all: yt-dlp never got as far as reading the browser.
+        if ytdlpCookiesBlocked(stderr) { return .blocked }
+        let reason = stderr.split(whereSeparator: \.isNewline).first { $0.contains("ERROR") }.map(String.init) ?? ""
+        return .failed(String(reason.replacingOccurrences(of: "ERROR:", with: "").trimmingCharacters(in: .whitespaces).prefix(90)))
+    }
+}
+
 /// True when yt-dlp could not read a browser's cookies -- macOS blocked the file or the Keychain
 /// key was refused -- rather than the cookies being wrong.
 func ytdlpCookiesBlocked(_ stderr: String) -> Bool {

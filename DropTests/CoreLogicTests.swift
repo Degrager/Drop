@@ -635,3 +635,38 @@ final class SetupFlowDecisionTests: XCTestCase {
         XCTAssertEqual(SetupFlow.launchDecision(started: true, completed: true, toolsInstalled: false), .showToolsOnly)
     }
 }
+
+// MARK: - YouTube sign-in check
+
+final class YouTubeSignInTests: XCTestCase {
+    private func line(_ domain: String, _ name: String, _ value: String = "abc") -> String {
+        "\(domain)\tTRUE\t/\tTRUE\t1893456000\t\(name)\t\(value)"
+    }
+    private let header = "# Netscape HTTP Cookie File\n# https://curl.haxx.se/rfc/cookie_spec.html\n"
+
+    func testALoginCookieOnGoogleCountsAsSignedIn() {
+        XCTAssertTrue(YouTubeSignIn.hasLoginCookies(in: header + line(".google.com", "SAPISID")))
+    }
+
+    func testHttpOnlyCookiesAreNotMistakenForComments() {
+        XCTAssertTrue(YouTubeSignIn.hasLoginCookies(in: header + "#HttpOnly_" + line(".youtube.com", "LOGIN_INFO")))
+    }
+
+    func testAnonymousVisitorCookiesDoNotCount() {
+        let text = header + [line(".youtube.com", "VISITOR_INFO1_LIVE"), line(".youtube.com", "PREF"), line(".google.com", "NID")].joined(separator: "\n")
+        XCTAssertFalse(YouTubeSignIn.hasLoginCookies(in: text))
+    }
+
+    func testALoginCookieNameOnAnotherSiteDoesNotCount() {
+        XCTAssertFalse(YouTubeSignIn.hasLoginCookies(in: header + line(".example.com", "SAPISID")))
+    }
+
+    func testAnEmptyValueDoesNotCount() {
+        XCTAssertFalse(YouTubeSignIn.hasLoginCookies(in: header + line(".google.com", "SAPISID", "")))
+    }
+
+    func testAnEmptyOrHeaderOnlyJarIsNotSignedIn() {
+        XCTAssertFalse(YouTubeSignIn.hasLoginCookies(in: ""))
+        XCTAssertFalse(YouTubeSignIn.hasLoginCookies(in: header))
+    }
+}

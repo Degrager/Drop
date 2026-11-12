@@ -33,8 +33,13 @@ final class SetupFlow: ObservableObject {
     @Published private(set) var diskAccessGranted = false
     /// 0...1, only advanced while previewing.
     @Published private(set) var previewProgress: Double = 0
-    /// Why a sign-in choice was not applied (Safari before Full Disk Access).
-    @Published var signInNote: String? = nil
+
+    /// Where the YouTube sign-in step stands. The browser is only saved as Drop's cookie source once
+    /// its login has actually been found, so a choice that did not work is never remembered.
+    enum SignInState: Equatable { case idle, checking, signedIn, notSignedIn, blocked, failed(String) }
+    @Published private(set) var signInState: SignInState = .idle
+    @Published private(set) var signInBrowser: BrowserSource = .none
+    private var signInTask: Task<Void, Never>?
 
     private static let startedKey = "setupStarted"
     private static let completedKey = "setupCompleted"
@@ -72,7 +77,7 @@ final class SetupFlow: ObservableObject {
         isPreview = false
         self.toolsOnly = toolsOnly
         step = .tools
-        signInNote = nil
+        resetSignIn()
         refreshDiskAccess()
         UserDefaults.standard.set(true, forKey: Self.startedKey)
         withAnimation(.spring(response: 0.4)) { isPresented = true }
@@ -118,7 +123,7 @@ final class SetupFlow: ObservableObject {
         isPreview = true
         toolsOnly = false
         step = .tools
-        signInNote = nil
+        resetSignIn()
         previewProgress = 0
         refreshDiskAccess()
         withAnimation(.spring(response: 0.4)) { isPresented = true }
@@ -135,7 +140,6 @@ final class SetupFlow: ObservableObject {
     func advance() {
         if toolsOnly { return finish() }
         guard let next = Step(rawValue: step.rawValue + 1) else { return finish() }
-        signInNote = nil
         withAnimation(.easeInOut(duration: 0.25)) { step = next }
         if next == .diskAccess { refreshDiskAccess() }
     }
@@ -147,6 +151,80 @@ final class SetupFlow: ObservableObject {
     }
 
     func refreshDiskAccess() { diskAccessGranted = FullDiskAccess.isGranted }
+
+    // MARK: YouTube sign-in
+
+    private func resetSignIn() {
+        signInTask?.cancel()
+        signInTask = nil
+        signInBrowser = .none
+        signInState = .idle
+    }
+
+    /// The sign-in step came up. A browser already saved from before (setup run again) is checked right
+    /// away, so the step shows where things really stand.
+    func signInStepAppeared(config: Config, ytdlpPath: String?) {
+        guard signInState == .idle, signInBrowser == .none, config.browser != .none else { return }
+        signInBrowser = config.browser
+        checkSignIn(config: config, ytdlpPath: ytdlpPath, openIfNeeded: false)
+    }
+
+    /// A browser was picked: look for its YouTube login, and if there isn't one, open the browser at
+    /// YouTube's sign-in page so there is something to do.
+    func chooseBrowser(_ browser: BrowserSource, config: Config, ytdlpPath: String?) {
+        signInBrowser = browser
+        checkSignIn(config: config, ytdlpPath: ytdlpPath, openIfNeeded: true)
+    }
+
+    /// "Check Again", and coming back to Drop from the browser.
+    func recheckSignIn(config: Config, ytdlpPath: String?) {
+        guard signInBrowser != .none, signInState != .checking, signInState != .signedIn else { return }
+        checkSignIn(config: config, ytdlpPath: ytdlpPath, openIfNeeded: false)
+    }
+
+    func openSignInPage() {
+        guard !isPreview else { return }
+        signInBrowser.openYouTubeSignIn()
+    }
+
+    private func checkSignIn(config: Config, ytdlpPath: String?, openIfNeeded: Bool) {
+        signInTask?.cancel()
+        let previous = signInState
+        signInState = .checking
+        let browser = signInBrowser
+        // The preview shows the sequence without touching a real browser: not signed in (and the page
+        // "opened") on the first look, signed in on the next.
+        if isPreview {
+            signInTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                guard !Task.isCancelled, let self, self.signInBrowser == browser else { return }
+                self.signInState = (!openIfNeeded && previous == .notSignedIn) ? .signedIn : .notSignedIn
+            }
+            return
+        }
+        signInTask = Task { [weak self] in
+            let result = await YouTubeSignIn.check(browser: browser, ytdlpPath: ytdlpPath)
+            guard !Task.isCancelled, let self, self.signInBrowser == browser else { return }
+            switch result {
+            case .signedIn:
+                self.signInState = .signedIn
+                config.browser = browser
+            case .notSignedIn:
+                self.signInState = .notSignedIn
+                if openIfNeeded { browser.openYouTubeSignIn() }
+            case .blocked:
+                self.signInState = .blocked
+            case .failed(let reason):
+                self.signInState = .failed(reason)
+            }
+        }
+    }
+
+    /// Leaving the step without a working sign-in leaves no cookie source behind.
+    func leaveSignInStep(config: Config) {
+        signInTask?.cancel()
+        if signInState != .signedIn && !isPreview { config.browser = .none }
+    }
 
     private func stopPreview() {
         previewTimer?.invalidate()
@@ -265,7 +343,7 @@ struct SetupOverlayView: View {
                             ? "Some of Drop's tools are missing. It downloads them again."
                             : "Drop downloads the tools it works with. This happens once."
         case .diskAccess: return "Optional. It lets Drop read Safari's YouTube sign-in. Skip it if you don't use Safari."
-        case .signIn:     return "Optional. Age-restricted videos only play for a signed-in account. Pick the browser you're signed in to."
+        case .signIn:     return "Optional. Age-restricted videos only play for a signed-in account. Pick the browser you use for YouTube."
         case .done:       return "Here's what's ready. Everything here can be changed later."
         }
     }
@@ -391,35 +469,89 @@ struct SetupOverlayView: View {
         BrowserSource.allCases.filter { $0 != .none && $0.isInstalled }
     }
 
+    private var ytdlpPath: String? { manager.ytdlpPath }
+
     private var signInBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 8)], alignment: .leading, spacing: 8) {
                 ForEach(installedBrowsers) { browser in
-                    choiceChip(browser.label, selected: config.browser == browser) { choose(browser) }
+                    choiceChip(browser.label, selected: flow.signInBrowser == browser, confirmed: flow.signInBrowser == browser && flow.signInState == .signedIn) {
+                        flow.chooseBrowser(browser, config: config, ytdlpPath: ytdlpPath)
+                    }
                 }
-                choiceChip("Not now", selected: config.browser == .none) { choose(.none) }
             }
-            Text(flow.signInNote ?? "Drop reads the YouTube login from that browser. It never sees your password. macOS may ask to allow it.")
+            signInStatus
+            signInActions
+        }
+        .onAppear { flow.signInStepAppeared(config: config, ytdlpPath: ytdlpPath) }
+        // Back from the browser: look again.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            flow.refreshDiskAccess()
+            flow.recheckSignIn(config: config, ytdlpPath: ytdlpPath)
+        }
+    }
+
+    private var signInStatus: some View {
+        let name = flow.signInBrowser.label
+        let line: (icon: String, text: String, color: Color)
+        switch flow.signInState {
+        case .idle:
+            line = ("", "Pick the browser you use for YouTube. If you aren't signed in there yet, Drop opens YouTube's sign-in page in it. Drop reads the login from that browser and never sees your password. macOS may ask to allow it.",
+                    .white.opacity(DesignTokens.Text.tertiary))
+        case .checking:
+            line = ("", "Looking for your YouTube sign-in in \(name)…", .white.opacity(DesignTokens.Text.secondary))
+        case .signedIn:
+            line = ("checkmark.circle.fill", "Signed in to YouTube in \(name).", DesignTokens.Accent.success)
+        case .notSignedIn:
+            line = ("circle.dashed", "Not signed in yet. Sign in to YouTube in \(name), then come back here.", DesignTokens.Accent.warning)
+        case .blocked:
+            line = ("exclamationmark.triangle.fill", flow.signInBrowser == .safari
+                    ? "macOS is blocking Safari's login. Allow Drop in Full Disk Access, reopen Drop, then check again."
+                    : "macOS didn't let Drop read \(name)'s login. Allow it when asked, then check again.",
+                    DesignTokens.Accent.warning)
+        case .failed(let reason):
+            line = ("exclamationmark.triangle.fill", "Couldn't read \(name)'s login\(reason.isEmpty ? "." : ": \(reason)")", DesignTokens.Accent.warning)
+        }
+        return HStack(alignment: .top, spacing: 8) {
+            if flow.signInState == .checking {
+                ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
+            } else if !line.icon.isEmpty {
+                Image(systemName: line.icon).font(.appMono(size: 11, weight: .semibold)).foregroundColor(line.color)
+                    .accessibilityHidden(true)
+            }
+            Text(line.text)
                 .font(.appMono(size: 10.5))
-                .foregroundColor(flow.signInNote == nil ? .white.opacity(DesignTokens.Text.tertiary) : DesignTokens.Accent.warning)
+                .foregroundColor(flow.signInState == .signedIn ? .white.opacity(DesignTokens.Text.primary) : line.color)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private func choose(_ browser: BrowserSource) {
-        // Safari's login sits behind Full Disk Access; picking it without that would only fail later.
-        if browser == .safari && !flow.diskAccessGranted {
-            flow.signInNote = "Safari needs Full Disk Access first. Go back a step, or pick another browser."
-            return
+    @ViewBuilder
+    private var signInActions: some View {
+        if flow.signInBrowser != .none && flow.signInState != .checking {
+            HStack(spacing: 8) {
+                GlassButton(label: "Open YouTube Sign-in", icon: "arrow.up.forward.app", tint: DesignTokens.Accent.primary, fitContent: true) {
+                    flow.openSignInPage()
+                }
+                if flow.signInState == .blocked && flow.signInBrowser == .safari {
+                    GlassButton(label: "Open Full Disk Access", icon: "lock.open", tint: .white, fitContent: true) {
+                        NSWorkspace.shared.open(BrowserSource.fullDiskAccessSettingsURL)
+                    }
+                }
+                if flow.signInState != .signedIn {
+                    GlassButton(label: "Check Again", icon: "arrow.clockwise", tint: .white, fitContent: true) {
+                        flow.recheckSignIn(config: config, ytdlpPath: ytdlpPath)
+                    }
+                }
+            }
         }
-        flow.signInNote = nil
-        config.browser = browser
     }
 
-    private func choiceChip(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    /// `selected` is the browser picked; the checkmark (`confirmed`) is only for one whose login was found.
+    private func choiceChip(_ label: String, selected: Bool, confirmed: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if selected { Image(systemName: "checkmark").font(.appMono(size: 9, weight: .bold)) }
+                if confirmed { Image(systemName: "checkmark").font(.appMono(size: 9, weight: .bold)) }
                 Text(label).font(.appMono(size: 11.5, weight: .semibold))
             }
             .foregroundColor(selected ? DesignTokens.Accent.primaryLight : .white.opacity(DesignTokens.Text.primary))
@@ -437,7 +569,7 @@ struct SetupOverlayView: View {
         VStack(alignment: .leading, spacing: 12) {
             summaryRow("Tools", value: essentialsReady ? "Ready" : "Still downloading", good: essentialsReady)
             summaryRow("Full Disk Access", value: flow.diskAccessGranted ? "Allowed" : "Not allowed", good: flow.diskAccessGranted)
-            summaryRow("YouTube sign-in", value: config.browser == .none ? "Not set up" : config.browser.label, good: config.browser != .none)
+            summaryRow("YouTube sign-in", value: flow.signInState == .signedIn ? flow.signInBrowser.label : "Not set up", good: flow.signInState == .signedIn)
         }
     }
 
@@ -478,8 +610,10 @@ struct SetupOverlayView: View {
                     flow.advance()
                 }
             case .signIn:
-                GlassButton(label: config.browser == .none ? "Skip for Now" : "Continue", icon: "arrow.right",
-                            tint: config.browser == .none ? .white : DesignTokens.Accent.primary, fitContent: true) {
+                let signedIn = flow.signInState == .signedIn
+                GlassButton(label: signedIn ? "Continue" : "Skip for Now", icon: "arrow.right",
+                            tint: signedIn ? DesignTokens.Accent.primary : .white, fitContent: true) {
+                    flow.leaveSignInStep(config: config)
                     flow.advance()
                 }
             case .done:

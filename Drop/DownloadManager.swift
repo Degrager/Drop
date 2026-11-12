@@ -132,6 +132,21 @@ class DownloadManager: ObservableObject {
         return nil
     }
 
+    /// Deno, the JavaScript runtime yt-dlp needs for YouTube. Without one yt-dlp cannot get past
+    /// YouTube's age check (many age-restricted videos then fail with "Sign in to confirm your age"
+    /// even though no account is needed), and it warns that YouTube support is incomplete. Macs with
+    /// Homebrew's deno or node on PATH never noticed; everyone else did.
+    nonisolated var denoPath: String? {
+        let path = supportDir.appendingPathComponent("deno").path
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+    }
+
+    /// The yt-dlp arguments that hand it Drop's own JavaScript runtime (none until it is installed).
+    nonisolated static func jsRuntimeArgs(denoPath: String?) -> [String] {
+        denoPath.map { ["--js-runtimes", "deno:\($0)"] } ?? []
+    }
+    nonisolated var jsRuntimeArgs: [String] { Self.jsRuntimeArgs(denoPath: denoPath) }
+
     // MARK: - Analyze info-json cache
     //
     // Analyze already pays yt-dlp's full extraction cost (webpage fetch +
@@ -273,6 +288,8 @@ class DownloadManager: ObservableObject {
         let group = DispatchGroup()
         group.enter(); updateYtdlp(onlyIfNewer: true) { group.leave() }
         group.enter(); updateFFmpeg(onlyIfNewer: true) { group.leave() }
+        // Not part of the group: the tools are usable without it, and it is the biggest download.
+        updateDeno(onlyIfNewer: true)
         group.notify(queue: .main) {
             // Re-evaluate readiness now that both downloads have actually
             // landed on disk. On a genuinely first launch (nothing in
@@ -490,6 +507,8 @@ class DownloadManager: ObservableObject {
 
     private static let ytdlpAssetKey = "installedYtdlpAssetURL"
     private static let ffmpegAssetKey = "installedFfmpegAssetURL"
+    private static let denoAssetKey = "installedDenoAssetURL"
+    private var updatingDeno = false
 
     /// Both nightly endpoints are "latest" redirects whose FIRST hop points at
     /// a versioned URL (a tag for yt-dlp, a build number for ffmpeg). A GET
@@ -751,6 +770,77 @@ class DownloadManager: ObservableObject {
     /// a real nightly channel here. Zip contains the ffmpeg binary at its
     /// root (no nested folder), same completion-callback shape as
     /// updateYtdlp above.
+    /// Installs Deno's official macOS arm64 build (a single `deno` binary in a ~39 MB zip) into
+    /// Application Support, skipping the download when the version already installed is the latest
+    /// (the same redirect check as yt-dlp and ffmpeg).
+    func updateDeno(onlyIfNewer: Bool = false, completion: (@MainActor @Sendable () -> Void)? = nil) {
+        guard !updatingDeno else { completion?(); return }
+        updatingDeno = true
+        let latestURL = URL(string: "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-apple-darwin.zip")!
+        resolveVersionedAssetURL(latestURL) { assetURL in
+            DispatchQueue.main.async {
+                if onlyIfNewer, let assetURL, self.denoPath != nil,
+                   UserDefaults.standard.string(forKey: Self.denoAssetKey) == assetURL.absoluteString {
+                    self.updatingDeno = false
+                    completion?()
+                    return
+                }
+                self.downloadDeno(from: assetURL ?? latestURL, completion: completion)
+            }
+        }
+    }
+
+    private func downloadDeno(from releaseURL: URL, completion: (@MainActor @Sendable () -> Void)?) {
+        appendLog("Fetching the JavaScript runtime YouTube needs (deno)…")
+        let destURL = supportDir.appendingPathComponent("deno")
+        let tempZip = supportDir.appendingPathComponent("deno.zip")
+        let unzipDir = supportDir.appendingPathComponent("deno_unzip")
+        let task = URLSession.shared.downloadTask(with: releaseURL) { location, response, error in
+            guard let location = location, error == nil else {
+                DispatchQueue.main.async {
+                    self.updatingDeno = false
+                    self.appendLog("ERROR: deno download failed — \(error?.localizedDescription ?? "unknown error")")
+                    completion?()
+                }
+                return
+            }
+            do {
+                try? FileManager.default.removeItem(at: tempZip)
+                try FileManager.default.moveItem(at: location, to: tempZip)
+                try? FileManager.default.removeItem(at: unzipDir)
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+                proc.arguments = ["-o", tempZip.path, "-d", unzipDir.path]
+                try proc.run(); proc.waitUntilExit()
+                let found = unzipDir.appendingPathComponent("deno")
+                guard FileManager.default.fileExists(atPath: found.path) else {
+                    throw NSError(domain: "Drop", code: 1, userInfo: [NSLocalizedDescriptionKey: "deno binary not found in downloaded archive"])
+                }
+                // Moved into place only once whole, so a half-written file is never run.
+                try? FileManager.default.removeItem(at: destURL)
+                try FileManager.default.moveItem(at: found, to: destURL)
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destURL.path)
+                try? FileManager.default.removeItem(at: tempZip)
+                try? FileManager.default.removeItem(at: unzipDir)
+                DispatchQueue.main.async {
+                    self.updatingDeno = false
+                    UserDefaults.standard.set(releaseURL.absoluteString, forKey: Self.denoAssetKey)
+                    self.appendLog("✓ deno installed.")
+                    completion?()
+                }
+            } catch {
+                try? FileManager.default.removeItem(at: tempZip)
+                try? FileManager.default.removeItem(at: unzipDir)
+                DispatchQueue.main.async {
+                    self.updatingDeno = false
+                    self.appendLog("ERROR: deno install failed — \(error.localizedDescription)")
+                    completion?()
+                }
+            }
+        }
+        task.resume()
+    }
+
     func updateFFmpeg(onlyIfNewer: Bool = false, completion: (@MainActor @Sendable () -> Void)? = nil) {
         guard !updatingFFmpeg else { completion?(); return }
         updatingFFmpeg = true
@@ -1439,6 +1529,7 @@ class DownloadManager: ObservableObject {
             // Without this yt-dlp only found one on a Mac that happened to have Homebrew's, and
             // everyone else got "Postprocessing: ffmpeg not found" (or unmerged video and audio).
             if let ffmpeg = self.ffmpegPath { ytArgs += ["--ffmpeg-location", ffmpeg] }
+            ytArgs += self.jsRuntimeArgs
 
             switch mediaMode {
             case .audioOnly:
@@ -1513,6 +1604,7 @@ class DownloadManager: ObservableObject {
                     nameProc.executableURL = URL(fileURLWithPath: ytdlp)
                     var nameArgs = ["--no-warnings", "--no-download", "--print", "filename",
                                      "-o", "%(title)s", "--no-playlist", "--impersonate", "chrome"]
+                    nameArgs += self.jsRuntimeArgs
                     nameArgs.append(url)
                     nameProc.arguments = nameArgs
                     let namePipe = Pipe()

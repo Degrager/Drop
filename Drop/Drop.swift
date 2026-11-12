@@ -2948,6 +2948,7 @@ struct ContentView: View {
                 // steps were silently looking at two different format lists.
                 let cookieBrowser = DispatchQueue.main.sync { self.config.browser }
                 analyzeArgs += cookieBrowser.cookieArgs
+                analyzeArgs += manager.jsRuntimeArgs
                 // Reuse a fresh cached info-json (written by a prior analyze of
                 // this exact URL within the TTL window) instead of re-resolving
                 // from the network -- this is what makes re-pasting an already-
@@ -3026,6 +3027,7 @@ struct ContentView: View {
                         "--write-info-json",
                         "-o", infoJSONCachePath
                     ]
+                    fallbackArgs += manager.jsRuntimeArgs
                     fallbackArgs.append(url)
                     proc2.arguments = fallbackArgs
                     proc2.environment = env
@@ -3287,7 +3289,11 @@ struct ContentView: View {
                         mediaMode: .audioOnly
                     )
                     if let gate = signInGate {
-                        lp.analyzeError = gate.summary(usingBrowser: cookieBrowser)
+                        // Without Drop's JavaScript runtime even a video that needs no account can look
+                        // gated, so say that first: it may only be a download that has not finished.
+                        lp.analyzeError = manager.denoPath == nil && cookieBrowser == .none
+                            ? "YouTube needs a helper Drop hasn't finished downloading. Try again in a moment."
+                            : gate.summary(usingBrowser: cookieBrowser)
                         lp.analyzeFix = cookieBrowser == .none ? .signIn : nil
                     } else {
                         lp.analyzeError = "Couldn't read \(cookieBrowser.label)'s sign-in. macOS blocked access to its cookies."

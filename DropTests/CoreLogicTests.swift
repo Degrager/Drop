@@ -575,3 +575,14 @@ final class SignInGateTests: XCTestCase {
         XCTAssertNotEqual(BrowserSource.preferred(), .none)
     }
 }
+
+final class JSRuntimeArgsTests: XCTestCase {
+    func testTheRuntimeIsHandedToYtDlpByPath() {
+        XCTAssertEqual(DownloadManager.jsRuntimeArgs(denoPath: "/Users/x/Library/Application Support/Drop/deno"),
+                       ["--js-runtimes", "deno:/Users/x/Library/Application Support/Drop/deno"])
+    }
+
+    func testNothingIsPassedUntilItIsInstalled() {
+        XCTAssertEqual(DownloadManager.jsRuntimeArgs(denoPath: nil), [])
+    }
+}

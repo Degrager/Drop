@@ -2382,6 +2382,24 @@ struct ContentView: View {
         analyzeURL(urls: [p.url], ids: [p.id])
     }
 
+    /// The Sign in chip. macOS has no prompt for Full Disk Access, so when the browser's cookies are
+    /// behind it the setting opens right away (and the card says what to do) instead of first running
+    /// an attempt that is certain to fail.
+    private func signIn(with browser: BrowserSource, for p: LinkPreview) {
+        if browser.cookiesBlockedByMacOS {
+            NSWorkspace.shared.open(BrowserSource.fullDiskAccessSettingsURL)
+            if let idx = linkPreviews.firstIndex(where: { $0.id == p.id }) {
+                withAnimation(.spring(response: 0.35)) {
+                    linkPreviews[idx].analyzeError = BrowserSource.fullDiskAccessNote
+                    linkPreviews[idx].analyzeFixes = [.openFullDiskAccess]
+                }
+            }
+            return
+        }
+        config.browser = browser
+        retryAnalysis(of: p)
+    }
+
     /// A failed analysis's way to the real reason: the capsule only has the short summary, the
     /// log has yt-dlp's own error line.
     private func analyzeErrorDetails(for p: LinkPreview) -> AnyView {
@@ -2407,12 +2425,11 @@ struct ContentView: View {
                         let browser = BrowserSource.preferred()
                         chip("person.crop.circle", "Sign in with \(browser.label)",
                              help: "Reads your YouTube sign-in from \(browser.label) so Drop can open this video. macOS may ask for permission.") {
-                            config.browser = browser
-                            retryAnalysis(of: p)
+                            signIn(with: browser, for: p)
                         }
                     case .openFullDiskAccess:
                         chip("lock.open", "Open Full Disk Access", help: "Opens System Settings. Turn on Drop there, then reopen Drop.") {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+                            NSWorkspace.shared.open(BrowserSource.fullDiskAccessSettingsURL)
                         }
                     }
                 }
@@ -3305,7 +3322,7 @@ struct ContentView: View {
                     if cookieBrowser != .none { DispatchQueue.main.async { self.config.browser = .none } }
                     if cookiesBlocked {
                         if cookieBrowser == .safari {
-                            lp.analyzeError = "Allow Drop in Full Disk Access to use Safari's sign-in, then reopen Drop."
+                            lp.analyzeError = BrowserSource.fullDiskAccessNote
                             lp.analyzeFixes = [.openFullDiskAccess]
                         } else {
                             lp.analyzeError = "Couldn't read \(cookieBrowser.label)'s sign-in. macOS blocked its cookies."

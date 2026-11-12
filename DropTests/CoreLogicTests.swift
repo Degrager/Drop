@@ -597,3 +597,16 @@ final class JSRuntimeArgsTests: XCTestCase {
         XCTAssertEqual(DownloadManager.jsRuntimeArgs(denoPath: nil), [])
     }
 }
+
+final class BrowserCookieAccessTests: XCTestCase {
+    /// Only Safari's cookie file is behind macOS's own protection; the others never report as blocked.
+    func testOnlySafariCanBeBlockedByMacOS() {
+        for browser in BrowserSource.allCases where browser != .safari {
+            XCTAssertFalse(browser.cookiesBlockedByMacOS, "\(browser)")
+        }
+    }
+
+    func testTheFullDiskAccessNoteIsShortEnoughForTheCard() {
+        XCTAssertLessThanOrEqual(BrowserSource.fullDiskAccessNote.count, 80)
+    }
+}

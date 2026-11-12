@@ -472,6 +472,25 @@ enum BrowserSource: String, CaseIterable, Identifiable {
 }
 
 extension BrowserSource {
+    /// Where macOS lists Full Disk Access. There is no system prompt for it: an app can only add itself
+    /// to that list (switched off) and send the user there.
+    static let fullDiskAccessSettingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
+    static let fullDiskAccessNote = "Allow Drop in Full Disk Access to use Safari's sign-in, then reopen Drop."
+
+    /// True when this browser's cookie file exists but macOS will not let Drop open it. Only Safari's
+    /// is protected (the others need a Keychain approval, which does prompt). Checked by actually
+    /// opening the file, the same way yt-dlp will, so it cannot disagree with what happens next.
+    var cookiesBlockedByMacOS: Bool {
+        guard self == .safari else { return false }
+        for path in ["~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies",
+                     "~/Library/Cookies/Cookies.binarycookies"].map({ NSString(string: $0).expandingTildeInPath }) {
+            let descriptor = Darwin.open(path, O_RDONLY)
+            if descriptor >= 0 { Darwin.close(descriptor); return false }
+            if errno == EPERM || errno == EACCES { return true }
+        }
+        return false
+    }
+
     /// The browser Drop offers to read a YouTube sign-in from: the Mac's default browser when it is
     /// one yt-dlp can read cookies from, otherwise the first supported browser that is installed,
     /// otherwise Safari (always there).

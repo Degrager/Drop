@@ -386,7 +386,17 @@ class DownloadManager: ObservableObject {
         case .useBrowserCookies:
             // Deliberate opt-in, clicked by the user at the moment it is needed (cookies are never
             // switched on by default: reading Chrome's cookies prompts for its Keychain key).
-            config.browser = BrowserSource.preferred()
+            let browser = BrowserSource.preferred()
+            if browser.cookiesBlockedByMacOS {
+                // No system prompt exists for Full Disk Access: open the setting instead of retrying.
+                NSWorkspace.shared.open(BrowserSource.fullDiskAccessSettingsURL)
+                if let idx = downloads.firstIndex(where: { $0.id == download.id }) {
+                    downloads[idx].fixHint = BrowserSource.fullDiskAccessNote
+                    downloads[idx].fixAction = .none
+                }
+                return
+            }
+            config.browser = browser
             appendLog("Sign-in: reading YouTube cookies from \(config.browser.label) and retrying...")
             retry(download: download, config: config)
 

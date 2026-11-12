@@ -304,6 +304,31 @@ class DownloadManager: ObservableObject {
         }
     }
 
+    #if DEV_BUILD
+    /// Dev tab only: puts the tools back to what a Mac that has never run Drop has (nothing downloaded,
+    /// no installed-version memory) and downloads them again for real, so the setup screen has actual
+    /// work to show.
+    func resetToolsForFreshInstall() {
+        let fm = FileManager.default
+        for name in ["yt-dlp_bin", "yt-dlp", "ffmpeg", "deno"] {
+            try? fm.removeItem(at: supportDir.appendingPathComponent(name))
+        }
+        for key in [Self.ytdlpAssetKey, Self.ffmpegAssetKey, Self.denoAssetKey, "cachedYtdlpVersion", "cachedFfmpegVersion"] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        ytdlpVersion = ""
+        ffmpegVersion = ""
+        updateAvailable = false
+        ffmpegUpdateAvailable = false
+        toolsReady = false
+        ytdlpDownloadProgress = 0
+        ffmpegDownloadProgress = 0
+        denoDownloadProgress = 0
+        appendLog("Dev: tools removed, downloading them again as a fresh install would…")
+        ensureLatestTools()
+    }
+    #endif
+
     /// No install flow, no polling loop needed since nothing external has
     /// to appear -- this just confirms whether ytdlpPath/ffmpegPath
     /// currently resolve to something on disk (either a fresh download in

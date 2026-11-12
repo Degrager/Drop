@@ -78,16 +78,39 @@ final class SetupFlow: ObservableObject {
         withAnimation(.spring(response: 0.4)) { isPresented = true }
     }
 
-    /// The Dev tab's "run it for real": forgets that setup ever ran and clears what it asks about (the
-    /// YouTube sign-in choice), then shows the real screen the way a fresh install would see it. The
-    /// tools and Full Disk Access steps show their true state, since neither can be reset from here.
-    func startFresh(config: Config) {
+    #if DEV_BUILD
+    /// The Dev tab's "run it for real": makes this Mac look like it has never run Drop, then shows the
+    /// real screen. Setup is forgotten, the tools are deleted and downloaded again, Full Disk Access is
+    /// revoked for this app (macOS's own `tccutil`, so Settings shows it switched off), and the YouTube
+    /// sign-in is cleared. Every step then reports its true state.
+    func startFresh(config: Config, manager: DownloadManager) {
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: Self.startedKey)
         defaults.removeObject(forKey: Self.completedKey)
         config.browser = .none
+        revokeFullDiskAccess(logTo: manager)
+        manager.resetToolsForFreshInstall()
         present()
     }
+
+    private func revokeFullDiskAccess(logTo manager: DownloadManager) {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        process.arguments = ["reset", "SystemPolicyAllFiles", bundleID]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        // Not waited on (this runs on the main thread): the step re-checks once the reset has landed.
+        process.terminationHandler = { finished in
+            let status = finished.terminationStatus
+            Task { @MainActor in
+                manager.appendLog("Dev: Full Disk Access reset for \(bundleID) (tccutil exit \(status))")
+                SetupFlow.shared.refreshDiskAccess()
+            }
+        }
+        do { try process.run() } catch { manager.appendLog("Dev: could not run tccutil: \(error.localizedDescription)") }
+    }
+    #endif
 
     /// The Dev tab's preview button: the real screen, with the tools step on simulated progress.
     func preview() {
